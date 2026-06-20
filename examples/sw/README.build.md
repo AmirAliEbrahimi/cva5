@@ -72,7 +72,7 @@ are delegated to it, so the RTL build keeps a single source of truth.
 - Putting your build on the FPGA: `program.hex` and `mem.mif` are the same format
   (one 32-bit word per line, what `$readmemh` and the `cva5_top` `LOCAL_MEM`
   parameter expect). `make mif` regenerates `examples/sw/mem.mif` directly from
-  `main.c` with no simulator build; rebuild the Vivado project afterwards to bake
+  `main.c` with no simulator build; copy that to `vivado/ip_repo/src` and rebuild the Vivado project afterwards to bake
   the new image into block RAM (see `examples/xilinx`).
 - This program loops forever printing "Hello World!" with a 1-second busy-wait.
   At RTL-sim speed (slower still with tracing) that's a long wait between lines.
