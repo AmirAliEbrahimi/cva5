@@ -104,6 +104,31 @@ module branch_predictor
 
     genvar i;
     generate if (CONFIG.INCLUDE_BRANCH_PREDICTOR) begin : gen_bp
+        //Post-reset invalidation.
+        //The tag banks are RAM: reset does not clear them. At FPGA configuration
+        //they come up zeroed, but after any later reset (e.g. the debugger's
+        //ndmreset) they still hold entries from the previous run, so the very
+        //first fetch can hit a stale entry and be predicted to a bogus target.
+        //Sweep every entry with valid=0 before allowing any prediction.
+        logic [BRANCH_ADDR_W-1:0] init_addr;
+        logic init_done;
+        always_ff @ (posedge clk) begin
+            if (rst) begin
+                init_addr <= '0;
+                init_done <= 1'b0;
+            end
+            else if (~init_done) begin
+                init_addr <= init_addr + 1;
+                init_done <= &init_addr;
+            end
+        end
+
+        branch_table_entry_t init_entry;
+        always_comb begin
+            init_entry = '0;
+            init_entry.valid = 1'b0;
+        end
+
         for (i=0; i<CONFIG.BP.WAYS; i++) begin : gen_bp_rams
             sdp_ram #(
                 .ADDR_WIDTH(BRANCH_ADDR_W),
@@ -111,10 +136,10 @@ module branch_predictor
                 .COL_WIDTH($bits(branch_table_entry_t)),
                 .PIPELINE_DEPTH(0)
             ) tag_bank (
-                .a_en(tag_update_way[i]),
-                .a_wbe(tag_update_way[i]),
-                .a_wdata(ex_entry),
-                .a_addr(addr_utils.getHashedLineAddr(br_results.pc, i)),
+                .a_en(init_done ? tag_update_way[i] : 1'b1),
+                .a_wbe(init_done ? tag_update_way[i] : 1'b1),
+                .a_wdata(init_done ? ex_entry : init_entry),
+                .a_addr(init_done ? addr_utils.getHashedLineAddr(br_results.pc, i) : init_addr),
                 .b_en(bp.new_mem_request),
                 .b_addr(addr_utils.getHashedLineAddr(bp.next_pc, i)),
                 .b_rdata(if_entry[i]),
@@ -135,7 +160,7 @@ module branch_predictor
                 .b_rdata(predicted_pc[i]),
             .*);
 
-            assign tag_matches[i] = ({if_entry[i].valid, if_entry[i].tag} == {1'b1, addr_utils.getTag(bp.if_pc)});
+            assign tag_matches[i] = init_done & ({if_entry[i].valid, if_entry[i].tag} == {1'b1, addr_utils.getTag(bp.if_pc)});
         end
     end
     endgenerate
