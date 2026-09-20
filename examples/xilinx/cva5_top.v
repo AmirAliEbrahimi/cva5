@@ -24,7 +24,7 @@ module cva5_top
 
     #(
         parameter LOCAL_MEM = "mem.mif",
-        parameter WORDS = 1024
+        parameter WORDS = 16384
     )
     (
         input clk,

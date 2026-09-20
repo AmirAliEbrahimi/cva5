@@ -1,2 +1,16 @@
 test_benches/verilator/build
 vivado/
+# --- CNN accelerator (tools/nn_accel) --------------------------------------
+# generated C headers
+examples/sw/weights.h
+examples/sw/images.h
+# hls4ml project directories and exported IP
+tools/nn_accel/sw_*/
+tools/nn_accel/p_*/
+tools/nn_accel/run_all.bat
+# trained models and datasets
+tools/nn_accel/*.pt
+tools/nn_accel/data/
+tools/nn_accel/.venv/
+__pycache__/
+*.pyc

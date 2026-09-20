@@ -27,7 +27,7 @@ module cva5_wrapper
 
     #(
         parameter string LOCAL_MEM = "mem.mif",
-        parameter int unsigned WORDS = 1024
+        parameter int unsigned WORDS = 16384
     )
     (
         input logic clk,
