@@ -20,6 +20,14 @@ in the `docs` directory.
 > clone to a running simulation with a couple of `make` targets. See
 > [Quick Start: Simulation](#quick-start-simulation) below and
 > [`examples/sw/README.build.md`](examples/sw/README.build.md).
+>
+> It also adds a **CNN accelerator** for the PYNQ-Z2: an hls4ml-generated
+> quantized network attached to CVA5 over AXI-Stream, benchmarked against the
+> same inference running in software on the same core. Measured **50.2x**
+> speedup, with 77% of the hardware path spent moving data rather than
+> computing. One command builds it end to end —
+> `make -C tools/nn_accel` — see
+> [`docs/nn_accelerator/`](docs/nn_accelerator/README.md).
 
 ## Quick Start: Simulation
 
