@@ -62,8 +62,34 @@ apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
             ddr_seg {Auto} intc_ip {New AXI Interconnect} master_apm {0}} \
   [get_bd_intf_pins axi_uartlite_0/S_AXI]
 
+# ---- Main RAM: AXI BRAM, 64 KB at 0x4000_0000 ------------------------------
+# P1: reachable only from the debugger (SBA). P1b adds the CPU's cached path.
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 axi_bram_ctrl_0
+set_property -dict [list CONFIG.SINGLE_PORT_BRAM {1} CONFIG.DATA_WIDTH {32}] [get_bd_cells axi_bram_ctrl_0]
+apply_bd_automation -rule xilinx.com:bd_rule:bram_cntlr -config {BRAM "Auto"} \
+  [get_bd_intf_pins axi_bram_ctrl_0/BRAM_PORTA]
+
+# ---- Debugger System Bus Access -> RAM and UART ----------------------------
+# Put the debug master and the RAM on the interconnect the CPU->UART automation
+# created, so every master reaches every slave; assign_bd_address maps them.
+set intc [get_bd_cells -of_objects [get_bd_intf_pins -of_objects \
+            [get_bd_intf_nets -of_objects [get_bd_intf_pins axi_uartlite_0/S_AXI]] \
+            -filter {MODE == Master}]]
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
+  -config [list Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} \
+            Master {/cva5_top_0/m_axi_dbg} Slave {/axi_bram_ctrl_0/S_AXI} \
+            ddr_seg {Auto} intc_ip "$intc" master_apm {0}] \
+  [get_bd_intf_pins axi_bram_ctrl_0/S_AXI]
+
 # ---- Address map ----------------------------------------------------------
+assign_bd_address
 set_property offset 0x60000000 [get_bd_addr_segs {cva5_top_0/m_axi/SEG_axi_uartlite_0_Reg}]
+set_property offset 0x60000000 [get_bd_addr_segs {cva5_top_0/m_axi_dbg/SEG_axi_uartlite_0_Reg}]
+set_property range  64K        [get_bd_addr_segs {cva5_top_0/m_axi_dbg/SEG_axi_bram_ctrl_0_Mem0}]
+set_property offset 0x40000000 [get_bd_addr_segs {cva5_top_0/m_axi_dbg/SEG_axi_bram_ctrl_0_Mem0}]
+# The CPU's peripheral bus only decodes 0x6xxx_xxxx, so exclude RAM from it for now.
+set cpu_ram_seg [get_bd_addr_segs -quiet {cva5_top_0/m_axi/SEG_axi_bram_ctrl_0_Mem0}]
+if {$cpu_ram_seg ne ""} { exclude_bd_addr_seg $cpu_ram_seg }
 
 # ---- Finalise -------------------------------------------------------------
 regenerate_bd_layout

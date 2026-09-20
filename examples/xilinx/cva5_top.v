@@ -28,7 +28,7 @@ module cva5_top
     )
     (
         input clk,
-        input rstn, //Synchronous active low
+        input rstn, //Synchronous active low. Board reset (SW0)
 
         //Peripheral AXI4-Lite bus
         //AR
@@ -56,7 +56,30 @@ module cva5_top
         //B
         output m_axi_bready,
         input m_axi_bvalid,
-        input [1:0] m_axi_bresp
+        input [1:0] m_axi_bresp,
+
+        //Debug System Bus Access, AXI4-Lite master
+        output [31:0] m_axi_dbg_awaddr,
+        output [2:0] m_axi_dbg_awprot,
+        output m_axi_dbg_awvalid,
+        input m_axi_dbg_awready,
+        output [31:0] m_axi_dbg_wdata,
+        output [3:0] m_axi_dbg_wstrb,
+        output m_axi_dbg_wvalid,
+        input m_axi_dbg_wready,
+        input [1:0] m_axi_dbg_bresp,
+        input m_axi_dbg_bvalid,
+        output m_axi_dbg_bready,
+        output [31:0] m_axi_dbg_araddr,
+        output [2:0] m_axi_dbg_arprot,
+        output m_axi_dbg_arvalid,
+        input m_axi_dbg_arready,
+        input [31:0] m_axi_dbg_rdata,
+        input [1:0] m_axi_dbg_rresp,
+        input m_axi_dbg_rvalid,
+        output m_axi_dbg_rready,
+
+        output ndmreset
     );
 
     cva5_wrapper #(.LOCAL_MEM(LOCAL_MEM), .WORDS(WORDS)) cva5_inst(
@@ -78,7 +101,27 @@ module cva5_top
         .m_axi_wstrb(m_axi_wstrb),
         .m_axi_bready(m_axi_bready),
         .m_axi_bvalid(m_axi_bvalid),
-        .m_axi_bresp(m_axi_bresp)
+        .m_axi_bresp(m_axi_bresp),
+        .m_axi_dbg_awaddr(m_axi_dbg_awaddr),
+        .m_axi_dbg_awprot(m_axi_dbg_awprot),
+        .m_axi_dbg_awvalid(m_axi_dbg_awvalid),
+        .m_axi_dbg_awready(m_axi_dbg_awready),
+        .m_axi_dbg_wdata(m_axi_dbg_wdata),
+        .m_axi_dbg_wstrb(m_axi_dbg_wstrb),
+        .m_axi_dbg_wvalid(m_axi_dbg_wvalid),
+        .m_axi_dbg_wready(m_axi_dbg_wready),
+        .m_axi_dbg_bresp(m_axi_dbg_bresp),
+        .m_axi_dbg_bvalid(m_axi_dbg_bvalid),
+        .m_axi_dbg_bready(m_axi_dbg_bready),
+        .m_axi_dbg_araddr(m_axi_dbg_araddr),
+        .m_axi_dbg_arprot(m_axi_dbg_arprot),
+        .m_axi_dbg_arvalid(m_axi_dbg_arvalid),
+        .m_axi_dbg_arready(m_axi_dbg_arready),
+        .m_axi_dbg_rdata(m_axi_dbg_rdata),
+        .m_axi_dbg_rresp(m_axi_dbg_rresp),
+        .m_axi_dbg_rvalid(m_axi_dbg_rvalid),
+        .m_axi_dbg_rready(m_axi_dbg_rready),
+        .ndmreset(ndmreset)
     );
 
 endmodule

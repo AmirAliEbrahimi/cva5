@@ -31,7 +31,7 @@ module cva5_wrapper
     )
     (
         input logic clk,
-        input logic rstn, //Synchronous active low
+        input logic rstn, //Synchronous active low. Board reset (SW0); does NOT include ndmreset
 
         //Peripheral AXI bus
         //AR
@@ -59,7 +59,31 @@ module cva5_wrapper
         //B
         output logic m_axi_bready,
         input logic m_axi_bvalid,
-        input logic [1:0] m_axi_bresp
+        input logic [1:0] m_axi_bresp,
+
+        //Debug System Bus Access, AXI4-Lite master
+        output logic [31:0] m_axi_dbg_awaddr,
+        output logic [2:0] m_axi_dbg_awprot,
+        output logic m_axi_dbg_awvalid,
+        input logic m_axi_dbg_awready,
+        output logic [31:0] m_axi_dbg_wdata,
+        output logic [3:0] m_axi_dbg_wstrb,
+        output logic m_axi_dbg_wvalid,
+        input logic m_axi_dbg_wready,
+        input logic [1:0] m_axi_dbg_bresp,
+        input logic m_axi_dbg_bvalid,
+        output logic m_axi_dbg_bready,
+        output logic [31:0] m_axi_dbg_araddr,
+        output logic [2:0] m_axi_dbg_arprot,
+        output logic m_axi_dbg_arvalid,
+        input logic m_axi_dbg_arready,
+        input logic [31:0] m_axi_dbg_rdata,
+        input logic [1:0] m_axi_dbg_rresp,
+        input logic m_axi_dbg_rvalid,
+        output logic m_axi_dbg_rready,
+
+        //Non-debug-module reset, for peripherals that should reset with the CPU
+        output logic ndmreset //Debugger reset request (active high). Resets the CPU only, as in Ibex.
     );
 
     //CPU connections
@@ -194,8 +218,47 @@ module cva5_wrapper
         WB_GROUP : WB_CPU_CONFIG
     };
 
-    logic rst;
-    assign rst = ~rstn;
+    ////////////////////////////////////////////////////
+    //Debug subsystem (riscv-dbg over BSCANE2)
+    //The DM is reset only by rstn, so ndmreset never resets the debugger.
+    logic debug_req; //Unused until the core is debug-capable (P2)
+
+    cva5_debug_subsys #(.DM_BASE_ADDR(32'h5000_0000), .HART_AVAILABLE(1'b0)) debug (
+        .clk (clk),
+        .rst_n (rstn),
+        .ndmreset (ndmreset),
+        .debug_req (debug_req),
+        .dm_req (1'b0),
+        .dm_we (1'b0),
+        .dm_addr (32'h0),
+        .dm_be (4'h0),
+        .dm_wdata (32'h0),
+        .dm_rdata (),
+        .m_axi_awaddr (m_axi_dbg_awaddr),
+        .m_axi_awprot (m_axi_dbg_awprot),
+        .m_axi_awvalid (m_axi_dbg_awvalid),
+        .m_axi_awready (m_axi_dbg_awready),
+        .m_axi_wdata (m_axi_dbg_wdata),
+        .m_axi_wstrb (m_axi_dbg_wstrb),
+        .m_axi_wvalid (m_axi_dbg_wvalid),
+        .m_axi_wready (m_axi_dbg_wready),
+        .m_axi_bresp (m_axi_dbg_bresp),
+        .m_axi_bvalid (m_axi_dbg_bvalid),
+        .m_axi_bready (m_axi_dbg_bready),
+        .m_axi_araddr (m_axi_dbg_araddr),
+        .m_axi_arprot (m_axi_dbg_arprot),
+        .m_axi_arvalid (m_axi_dbg_arvalid),
+        .m_axi_arready (m_axi_dbg_arready),
+        .m_axi_rdata (m_axi_dbg_rdata),
+        .m_axi_rresp (m_axi_dbg_rresp),
+        .m_axi_rvalid (m_axi_dbg_rvalid),
+        .m_axi_rready (m_axi_dbg_rready)
+    );
+
+    logic rst = 1'b1; //Held in reset at configuration
+    always_ff @(posedge clk) rst <= ~rstn | ndmreset; //Registered: ndmreset comes from DM logic
+
+
     cva5 #(.CONFIG(CPU_CONFIG)) cpu(.*);
 
     always_ff @(posedge clk) begin
