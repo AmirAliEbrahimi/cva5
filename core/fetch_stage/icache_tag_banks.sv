@@ -62,16 +62,33 @@ module itag_banks
             hit_allowed <= stage1_adv;
     end
 
+    //Post-reset invalidation.
+    //The tag bank is RAM: reset does not clear it, so after any reset that does
+    //not reconfigure the device the cache still holds lines from the previous
+    //run. Sweep every line with valid=0 before allowing a hit.
+    logic[SCONFIG.LINE_ADDR_W-1:0] init_addr;
+    logic init_done;
+    always_ff @ (posedge clk) begin
+        if (rst) begin
+            init_addr <= '0;
+            init_done <= 0;
+        end
+        else if (~init_done) begin
+            init_addr <= init_addr + 1;
+            init_done <= &init_addr;
+        end
+    end
+
     sdp_ram_padded #(
         .ADDR_WIDTH(SCONFIG.LINE_ADDR_W),
         .NUM_COL(CONFIG.ICACHE.WAYS),
         .COL_WIDTH(SCONFIG.TAG_W+1),
         .PIPELINE_DEPTH(0)
     ) itag_bank (
-        .a_en(update | ifence),
-        .a_wbe(update_way | {CONFIG.ICACHE.WAYS{ifence}}),
-        .a_wdata({CONFIG.ICACHE.WAYS{~ifence, stage2_tag}}),
-        .a_addr(ifence ? ifence_addr : stage2_line_addr),
+        .a_en(~init_done | update | ifence),
+        .a_wbe(~init_done ? {CONFIG.ICACHE.WAYS{1'b1}} : (update_way | {CONFIG.ICACHE.WAYS{ifence}})),
+        .a_wdata({CONFIG.ICACHE.WAYS{~(ifence | ~init_done), stage2_tag}}),
+        .a_addr(~init_done ? init_addr : (ifence ? ifence_addr : stage2_line_addr)),
         .b_en(stage1_adv),
         .b_addr(stage1_line_addr),
         .b_rdata(tag_line),
@@ -79,7 +96,7 @@ module itag_banks
 
     always_comb begin
         for (int i = 0; i < CONFIG.ICACHE.WAYS; i++)
-            tag_hit_way[i] = ({hit_allowed, 1'b1, stage2_tag} == {1'b1, tag_line[i]});
+            tag_hit_way[i] = init_done & ({hit_allowed, 1'b1, stage2_tag} == {1'b1, tag_line[i]});
     end
 
     assign tag_hit = |tag_hit_way;
