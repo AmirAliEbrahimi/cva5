@@ -26,8 +26,8 @@ module cva5_wrapper
     import cva5_types::*;
 
     #(
-        parameter string LOCAL_MEM = "mem.mif",
-        parameter int unsigned WORDS = 1024
+        parameter string LOCAL_MEM = "boot.mif", //Boot ROM image
+        parameter int unsigned WORDS = 256       //Boot ROM size in words
     )
     (
         input logic clk,
@@ -61,6 +61,43 @@ module cva5_wrapper
         input logic m_axi_bvalid,
         input logic [1:0] m_axi_bresp,
 
+        //Cached memory (I$/D$ fills), AXI4 master with bursts
+        input logic m_axi_mem_arready,
+        output logic m_axi_mem_arvalid,
+        output logic [31:0] m_axi_mem_araddr,
+        output logic [7:0] m_axi_mem_arlen,
+        output logic [2:0] m_axi_mem_arsize,
+        output logic [1:0] m_axi_mem_arburst,
+        output logic [3:0] m_axi_mem_arcache,
+        output logic [5:0] m_axi_mem_arid,
+
+        output logic m_axi_mem_rready,
+        input logic m_axi_mem_rvalid,
+        input logic [31:0] m_axi_mem_rdata,
+        input logic [1:0] m_axi_mem_rresp,
+        input logic m_axi_mem_rlast,
+        input logic [5:0] m_axi_mem_rid,
+
+        input logic m_axi_mem_awready,
+        output logic m_axi_mem_awvalid,
+        output logic [31:0] m_axi_mem_awaddr,
+        output logic [7:0] m_axi_mem_awlen,
+        output logic [2:0] m_axi_mem_awsize,
+        output logic [1:0] m_axi_mem_awburst,
+        output logic [3:0] m_axi_mem_awcache,
+        output logic [5:0] m_axi_mem_awid,
+
+        input logic m_axi_mem_wready,
+        output logic m_axi_mem_wvalid,
+        output logic [31:0] m_axi_mem_wdata,
+        output logic [3:0] m_axi_mem_wstrb,
+        output logic m_axi_mem_wlast,
+
+        output logic m_axi_mem_bready,
+        input logic m_axi_mem_bvalid,
+        input logic [1:0] m_axi_mem_bresp,
+        input logic [5:0] m_axi_mem_bid,
+
         //Debug System Bus Access, AXI4-Lite master
         output logic [31:0] m_axi_dbg_awaddr,
         output logic [2:0] m_axi_dbg_awprot,
@@ -93,7 +130,7 @@ module cva5_wrapper
     avalon_interface m_avalon(); //Unused
     wishbone_interface dwishbone(); //Unused
     wishbone_interface iwishbone(); //Unused
-    mem_interface mem();
+    mem_interface mem[1]();
     logic[63:0] mtime;
     interrupt_t s_interrupt; //Unused
     interrupt_t m_interrupt; //Unused
@@ -145,15 +182,15 @@ module cva5_wrapper
             LR_WAIT : 32,
             RESERVATION_WORDS : 8
         },
-        INCLUDE_ICACHE : 0,
+        INCLUDE_ICACHE : 1,
         ICACHE_ADDR : '{
-            L: 32'h80000000,
-            H: 32'h8FFFFFFF
+            L: 32'h40000000,
+            H: 32'h4FFFFFFF
         },
         ICACHE : '{
             LINES : 512,
             LINE_W : 4,
-            WAYS : 2,
+            WAYS : 1,
             USE_EXTERNAL_INVALIDATIONS : 0,
             USE_NON_CACHEABLE : 0,
             NON_CACHEABLE : '{
@@ -165,15 +202,15 @@ module cva5_wrapper
             WAYS : 2,
             DEPTH : 64
         },
-        INCLUDE_DCACHE : 0,
+        INCLUDE_DCACHE : 1,
         DCACHE_ADDR : '{
-            L: 32'h80000000,
-            H: 32'h8FFFFFFF
+            L: 32'h40000000,
+            H: 32'h4FFFFFFF
         },
         DCACHE : '{
             LINES : 512,
             LINE_W : 4,
-            WAYS : 2,
+            WAYS : 1,
             USE_EXTERNAL_INVALIDATIONS : 0,
             USE_NON_CACHEABLE : 0,
             NON_CACHEABLE : '{
@@ -190,7 +227,7 @@ module cva5_wrapper
             L : 32'h80000000, 
             H : 32'h80FFFFFF
         },
-        INCLUDE_DLOCAL_MEM : 1,
+        INCLUDE_DLOCAL_MEM : 1, //Boot ROM is readable as data too; nothing writes it
         DLOCAL_MEM_ADDR : '{
             L : 32'h80000000,
             H : 32'h80FFFFFF
@@ -217,6 +254,53 @@ module cva5_wrapper
         NUM_WB_GROUPS : 3,
         WB_GROUP : WB_CPU_CONFIG
     };
+
+    ////////////////////////////////////////////////////
+    //Cached memory path: I$/D$ line fills and writebacks over AXI4
+    axi_interface m_axi_mem();
+
+    axi_adapter #(.NUM_CORES(1)) mem_axi_adapter (
+        .clk (clk),
+        .rst (rst),
+        .mems (mem),
+        .axi (m_axi_mem)
+    );
+
+    assign m_axi_mem.arready = m_axi_mem_arready;
+    assign m_axi_mem_arvalid = m_axi_mem.arvalid;
+    assign m_axi_mem_araddr = m_axi_mem.araddr;
+    assign m_axi_mem_arlen = m_axi_mem.arlen;
+    assign m_axi_mem_arsize = m_axi_mem.arsize;
+    assign m_axi_mem_arburst = m_axi_mem.arburst;
+    assign m_axi_mem_arcache = m_axi_mem.arcache;
+    assign m_axi_mem_arid = m_axi_mem.arid;
+
+    assign m_axi_mem_rready = m_axi_mem.rready;
+    assign m_axi_mem.rvalid = m_axi_mem_rvalid;
+    assign m_axi_mem.rdata = m_axi_mem_rdata;
+    assign m_axi_mem.rresp = m_axi_mem_rresp;
+    assign m_axi_mem.rlast = m_axi_mem_rlast;
+    assign m_axi_mem.rid = m_axi_mem_rid;
+
+    assign m_axi_mem.awready = m_axi_mem_awready;
+    assign m_axi_mem_awvalid = m_axi_mem.awvalid;
+    assign m_axi_mem_awaddr = m_axi_mem.awaddr;
+    assign m_axi_mem_awlen = m_axi_mem.awlen;
+    assign m_axi_mem_awsize = m_axi_mem.awsize;
+    assign m_axi_mem_awburst = m_axi_mem.awburst;
+    assign m_axi_mem_awcache = m_axi_mem.awcache;
+    assign m_axi_mem_awid = m_axi_mem.awid;
+
+    assign m_axi_mem.wready = m_axi_mem_wready;
+    assign m_axi_mem_wvalid = m_axi_mem.wvalid;
+    assign m_axi_mem_wdata = m_axi_mem.wdata;
+    assign m_axi_mem_wstrb = m_axi_mem.wstrb;
+    assign m_axi_mem_wlast = m_axi_mem.wlast;
+
+    assign m_axi_mem_bready = m_axi_mem.bready;
+    assign m_axi_mem.bvalid = m_axi_mem_bvalid;
+    assign m_axi_mem.bresp = m_axi_mem_bresp;
+    assign m_axi_mem.bid = m_axi_mem_bid;
 
     ////////////////////////////////////////////////////
     //Debug subsystem (riscv-dbg over BSCANE2)
@@ -259,7 +343,7 @@ module cva5_wrapper
     always_ff @(posedge clk) rst <= ~rstn | ndmreset; //Registered: ndmreset comes from DM logic
 
 
-    cva5 #(.CONFIG(CPU_CONFIG)) cpu(.*);
+    cva5 #(.CONFIG(CPU_CONFIG)) cpu(.mem(mem[0]), .*);
 
     always_ff @(posedge clk) begin
         if (rst)

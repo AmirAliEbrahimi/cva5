@@ -62,34 +62,80 @@ apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
             ddr_seg {Auto} intc_ip {New AXI Interconnect} master_apm {0}} \
   [get_bd_intf_pins axi_uartlite_0/S_AXI]
 
-# ---- Main RAM: AXI BRAM, 64 KB at 0x4000_0000 ------------------------------
-# P1: reachable only from the debugger (SBA). P1b adds the CPU's cached path.
+# ---- Main RAM: AXI BRAM, 128 KB at 0x4000_0000 -----------------------------
+# Programs run from here: the CPU reaches it through its caches (m_axi_mem),
+# the debugger loads it over SBA (m_axi_dbg).
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 axi_bram_ctrl_0
 set_property -dict [list CONFIG.SINGLE_PORT_BRAM {1} CONFIG.DATA_WIDTH {32}] [get_bd_cells axi_bram_ctrl_0]
 apply_bd_automation -rule xilinx.com:bd_rule:bram_cntlr -config {BRAM "Auto"} \
   [get_bd_intf_pins axi_bram_ctrl_0/BRAM_PORTA]
+# Memory depth follows the 128 KB address range assigned below.
 
-# ---- Debugger System Bus Access -> RAM and UART ----------------------------
-# Put the debug master and the RAM on the interconnect the CPU->UART automation
-# created, so every master reaches every slave; assign_bd_address maps them.
+# ---- One interconnect for every master -------------------------------------
+# All three masters (CPU peripherals m_axi, CPU cached memory via slice_mem,
+# debugger SBA m_axi_dbg) share the interconnect the CPU->UART automation
+# created, so each can reach both the UART and the RAM. The ports are wired
+# explicitly: apply_bd_automation refuses an existing interconnect when the
+# master is a register slice's M_AXI.
 set intc [get_bd_cells -of_objects [get_bd_intf_pins -of_objects \
             [get_bd_intf_nets -of_objects [get_bd_intf_pins axi_uartlite_0/S_AXI]] \
             -filter {MODE == Master}]]
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
-  -config [list Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} \
-            Master {/cva5_top_0/m_axi_dbg} Slave {/axi_bram_ctrl_0/S_AXI} \
-            ddr_seg {Auto} intc_ip "$intc" master_apm {0}] \
-  [get_bd_intf_pins axi_bram_ctrl_0/S_AXI]
+set sys_clk  [get_bd_pins clk_wiz_0/clk_out1]
+set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
+
+# A register slice on the cached path. The adapter computes arvalid
+# combinationally out of its arbiter FIFO and the crossbar grants in the same
+# cycle; without a break that path misses 100 MHz. One extra cycle on a line
+# fill is irrelevant next to the BRAM access itself.
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 slice_mem
+connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_mem] [get_bd_intf_pins slice_mem/S_AXI]
+connect_bd_net $sys_clk  [get_bd_pins slice_mem/aclk]
+connect_bd_net $sys_rstn [get_bd_pins slice_mem/aresetn]
+
+# S00 = m_axi (already connected by the automation above), M00 = UART.
+# Add S01 = cached memory path, S02 = debugger SBA, M01 = RAM.
+set_property -dict [list CONFIG.NUM_SI {3} CONFIG.NUM_MI {2}] [get_bd_cells $intc]
+
+connect_bd_intf_net [get_bd_intf_pins slice_mem/M_AXI]        [get_bd_intf_pins $intc/S01_AXI]
+connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg]   [get_bd_intf_pins $intc/S02_AXI]
+connect_bd_intf_net [get_bd_intf_pins $intc/M01_AXI]          [get_bd_intf_pins axi_bram_ctrl_0/S_AXI]
+
+foreach pin {S01_ACLK S02_ACLK M01_ACLK} {
+    connect_bd_net $sys_clk [get_bd_pins $intc/$pin]
+}
+foreach pin {S01_ARESETN S02_ARESETN M01_ARESETN} {
+    connect_bd_net $sys_rstn [get_bd_pins $intc/$pin]
+}
+connect_bd_net $sys_clk  [get_bd_pins axi_bram_ctrl_0/s_axi_aclk]
+connect_bd_net $sys_rstn [get_bd_pins axi_bram_ctrl_0/s_axi_aresetn]
 
 # ---- Address map ----------------------------------------------------------
 assign_bd_address
 set_property offset 0x60000000 [get_bd_addr_segs {cva5_top_0/m_axi/SEG_axi_uartlite_0_Reg}]
 set_property offset 0x60000000 [get_bd_addr_segs {cva5_top_0/m_axi_dbg/SEG_axi_uartlite_0_Reg}]
-set_property range  64K        [get_bd_addr_segs {cva5_top_0/m_axi_dbg/SEG_axi_bram_ctrl_0_Mem0}]
+set_property range  128K       [get_bd_addr_segs {cva5_top_0/m_axi_dbg/SEG_axi_bram_ctrl_0_Mem0}]
 set_property offset 0x40000000 [get_bd_addr_segs {cva5_top_0/m_axi_dbg/SEG_axi_bram_ctrl_0_Mem0}]
+# The cached path's address space stays with the master, but name it either
+# way in case the register slice carries it.
+proc cva5_seg {args} {
+    foreach p $args {
+        set s [get_bd_addr_segs -quiet $p]
+        if {$s ne ""} { return $s }
+    }
+    return ""
+}
+set mem_ram_seg [cva5_seg {cva5_top_0/m_axi_mem/SEG_axi_bram_ctrl_0_Mem0} \
+                          {slice_mem/M_AXI/SEG_axi_bram_ctrl_0_Mem0}]
+if {$mem_ram_seg eq ""} { error "cached path has no RAM address segment" }
+set_property range  128K       $mem_ram_seg
+set_property offset 0x40000000 $mem_ram_seg
 # The CPU's peripheral bus only decodes 0x6xxx_xxxx, so exclude RAM from it for now.
 set cpu_ram_seg [get_bd_addr_segs -quiet {cva5_top_0/m_axi/SEG_axi_bram_ctrl_0_Mem0}]
 if {$cpu_ram_seg ne ""} { exclude_bd_addr_seg $cpu_ram_seg }
+# Likewise the cached path only ever targets RAM; keep the UART out of it.
+set mem_uart_seg [cva5_seg {cva5_top_0/m_axi_mem/SEG_axi_uartlite_0_Reg} \
+                           {slice_mem/M_AXI/SEG_axi_uartlite_0_Reg}]
+if {$mem_uart_seg ne ""} { exclude_bd_addr_seg $mem_uart_seg }
 
 # ---- Finalise -------------------------------------------------------------
 regenerate_bd_layout
