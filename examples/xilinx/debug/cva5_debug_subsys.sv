@@ -19,6 +19,15 @@ module cva5_debug_subsys #(
     output logic        ndmreset,       // resets CPU (and optionally peripherals)
     output logic        debug_req,      // to CPU (P2)
 
+    // External JTAG. Unused by the BSCANE2 DTM built for the board, where the
+    // TAP comes from the FPGA's own JTAG; the simulation harness compiles
+    // riscv-dbg's dmi_jtag_tap instead and drives these.
+    input  logic        jtag_tck,
+    input  logic        jtag_tms,
+    input  logic        jtag_trst_n,
+    input  logic        jtag_tdi,
+    output logic        jtag_tdo,
+
     // DM memory slave: debug ROM, program buffer, abstract data (P2)
     input  logic        dm_req,
     input  logic        dm_we,
@@ -66,12 +75,12 @@ module cva5_debug_subsys #(
         .dmi_resp_i       (dmi_resp),
         .dmi_resp_ready_o (dmi_resp_ready),
         .dmi_resp_valid_i (dmi_resp_valid),
-        // Unused with dmi_bscane_tap: the TAP comes from BSCANE2
-        .tck_i            (1'b0),
-        .tms_i            (1'b0),
-        .trst_ni          (1'b1),
-        .td_i             (1'b0),
-        .td_o             (),
+        // Ignored by dmi_bscane_tap; used by dmi_jtag_tap in simulation
+        .tck_i            (jtag_tck),
+        .tms_i            (jtag_tms),
+        .trst_ni          (jtag_trst_n),
+        .td_i             (jtag_tdi),
+        .td_o             (jtag_tdo),
         .tdo_oe_o         ()
     );
 

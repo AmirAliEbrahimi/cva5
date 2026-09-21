@@ -185,7 +185,13 @@ module cva5_top
         .m_axi_dbg_rresp(m_axi_dbg_rresp),
         .m_axi_dbg_rvalid(m_axi_dbg_rvalid),
         .m_axi_dbg_rready(m_axi_dbg_rready),
-        .ndmreset(ndmreset)
+        .ndmreset(ndmreset),
+        //External JTAG unused on the board: the DTM sits on the FPGA's own TAP
+        .jtag_tck(1'b0),
+        .jtag_tms(1'b0),
+        .jtag_trst_n(1'b1),
+        .jtag_tdi(1'b0),
+        .jtag_tdo()
     );
 
 endmodule

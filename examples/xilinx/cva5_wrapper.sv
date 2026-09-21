@@ -120,7 +120,16 @@ module cva5_wrapper
         output logic m_axi_dbg_rready,
 
         //Non-debug-module reset, for peripherals that should reset with the CPU
-        output logic ndmreset //Debugger reset request (active high). Resets the CPU only, as in Ibex.
+        output logic ndmreset, //Debugger reset request (active high). Resets the CPU only, as in Ibex.
+
+        //External JTAG. Tied off on the board, where the DTM sits on the FPGA's
+        //own TAP (BSCANE2) and ignores these; driven by the simulation harness,
+        //which builds riscv-dbg's dmi_jtag_tap instead.
+        input logic jtag_tck,
+        input logic jtag_tms,
+        input logic jtag_trst_n,
+        input logic jtag_tdi,
+        output logic jtag_tdo
     );
 
     //CPU connections
@@ -312,6 +321,11 @@ module cva5_wrapper
         .rst_n (rstn),
         .ndmreset (ndmreset),
         .debug_req (debug_req),
+        .jtag_tck (jtag_tck),
+        .jtag_tms (jtag_tms),
+        .jtag_trst_n (jtag_trst_n),
+        .jtag_tdi (jtag_tdi),
+        .jtag_tdo (jtag_tdo),
         .dm_req (1'b0),
         .dm_we (1'b0),
         .dm_addr (32'h0),
