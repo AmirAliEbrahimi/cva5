@@ -93,6 +93,7 @@ module csr_unit
         input logic [31:0] debug_entry_pc,
         output logic [31:0] dpc,
         output logic dcsr_ebreakm,
+        output logic dcsr_step,
         
         //Exception generation
         exception_interface.unit exception,
@@ -1045,7 +1046,6 @@ endgenerate
     logic [31:0] dscratch0;
     logic [31:0] dscratch1;
     logic [2:0] dcsr_cause;
-    logic dcsr_step;
 
     generate if (INCLUDE_DEBUG) begin : gen_debug_csrs
         always_ff @(posedge clk) begin
@@ -1057,12 +1057,10 @@ endgenerate
             else begin
                 if (debug_entry)
                     dcsr_cause <= debug_cause;
-                if (mwrite_en(DCSR))
+                if (mwrite_en(DCSR)) begin
                     dcsr_ebreakm <= updated_csr[15];
-                //dcsr.step is read-only zero until single-step is implemented,
-                //so a debugger sees stepping as unsupported instead of setting
-                //it, resuming, and waiting forever for a halt that never comes.
-                dcsr_step <= 0;
+                    dcsr_step <= updated_csr[2];
+                end
             end
         end
         assign dcsr = {4'd4, 12'd0, dcsr_ebreakm, 6'd0, dcsr_cause, 3'd0, dcsr_step, 2'b11};

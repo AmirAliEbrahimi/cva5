@@ -168,6 +168,7 @@ module cva5
     logic trap_suppress;
     logic [31:0] dpc;
     logic dcsr_ebreakm;
+    logic dcsr_step;
     exception_packet_t csr_exception_pkt;
 
     //Exceptions that debug handles (ebreak into debug mode, anything raised in
@@ -552,6 +553,7 @@ module cva5
             .debug_entry_pc(debug_entry_pc),
             .dpc(dpc),
             .dcsr_ebreakm(dcsr_ebreakm),
+            .dcsr_step(dcsr_step),
             .exception(exception[CSR_EXCEPTION]),
             .retire_ids(retire_ids),
             .mtime(mtime),
@@ -593,6 +595,7 @@ module cva5
         .debug_req(debug_req),
         .dpc(dpc),
         .dcsr_ebreakm(dcsr_ebreakm),
+        .dcsr_step(dcsr_step),
         .debug_mode(debug_mode),
         .debug_entry(debug_entry),
         .debug_cause(debug_cause),

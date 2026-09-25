@@ -73,6 +73,7 @@ module gc_unit
         input logic debug_req,              //Halt request from the Debug Module
         input logic [31:0] dpc,
         input logic dcsr_ebreakm,
+        input logic dcsr_step,
         output logic debug_mode,
         output logic debug_entry,           //Entering debug mode: CSR unit saves dpc and cause
         output logic [2:0] debug_cause,
@@ -312,7 +313,32 @@ module gc_unit
     logic exception_in_debug;
     logic debug_redirect;
 
-    assign debug_pending = INCLUDE_DEBUG & debug_req & ~debug_mode;
+    //Single-step: after dret with dcsr.step set, let exactly one instruction
+    //issue and then request a halt. Entry itself still goes through the halt
+    //path, which waits until no exception is possible and the issue stage
+    //holds the next PC, so the stepped instruction has retired by then.
+    typedef enum logic [1:0] {STEP_IDLE, STEP_WAIT_ISSUE, STEP_REQUEST} step_state_t;
+    step_state_t step_state;
+    logic step_request;
+
+    generate if (INCLUDE_DEBUG) begin : gen_step
+        always_ff @(posedge clk) begin
+            if (rst)
+                step_state <= STEP_IDLE;
+            else if (debug_entry)
+                step_state <= STEP_IDLE;
+            else case (step_state)
+                STEP_IDLE : if (dret & dcsr_step) step_state <= STEP_WAIT_ISSUE;
+                STEP_WAIT_ISSUE : if (instruction_issued) step_state <= STEP_REQUEST;
+                default : ;
+            endcase
+        end
+        assign step_request = (step_state == STEP_REQUEST);
+    end else begin : gen_no_step
+        assign step_request = 0;
+    end endgenerate
+
+    assign debug_pending = INCLUDE_DEBUG & (debug_req | step_request) & ~debug_mode;
     assign gated_interrupt_pending = interrupt_pending & ~debug_mode & ~debug_pending;
 
     always_comb begin
@@ -446,7 +472,8 @@ end endgenerate
         assign debug_redirect = halt_taken | ebreak_to_debug | exception_in_debug;
         //Only a new entry (not a re-entry from debug mode) saves dpc and the cause
         assign debug_entry = halt_taken | (ebreak_to_debug & ~debug_mode);
-        assign debug_cause = halt_taken ? 3'd3 : 3'd1; //haltreq : ebreak
+        //Cause priority per the debug spec: ebreak (1), haltreq (3), step (4)
+        assign debug_cause = ~halt_taken ? 3'd1 : (debug_req ? 3'd3 : 3'd4);
         assign debug_entry_pc = gc.exception.pc;       //Next PC for a halt, the ebreak itself for ebreak
         assign trap_suppress = ebreak_to_debug | exception_in_debug;
 

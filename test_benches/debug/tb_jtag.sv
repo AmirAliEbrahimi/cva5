@@ -256,7 +256,7 @@ module tb_jtag;
                      dut.cpu.gc_unit_block.state, dut.cpu.gc_unit_block.next_state,
                      dut.cpu.gc_unit_block.debug_pending, dut.cpu.issue.stage_valid,
                      dut.cpu.gc_unit_block.possible_exception);
-        if (dut.cpu.instruction_issued & ($time < 3000000))
+        if (dut.cpu.instruction_issued)
             $display("[trace %0t] ISSUE pc=%h instr=%h", $time, dut.cpu.issue.pc, dut.cpu.issue.instruction);
         if (dut.cpu.gc.exception.valid)
             $display("[trace %0t] EXC code=%0d pc=%h tval=%h", $time, dut.cpu.gc.exception.code, dut.cpu.gc.exception.pc, dut.cpu.gc.exception.tval);
@@ -268,6 +268,8 @@ module tb_jtag;
             $display("[trace %0t] ROM fetch addr=%h", $time, {dut.instruction_bram.addr, 2'b00});
         if (dut.dm_req)
             $display("[trace %0t] DM %s addr=%h wdata=%h", $time, dut.dm_we ? "WR" : "RD", dut.dm_addr, dut.dm_wdata);
+        if (dut.dm_port.if_ack)
+            $display("[trace %0t] DM fetch -> %h", $time, dut.dm_port.if_dat_r);
     end
 `endif
 
