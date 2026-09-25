@@ -159,8 +159,12 @@ module tb_jtag;
     assign m_wready  = (wstate == W_DATA);
     assign m_rresp = 2'b00;
     assign m_bresp = 2'b00;
-    assign m_rid = m_arid;
-    assign m_bid = m_awid;
+    // Responses must carry the ID captured at the address handshake: the
+    // adapter hands out a new ID as soon as an address is accepted, and routes
+    // each response by the ID it comes back with.
+    logic [5:0] r_id, w_id;
+    assign m_rid = r_id;
+    assign m_bid = w_id;
 
     always_ff @(posedge clk) begin
         if (!rstn) begin
@@ -170,6 +174,7 @@ module tb_jtag;
             // reads
             case (rstate)
                 R_IDLE: if (m_arvalid) begin
+                    r_id    <= m_arid;
                     r_addr  <= m_araddr;
                     r_beats <= m_arlen + 1;
                     rstate  <= R_DATA;
@@ -187,7 +192,7 @@ module tb_jtag;
 
             // writes
             case (wstate)
-                W_IDLE: if (m_awvalid) begin w_addr <= m_awaddr; wstate <= W_DATA; end
+                W_IDLE: if (m_awvalid) begin w_id <= m_awid; w_addr <= m_awaddr; wstate <= W_DATA; end
                 W_DATA: if (m_wvalid) begin
                     if (in_ram(w_addr)) begin
                         automatic int unsigned idx = ram_idx(w_addr);
@@ -236,10 +241,58 @@ module tb_jtag;
         end
     end
 
+    // ---- optional debug trace (+define+DEBUG_TRACE) --------------------------
+`ifdef DEBUG_TRACE
+    logic prev_req, prev_mode;
+    always_ff @(posedge clk) begin
+        prev_req  <= dut.debug_req;
+        prev_mode <= dut.cpu.debug_mode;
+        if (dut.debug_req != prev_req)
+            $display("[trace %0t] debug_req=%0b", $time, dut.debug_req);
+        if (dut.cpu.debug_mode != prev_mode)
+            $display("[trace %0t] debug_mode=%0b dpc=%h", $time, dut.cpu.debug_mode, dut.cpu.dpc);
+        if (dut.cpu.gc_unit_block.state != dut.cpu.gc_unit_block.next_state)
+            $display("[trace %0t] gc %0d -> %0d (debug_pending=%0b issue_valid=%0b possible_exc=%0b)", $time,
+                     dut.cpu.gc_unit_block.state, dut.cpu.gc_unit_block.next_state,
+                     dut.cpu.gc_unit_block.debug_pending, dut.cpu.issue.stage_valid,
+                     dut.cpu.gc_unit_block.possible_exception);
+        if (dut.cpu.instruction_issued & ($time < 3000000))
+            $display("[trace %0t] ISSUE pc=%h instr=%h", $time, dut.cpu.issue.pc, dut.cpu.issue.instruction);
+        if (dut.cpu.gc.exception.valid)
+            $display("[trace %0t] EXC code=%0d pc=%h tval=%h", $time, dut.cpu.gc.exception.code, dut.cpu.gc.exception.pc, dut.cpu.gc.exception.tval);
+        if (m_rvalid & m_rready & ($time < 1500000))
+            $display("[trace %0t] MEM R data=%h last=%0b id=%0d", $time, m_rdata, m_rlast, m_rid);
+        if (m_arvalid & m_arready)
+            $display("[trace %0t] MEM AR addr=%h len=%0d", $time, m_araddr, m_arlen);
+        if (dut.instruction_bram.en)
+            $display("[trace %0t] ROM fetch addr=%h", $time, {dut.instruction_bram.addr, 2'b00});
+        if (dut.dm_req)
+            $display("[trace %0t] DM %s addr=%h wdata=%h", $time, dut.dm_we ? "WR" : "RD", dut.dm_addr, dut.dm_wdata);
+    end
+`endif
+
     // ---- run ---------------------------------------------------------------
     initial begin
         for (int i = 0; i < RAM_WORDS; i++) ram[i] = 32'h0;
         $readmemh("boot.mif", dut.local_mem.mem, 0);
+        // Program in RAM: app.mif if present, otherwise a counting loop that
+        // gives the debugger something observable (x1 increments forever):
+        //   40000000: addi x1, x0, 0
+        //   40000004: addi x1, x1, 1
+        //   40000008: j    40000004
+        begin
+            int fd = $fopen("app.mif", "r");
+            if (fd != 0) begin
+                $fclose(fd);
+                $readmemh("app.mif", ram, 0);
+                $display("[tb] RAM preloaded from app.mif");
+            end else begin
+                ram[0] = 32'h00000093;
+                ram[1] = 32'h00108093;
+                ram[2] = 32'hffdff06f;
+                $display("[tb] RAM preloaded with a counting loop (x1++)");
+            end
+        end
         repeat (10) @(posedge clk);
         rstn = 1;
         $display("[tb] running: connect with openocd -f test_benches/debug/cva5-sim.cfg");

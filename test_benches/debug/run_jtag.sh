@@ -40,6 +40,7 @@ verilator --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style \
   $RD/src/dm_sba.sv $RD/src/dm_top.sv $RD/src/dmi_jtag.sv $RD/src/dmi_jtag_tap.sv \
   test_benches/debug/tc_clk_sim.sv \
   examples/xilinx/debug/dm_sba_axil.sv examples/xilinx/debug/cva5_debug_subsys.sv \
+  examples/xilinx/debug/dm_mem_port.sv \
   examples/xilinx/cva5_wrapper.sv \
   $RD/tb/SimJTAG.sv test_benches/debug/tb_jtag.sv \
   --top-module tb_jtag -Mdir $OUT

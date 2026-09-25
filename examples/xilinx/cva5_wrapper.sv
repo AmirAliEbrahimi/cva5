@@ -138,7 +138,7 @@ module cva5_wrapper
     axi_interface m_axi();
     avalon_interface m_avalon(); //Unused
     wishbone_interface dwishbone(); //Unused
-    wishbone_interface iwishbone(); //Unused
+    wishbone_interface iwishbone(); //Debug Module fetches
     mem_interface mem[1]();
     logic[63:0] mtime;
     interrupt_t s_interrupt; //Unused
@@ -158,6 +158,10 @@ module cva5_wrapper
         default : '{default : NON_WRITEBACK_ID}
     };
 
+    //Debug Module base address. Its 4 KB window holds the debug ROM
+    //(halt at +0x800), program buffer and abstract data registers.
+    localparam logic [31:0] DM_BASE = 32'h5000_0000;
+
     localparam cpu_config_t CPU_CONFIG = '{
         //ISA options
         MODES : M,
@@ -169,7 +173,7 @@ module cva5_wrapper
             CUSTOM : 0,
             default: '0
         },
-        INCLUDE_IFENCE : 0,
+        INCLUDE_IFENCE : 1, //fence.i: debuggers use it to make code writes visible to fetch
         INCLUDE_AMO : 0,
         INCLUDE_CBO : 0,
         //CSR constants
@@ -241,14 +245,17 @@ module cva5_wrapper
             L : 32'h80000000,
             H : 32'h80FFFFFF
         },
-        INCLUDE_IBUS : 0,
+        //Instruction bus: fetches of the Debug Module's ROM and program buffer
+        INCLUDE_IBUS : 1,
         IBUS_ADDR : '{
-            L : 32'h60000000, 
-            H : 32'h6FFFFFFF
+            L : DM_BASE,
+            H : DM_BASE + 32'hFFF
         },
+        //Peripheral bus: the UART, plus the Debug Module's data registers
+        //(split off by address in this wrapper)
         INCLUDE_PERIPHERAL_BUS : 1,
         PERIPHERAL_BUS_ADDR : '{
-            L : 32'h60000000,
+            L : DM_BASE,
             H : 32'h6FFFFFFF
         },
         PERIPHERAL_BUS_TYPE : AXI_BUS,
@@ -314,9 +321,12 @@ module cva5_wrapper
     ////////////////////////////////////////////////////
     //Debug subsystem (riscv-dbg over BSCANE2)
     //The DM is reset only by rstn, so ndmreset never resets the debugger.
-    logic debug_req; //Unused until the core is debug-capable (P2)
+    logic debug_req;
+    logic dm_req, dm_we;
+    logic [31:0] dm_addr, dm_wdata, dm_rdata;
+    logic [3:0] dm_be;
 
-    cva5_debug_subsys #(.DM_BASE_ADDR(32'h5000_0000), .HART_AVAILABLE(1'b0)) debug (
+    cva5_debug_subsys #(.DM_BASE_ADDR(DM_BASE), .HART_AVAILABLE(1'b1)) debug (
         .clk (clk),
         .rst_n (rstn),
         .ndmreset (ndmreset),
@@ -326,12 +336,12 @@ module cva5_wrapper
         .jtag_trst_n (jtag_trst_n),
         .jtag_tdi (jtag_tdi),
         .jtag_tdo (jtag_tdo),
-        .dm_req (1'b0),
-        .dm_we (1'b0),
-        .dm_addr (32'h0),
-        .dm_be (4'h0),
-        .dm_wdata (32'h0),
-        .dm_rdata (),
+        .dm_req (dm_req),
+        .dm_we (dm_we),
+        .dm_addr (dm_addr),
+        .dm_be (dm_be),
+        .dm_wdata (dm_wdata),
+        .dm_rdata (dm_rdata),
         .m_axi_awaddr (m_axi_dbg_awaddr),
         .m_axi_awprot (m_axi_dbg_awprot),
         .m_axi_awvalid (m_axi_dbg_awvalid),
@@ -357,7 +367,7 @@ module cva5_wrapper
     always_ff @(posedge clk) rst <= ~rstn | ndmreset; //Registered: ndmreset comes from DM logic
 
 
-    cva5 #(.CONFIG(CPU_CONFIG)) cpu(.mem(mem[0]), .*);
+    cva5 #(.CONFIG(CPU_CONFIG), .INCLUDE_DEBUG(1), .DM_BASE(DM_BASE)) cpu(.mem(mem[0]), .*);
 
     always_ff @(posedge clk) begin
         if (rst)
@@ -369,30 +379,70 @@ module cva5_wrapper
     assign s_interrupt = '{default: '0};
     assign m_interrupt = '{default: '0};
 
-    //AXI peripheral mapping; ID widths are missmatched but unused
-    assign m_axi.arready = m_axi_arready;
-    assign m_axi_arvalid = m_axi.arvalid;
+    ////////////////////////////////////////////////////
+    //Peripheral bus split
+    //The core's AXI master has one transaction in flight and holds its address
+    //until the response, and always accepts responses, so the target can be
+    //chosen from the current address with no latching.
+    logic pb_rd_dm, pb_wr_dm;
+    assign pb_rd_dm = (m_axi.araddr[31:12] == DM_BASE[31:12]);
+    assign pb_wr_dm = (m_axi.awaddr[31:12] == DM_BASE[31:12]);
+
+    logic dmp_ar_ready, dmp_r_valid, dmp_aw_ready, dmp_w_ready, dmp_b_valid;
+    logic [31:0] dmp_r_data;
+
+    //External peripherals (UART); ID widths are mismatched but unused
+    assign m_axi_arvalid = m_axi.arvalid & ~pb_rd_dm;
     assign m_axi_araddr = m_axi.araddr;
-
     assign m_axi_rready = m_axi.rready;
-    assign m_axi.rvalid = m_axi_rvalid;
-    assign m_axi.rdata = m_axi_rdata;
-    assign m_axi.rresp = m_axi_rresp;
-    assign m_axi.rid = 6'b0;
-
-    assign m_axi.awready = m_axi_awready;
-    assign m_axi_awvalid = m_axi.awvalid;
+    assign m_axi_awvalid = m_axi.awvalid & ~pb_wr_dm;
     assign m_axi_awaddr = m_axi.awaddr;
-
-    assign m_axi.wready = m_axi_wready;
-    assign m_axi_wvalid = m_axi.wvalid;
+    assign m_axi_wvalid = m_axi.wvalid & ~pb_wr_dm;
     assign m_axi_wdata = m_axi.wdata;
     assign m_axi_wstrb = m_axi.wstrb;
-
     assign m_axi_bready = m_axi.bready;
-    assign m_axi.bvalid = m_axi_bvalid;
-    assign m_axi.bresp = m_axi_bresp;
+
+    assign m_axi.arready = pb_rd_dm ? dmp_ar_ready : m_axi_arready;
+    assign m_axi.rvalid = pb_rd_dm ? dmp_r_valid : m_axi_rvalid;
+    assign m_axi.rdata = pb_rd_dm ? dmp_r_data : m_axi_rdata;
+    assign m_axi.rresp = pb_rd_dm ? 2'b00 : m_axi_rresp;
+    assign m_axi.rid = 6'b0;
+    assign m_axi.awready = pb_wr_dm ? dmp_aw_ready : m_axi_awready;
+    assign m_axi.wready = pb_wr_dm ? dmp_w_ready : m_axi_wready;
+    assign m_axi.bvalid = pb_wr_dm ? dmp_b_valid : m_axi_bvalid;
+    assign m_axi.bresp = pb_wr_dm ? 2'b00 : m_axi_bresp;
     assign m_axi.bid = 6'b0;
+
+    //Debug Module memory: instruction fetch and load/store share its one port
+    dm_mem_port dm_port (
+        .clk (clk),
+        .rst (rst),
+        .if_adr (iwishbone.adr),
+        .if_cyc (iwishbone.cyc),
+        .if_stb (iwishbone.stb),
+        .if_ack (iwishbone.ack),
+        .if_dat_r (iwishbone.dat_r),
+        .ar_valid (m_axi.arvalid & pb_rd_dm),
+        .ar_addr (m_axi.araddr),
+        .ar_ready (dmp_ar_ready),
+        .r_valid (dmp_r_valid),
+        .r_data (dmp_r_data),
+        .aw_valid (m_axi.awvalid & pb_wr_dm),
+        .aw_addr (m_axi.awaddr),
+        .aw_ready (dmp_aw_ready),
+        .w_valid (m_axi.wvalid & pb_wr_dm),
+        .w_data (m_axi.wdata),
+        .w_strb (m_axi.wstrb),
+        .w_ready (dmp_w_ready),
+        .b_valid (dmp_b_valid),
+        .dm_req (dm_req),
+        .dm_we (dm_we),
+        .dm_addr (dm_addr),
+        .dm_be (dm_be),
+        .dm_wdata (dm_wdata),
+        .dm_rdata (dm_rdata)
+    );
+    assign iwishbone.err = 1'b0;
 
     //Block memory
     localparam BRAM_ADDR_W = $clog2(WORDS);
