@@ -165,8 +165,8 @@ module wishbone_master
                 if (INCLUDE_AMO) begin
                     ls.ready <= wishbone.ack;
                     ls.data_valid <= 0;
-                    wishbone.stb = ~wishbone.ack;
-                    wishbone.cyc = ~wishbone.ack;
+                    wishbone.stb <= ~wishbone.ack;
+                    wishbone.cyc <= ~wishbone.ack;
                     write_outstanding <= ~wishbone.ack;
                     if (wishbone.ack)
                         current_state <= REQUESTING;
