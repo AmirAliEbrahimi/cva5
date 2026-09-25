@@ -31,7 +31,9 @@ module cva5
     import csr_types::*;
 
     #(
-        parameter cpu_config_t CONFIG = EXAMPLE_CONFIG
+        parameter cpu_config_t CONFIG = EXAMPLE_CONFIG,
+        parameter bit INCLUDE_DEBUG = 0,          //RISC-V External Debug Support (execution based)
+        parameter logic [31:0] DM_BASE = 32'h0    //Debug Module base address
     )
 
     (
@@ -50,7 +52,9 @@ module cva5
 
         input logic [63:0] mtime,
         input interrupt_t s_interrupt,
-        input interrupt_t m_interrupt
+        input interrupt_t m_interrupt,
+
+        input logic debug_req
     );
 
     ////////////////////////////////////////////////////
@@ -154,6 +158,24 @@ module cva5
     logic csr_frontend_flush;
     logic interrupt_taken;
     logic interrupt_pending;
+
+    //Debug
+    logic debug_mode;
+    logic debug_entry;
+    logic [2:0] debug_cause;
+    logic [31:0] debug_entry_pc;
+    logic dret;
+    logic trap_suppress;
+    logic [31:0] dpc;
+    logic dcsr_ebreakm;
+    exception_packet_t csr_exception_pkt;
+
+    //Exceptions that debug handles (ebreak into debug mode, anything raised in
+    //debug mode) must not touch mepc/mcause/mstatus.
+    always_comb begin
+        csr_exception_pkt = gc.exception;
+        csr_exception_pkt.valid = gc.exception.valid & ~trap_suppress;
+    end
 
     //CSR broadcast info
     logic [1:0] current_privilege;
@@ -266,7 +288,7 @@ module cva5
         .mem (icache_mem)
     );
 
-    branch_predictor #(.CONFIG(CONFIG))
+    branch_predictor #(.CONFIG(CONFIG), .INCLUDE_DEBUG(INCLUDE_DEBUG), .DM_BASE(DM_BASE))
     bp_block (
         .clk (clk),
         .rst (rst),
@@ -489,7 +511,7 @@ module cva5
     endgenerate
 
     generate if (CONFIG.INCLUDE_UNIT.CSR) begin : gen_csrs
-        csr_unit # (.CONFIG(CONFIG))
+        csr_unit # (.CONFIG(CONFIG), .INCLUDE_DEBUG(INCLUDE_DEBUG))
         csr_unit_block (
             .clk(clk),
             .rst(rst),
@@ -518,12 +540,18 @@ module cva5
             .asid(asid),
             .immu(immu),
             .dmmu(dmmu),
-            .exception_pkt(gc.exception),
+            .exception_pkt(csr_exception_pkt),
             .exception_target_pc (exception_target_pc),
             .mret(mret),
             .sret(sret),
             .mepc(mepc),
             .sepc(sepc),
+            .debug_mode(debug_mode),
+            .debug_entry(debug_entry),
+            .debug_cause(debug_cause),
+            .debug_entry_pc(debug_entry_pc),
+            .dpc(dpc),
+            .dcsr_ebreakm(dcsr_ebreakm),
             .exception(exception[CSR_EXCEPTION]),
             .retire_ids(retire_ids),
             .mtime(mtime),
@@ -532,7 +560,7 @@ module cva5
         );
     end endgenerate
 
-    gc_unit #(.CONFIG(CONFIG))
+    gc_unit #(.CONFIG(CONFIG), .INCLUDE_DEBUG(INCLUDE_DEBUG), .DM_BASE(DM_BASE))
     gc_unit_block (
         .clk (clk),
         .rst (rst),
@@ -562,6 +590,15 @@ module cva5
         .sepc(sepc),
         .interrupt_taken(interrupt_taken),
         .interrupt_pending(interrupt_pending),
+        .debug_req(debug_req),
+        .dpc(dpc),
+        .dcsr_ebreakm(dcsr_ebreakm),
+        .debug_mode(debug_mode),
+        .debug_entry(debug_entry),
+        .debug_cause(debug_cause),
+        .debug_entry_pc(debug_entry_pc),
+        .dret(dret),
+        .trap_suppress(trap_suppress),
         .load_store_status(load_store_status)
     );
 

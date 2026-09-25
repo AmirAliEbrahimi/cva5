@@ -29,7 +29,8 @@ module csr_unit
     import opcodes::*;
 
     # (
-        parameter cpu_config_t CONFIG = EXAMPLE_CONFIG
+        parameter cpu_config_t CONFIG = EXAMPLE_CONFIG,
+        parameter bit INCLUDE_DEBUG = 0
     )
 
     (
@@ -84,6 +85,14 @@ module csr_unit
         input logic sret,
         output logic [31:0] mepc,
         output logic [31:0] sepc,
+
+        //Debug
+        input logic debug_mode,
+        input logic debug_entry,
+        input logic [2:0] debug_cause,
+        input logic [31:0] debug_entry_pc,
+        output logic [31:0] dpc,
+        output logic dcsr_ebreakm,
         
         //Exception generation
         exception_interface.unit exception,
@@ -988,6 +997,7 @@ generate if (CONFIG.MODES != BARE) begin : gen_csr_exceptions
                 if (CONFIG.MODES == MSU & privilege_level == USER_PRIVILEGE)
                     legal_access &= scounteren[csr_inputs.addr[4:0]];
             end
+            DCSR, DPC, DSCRATCH0, DSCRATCH1 : legal_access = INCLUDE_DEBUG & debug_mode; //Debug mode only
             STIMECMP, STIMECMPH : legal_access = CONFIG.MODES == MSU & CONFIG.CSRS.INCLUDE_SSTC & ((privilege_level == MACHINE_PRIVILEGE) | (privilege_level == SUPERVISOR_PRIVILEGE & mcounteren.tm & menvcfgh.stce)); //Read write, depends on TM + STCE
             default: legal_access = 0;
         endcase
@@ -1026,6 +1036,56 @@ endgenerate
     end
 
     assign exception.possible = busy | exception.valid | stall_for_interrupt; //Block future instructions
+
+    ////////////////////////////////////////////////////
+    //Debug mode registers
+    //dcsr: xdebugver=4 (external debug support), prv fixed at machine mode;
+    //ebreakm and step are writable, cause is set on entry.
+    logic [31:0] dcsr;
+    logic [31:0] dscratch0;
+    logic [31:0] dscratch1;
+    logic [2:0] dcsr_cause;
+    logic dcsr_step;
+
+    generate if (INCLUDE_DEBUG) begin : gen_debug_csrs
+        always_ff @(posedge clk) begin
+            if (rst) begin
+                dcsr_ebreakm <= 0;
+                dcsr_step <= 0;
+                dcsr_cause <= '0;
+            end
+            else begin
+                if (debug_entry)
+                    dcsr_cause <= debug_cause;
+                if (mwrite_en(DCSR))
+                    dcsr_ebreakm <= updated_csr[15];
+                //dcsr.step is read-only zero until single-step is implemented,
+                //so a debugger sees stepping as unsupported instead of setting
+                //it, resuming, and waiting forever for a halt that never comes.
+                dcsr_step <= 0;
+            end
+        end
+        assign dcsr = {4'd4, 12'd0, dcsr_ebreakm, 6'd0, dcsr_cause, 3'd0, dcsr_step, 2'b11};
+
+        always_ff @(posedge clk) begin
+            if (debug_entry)
+                dpc <= debug_entry_pc;
+            else if (mwrite_en(DPC))
+                dpc <= updated_csr;
+            if (mwrite_en(DSCRATCH0))
+                dscratch0 <= updated_csr;
+            if (mwrite_en(DSCRATCH1))
+                dscratch1 <= updated_csr;
+        end
+    end else begin : gen_no_debug_csrs
+        assign dcsr = '0;
+        assign dpc = '0;
+        assign dscratch0 = '0;
+        assign dscratch1 = '0;
+        assign dcsr_ebreakm = 0;
+        assign dcsr_cause = '0;
+        assign dcsr_step = 0;
+    end endgenerate
 
     ////////////////////////////////////////////////////
     //CSR mux
@@ -1117,6 +1177,12 @@ endgenerate
             TIMEH : selected_csr = CONFIG.CSRS.INCLUDE_ZICNTR ? mtime[63:32] : '0;
             INSTRETH : selected_csr = CONFIG.CSRS.INCLUDE_ZICNTR ? 32'(minstret[COUNTER_W-1:32]) : '0;
             [HPMCOUNTER3H : HPMCOUNTER31H] : selected_csr = '0;
+
+            //Debug mode
+            DCSR : selected_csr = INCLUDE_DEBUG ? dcsr : '0;
+            DPC : selected_csr = INCLUDE_DEBUG ? dpc : '0;
+            DSCRATCH0 : selected_csr = INCLUDE_DEBUG ? dscratch0 : '0;
+            DSCRATCH1 : selected_csr = INCLUDE_DEBUG ? dscratch1 : '0;
 
             default : selected_csr = '0;
         endcase

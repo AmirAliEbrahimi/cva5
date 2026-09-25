@@ -27,7 +27,9 @@ module branch_predictor
     import cva5_types::*;
 
     # (
-        parameter cpu_config_t CONFIG = EXAMPLE_CONFIG
+        parameter cpu_config_t CONFIG = EXAMPLE_CONFIG,
+        parameter bit INCLUDE_DEBUG = 0,            //Suppress prediction in the Debug Module's window
+        parameter logic [31:0] DM_BASE = 32'h0
     )
 
     (
@@ -92,6 +94,16 @@ module branch_predictor
 
     logic [CONFIG.BP.WAYS-1:0] tag_matches;
     logic [CONFIG.BP.WAYS-1:0] replacement_way;
+    //The Debug Module rewrites the instruction at its WhereTo address to send
+    //the core to the abstract command, the program buffer or the resume
+    //address, so a cached prediction for that PC goes stale by design and no
+    //fence can fix it: the predictor is not memory. Debug-mode code is a few
+    //dozen instructions, so simply never predict inside that window.
+    logic if_in_dm;
+    logic ex_in_dm;
+    assign if_in_dm = INCLUDE_DEBUG & (bp.if_pc[31:12] == DM_BASE[31:12]);
+    assign ex_in_dm = INCLUDE_DEBUG & (br_results.pc[31:12] == DM_BASE[31:12]);
+
     logic [CONFIG.BP.WAYS-1:0] tag_update_way;
     logic [CONFIG.BP.WAYS-1:0] target_update_way;
     logic [$clog2(CONFIG.BP.WAYS > 1 ? CONFIG.BP.WAYS : 2)-1:0] hit_way;
@@ -160,7 +172,7 @@ module branch_predictor
                 .b_rdata(predicted_pc[i]),
             .*);
 
-            assign tag_matches[i] = init_done & ({if_entry[i].valid, if_entry[i].tag} == {1'b1, addr_utils.getTag(bp.if_pc)});
+            assign tag_matches[i] = init_done & ~if_in_dm & ({if_entry[i].valid, if_entry[i].tag} == {1'b1, addr_utils.getTag(bp.if_pc)});
         end
     end
     endgenerate
@@ -232,7 +244,7 @@ module branch_predictor
         (~branch_metadata_ex.branch_prediction_used) |
         (branch_metadata_ex.branch_predictor_metadata[1] ^ ex_entry.metadata[1]);
 
-    assign tag_update_way = {CONFIG.BP.WAYS{br_results.valid}} & (branch_metadata_ex.branch_predictor_update_way);
+    assign tag_update_way = {CONFIG.BP.WAYS{br_results.valid & ~ex_in_dm}} & (branch_metadata_ex.branch_predictor_update_way);
     assign target_update_way = {CONFIG.BP.WAYS{branch_predictor_direction_changed}} & tag_update_way;
     ////////////////////////////////////////////////////
     //Target PC if branch flush occured

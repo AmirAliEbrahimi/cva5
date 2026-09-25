@@ -29,7 +29,9 @@ module gc_unit
     import opcodes::*;
 
     # (
-        parameter cpu_config_t CONFIG = EXAMPLE_CONFIG
+        parameter cpu_config_t CONFIG = EXAMPLE_CONFIG,
+        parameter bit INCLUDE_DEBUG = 0,               //RISC-V External Debug Support
+        parameter logic [31:0] DM_BASE = 32'h0         //Debug Module base address
     )
 
     (
@@ -66,6 +68,17 @@ module gc_unit
         //CSR Interrupts
         input logic interrupt_pending,
         output logic interrupt_taken,
+
+        //Debug
+        input logic debug_req,              //Halt request from the Debug Module
+        input logic [31:0] dpc,
+        input logic dcsr_ebreakm,
+        output logic debug_mode,
+        output logic debug_entry,           //Entering debug mode: CSR unit saves dpc and cause
+        output logic [2:0] debug_cause,
+        output logic [31:0] debug_entry_pc,
+        output logic dret,
+        output logic trap_suppress,         //Current exception is handled by debug, not by the trap CSRs
 
         //CSR signals
         input logic csr_frontend_flush,
@@ -152,10 +165,12 @@ module gc_unit
     logic is_mret;
     logic is_sret;
     logic is_wfi;
+    logic is_dret;
 
     assign instruction = decode_stage.instruction;
 
     assign unit_needed =
+        (INCLUDE_DEBUG & instruction inside {DRET}) |
         (CONFIG.MODES != BARE & instruction inside {MRET, WFI}) |
         (CONFIG.MODES == MSU & instruction inside {SRET, SFENCE_VMA}) |
         (CONFIG.INCLUDE_IFENCE & instruction inside {FENCE_I});
@@ -169,13 +184,14 @@ module gc_unit
     always_ff @(posedge clk) begin
         if (issue_stage_ready) begin
             is_ifence <= CONFIG.INCLUDE_IFENCE & instruction.upper_opcode[2];
-            is_sfence <= CONFIG.MODES == MSU & ~instruction.upper_opcode[2] & instruction.fn7[0];
+            is_sfence <= CONFIG.MODES == MSU & ~instruction.upper_opcode[2] & instruction.fn7[0] & ~(instruction inside {DRET});
             trivial_sfence <= |instruction.rs1_addr;
             asid_sfence <= |instruction.rs2_addr;
             is_wfi <= CONFIG.MODES != BARE & ~instruction.upper_opcode[2] & ~instruction.fn7[0] & ~instruction.rs2_addr[1];
             //Ret instructions need exact decoding
             is_mret <= CONFIG.MODES != BARE & instruction inside {MRET};
             is_sret <= CONFIG.MODES == MSU & instruction inside {SRET};
+            is_dret <= INCLUDE_DEBUG & instruction inside {DRET};
         end
     end
 
@@ -197,12 +213,14 @@ module gc_unit
             is_sfence_r <= 0;
             mret <= 0;
             sret <= 0;
+            dret <= 0;
         end
         else begin
             is_ifence_r <= issue.new_request & is_ifence & ~new_exception;
             is_sfence_r <= issue.new_request & is_sfence & ~new_exception;
             mret <= issue.new_request & is_mret & ~new_exception;
             sret <= issue.new_request & is_sret & ~new_exception;
+            dret <= issue.new_request & is_dret & ~new_exception;
         end  
     end
 
@@ -228,6 +246,8 @@ module gc_unit
                     new_exception = is_sfence | is_sret | is_mret;
                 else if (current_privilege == SUPERVISOR_PRIVILEGE)
                     new_exception = (is_sfence & tvm) | (is_sret & tsr);
+                if (is_dret & ~debug_mode)
+                    new_exception = 1;
             end
         end
 
@@ -279,6 +299,22 @@ module gc_unit
             state <= next_state;
     end
 
+    ////////////////////////////////////////////////////
+    //Debug
+    //A halt request is taken exactly like an interrupt (wait until no exception
+    //is possible and the issue stage holds the next PC, then flush and redirect),
+    //but with priority over interrupts and a fixed target in the Debug Module.
+    //Interrupts are masked while in debug mode.
+    logic debug_pending;
+    logic gated_interrupt_pending;
+    logic halt_taken;
+    logic ebreak_to_debug;
+    logic exception_in_debug;
+    logic debug_redirect;
+
+    assign debug_pending = INCLUDE_DEBUG & debug_req & ~debug_mode;
+    assign gated_interrupt_pending = interrupt_pending & ~debug_mode & ~debug_pending;
+
     always_comb begin
         next_state = state;
         case (state)
@@ -288,13 +324,13 @@ module gc_unit
             IDLE_STATE : begin
                 if ((issue.new_request & ~is_wfi & ~new_exception) | gc.exception.valid | csr_frontend_flush)
                     next_state = PRE_ISSUE_FLUSH;
-                else if (interrupt_pending)
+                else if (debug_pending | gated_interrupt_pending)
                     next_state = WAIT_INTERRUPT;
             end
             WAIT_INTERRUPT : begin
                 if (gc.exception.valid | csr_frontend_flush) //Exception overrides interrupt
                     next_state = PRE_ISSUE_FLUSH;
-                else if (~interrupt_pending) //Something cancelled the interrupt
+                else if (~(debug_pending | gated_interrupt_pending)) //Something cancelled the interrupt
                     next_state = IDLE_STATE;
                 else if (~possible_exception & issue_stage.stage_valid & ~branch_flush) //No more possible exceptions and issue stage has correct PC
                     next_state = PRE_ISSUE_FLUSH;
@@ -379,7 +415,7 @@ generate if (CONFIG.MODES != BARE) begin : gen_gc_m_mode
     assign gc.exception.pc = |exception_valid ? exception_pc[exception_source] : issue_stage.pc;
     assign gc.exception.source = exception_valid;
 
-    assign interrupt_taken = interrupt_pending & (state == WAIT_INTERRUPT) & (next_state == PRE_ISSUE_FLUSH) & ~gc.exception.valid & ~csr_frontend_flush;
+    assign interrupt_taken = gated_interrupt_pending & (state == WAIT_INTERRUPT) & (next_state == PRE_ISSUE_FLUSH) & ~gc.exception.valid & ~csr_frontend_flush;
     //Writeback and rename handling
     logic gc_writeback_suppress_r;
     logic gc_rename_revert;
@@ -397,6 +433,43 @@ generate if (CONFIG.MODES != BARE) begin : gen_gc_m_mode
     assign gc.rename_revert = gc_rename_revert;
 end endgenerate
 
+    ////////////////////////////////////////////////////
+    //Debug mode entry and exit
+    generate if (INCLUDE_DEBUG) begin : gen_debug
+        //Halt request, taken on the interrupt path
+        assign halt_taken = debug_pending & (state == WAIT_INTERRUPT) & (next_state == PRE_ISSUE_FLUSH) & ~gc.exception.valid & ~csr_frontend_flush;
+        //ebreak enters debug mode when dcsr.ebreakm is set, and always re-enters it from debug mode
+        assign ebreak_to_debug = gc.exception.valid & (gc.exception.code == BREAK) & (debug_mode | dcsr_ebreakm);
+        //Any other exception in debug mode goes to the Debug Module's exception handler
+        assign exception_in_debug = gc.exception.valid & debug_mode & ~ebreak_to_debug;
+
+        assign debug_redirect = halt_taken | ebreak_to_debug | exception_in_debug;
+        //Only a new entry (not a re-entry from debug mode) saves dpc and the cause
+        assign debug_entry = halt_taken | (ebreak_to_debug & ~debug_mode);
+        assign debug_cause = halt_taken ? 3'd3 : 3'd1; //haltreq : ebreak
+        assign debug_entry_pc = gc.exception.pc;       //Next PC for a halt, the ebreak itself for ebreak
+        assign trap_suppress = ebreak_to_debug | exception_in_debug;
+
+        always_ff @(posedge clk) begin
+            if (rst)
+                debug_mode <= 0;
+            else if (debug_entry)
+                debug_mode <= 1;
+            else if (dret)
+                debug_mode <= 0;
+        end
+    end else begin : gen_no_debug
+        assign halt_taken = 0;
+        assign ebreak_to_debug = 0;
+        assign exception_in_debug = 0;
+        assign debug_redirect = 0;
+        assign debug_entry = 0;
+        assign debug_cause = '0;
+        assign debug_entry_pc = '0;
+        assign trap_suppress = 0;
+        assign debug_mode = 0;
+    end endgenerate
+
     //PC determination (trap, flush or return)
     //Two cycles: on first cycle the processor front end is flushed,
     //on the second cycle the new PC is fetched
@@ -404,10 +477,14 @@ generate if (CONFIG.MODES != BARE || CONFIG.INCLUDE_IFENCE) begin :gen_gc_pc_ove
 
     always_ff @ (posedge clk) begin
         gc_pc_override <= next_state inside {PRE_ISSUE_FLUSH, INIT_CLEAR_STATE};
-        if (gc.exception.valid | interrupt_taken)
+        if (debug_redirect)
+            gc_pc <= DM_BASE + (exception_in_debug ? 32'h810 : 32'h800); //dm::ExceptionAddress : dm::HaltAddress
+        else if (gc.exception.valid | interrupt_taken)
             gc_pc <= exception_target_pc;
         else if (instruction_issued) begin
-            if (is_mret)
+            if (is_dret)
+                gc_pc <= dpc;
+            else if (is_mret)
                 gc_pc <= mepc;
             else if (is_sret)
                 gc_pc <= sepc;

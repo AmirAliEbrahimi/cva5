@@ -171,6 +171,8 @@ module cva5_sim
     //Other CPU signals
     assign s_interrupt = '{default: 0};
     assign m_interrupt = '{default: 0};
+    logic debug_req;
+    assign debug_req = 0;
 
     always_ff @(posedge clk) begin
         if (rst)
