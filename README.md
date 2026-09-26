@@ -15,11 +15,27 @@ in the `docs` directory.
 <img src="docs/FCCM_Presentation/CVA5.png"/>
 
 > **About this fork:** this fork tracks upstream
-> [`openhwgroup/cva5`](https://github.com/openhwgroup/cva5) and adds a self-contained build
-> wrapper for the Verilator simulator and the example software, so you can go from a clean
-> clone to a running simulation with a couple of `make` targets. See
-> [Quick Start: Simulation](#quick-start-simulation) below and
-> [`examples/sw/README.build.md`](examples/sw/README.build.md).
+> [`openhwgroup/cva5`](https://github.com/openhwgroup/cva5) and adds:
+>
+> - a self-contained build wrapper for the Verilator simulator and the example software, so
+>   you can go from a clean clone to a running simulation with a couple of `make` targets
+>   (see [Quick Start: Simulation](#quick-start-simulation) and
+>   [`examples/sw/README.build.md`](examples/sw/README.build.md));
+> - RISC-V external debug support (debug mode, `dcsr`/`dpc`/`dscratch`, `dret`,
+>   single-step) and a PYNQ-Z2 system that runs programs from AXI block RAM, so software
+>   can be loaded and debugged over JTAG without rebuilding the bitstream (see
+>   [Debugging on the PYNQ-Z2](#debugging-on-the-pynq-z2)).
+>
+> **Clone with submodules.** The debug module comes from
+> [pulp-platform/riscv-dbg](https://github.com/pulp-platform/riscv-dbg) and
+> [common_cells](https://github.com/pulp-platform/common_cells), pinned under
+> `third_party/`:
+>
+> ```bash
+> git clone --recurse-submodules https://github.com/AmirAliEbrahimi/cva5
+> # or, in an existing clone:
+> git submodule update --init --recursive
+> ```
 
 ## Quick Start: Simulation
 
@@ -79,6 +95,60 @@ make -f tools/cva5.mak CVA5_DIR="$PWD" lint        # quick lint
 make -f tools/cva5.mak CVA5_DIR="$PWD" lint-full   # lint with -Wall
 ```
 
+## Debugging on the PYNQ-Z2
+
+The PYNQ-Z2 system boots from a small ROM in the CPU's local memory that jumps to main RAM
+(128 KB of AXI block RAM at `0x4000_0000`). Programs live in that RAM and are written over
+JTAG, so changing software never means rebuilding the bitstream.
+
+A RISC-V Debug Module (riscv-dbg) sits on the FPGA's own JTAG through BSCANE2, so no extra
+cable is needed: the board's USB connection carries both programming and debugging.
+
+### Loading a program
+
+```bash
+cd examples/sw
+make boot     # boot.mif, the ROM image baked into the bitstream (before building it)
+make load     # build app.elf and write it into RAM over JTAG, then start the CPU
+```
+
+`make load` holds the CPU in reset, writes the image through System Bus Access, reads it
+back to verify, and releases the CPU.
+
+### Debugging with GDB
+
+```bash
+pkill -f hw_server                       # Vivado and OpenOCD cannot share the cable
+cd examples/xilinx/openocd
+openocd -f pynq-z2-jtag.cfg -f cva5-pynq-z2.cfg
+```
+
+then, from the repository root:
+
+```bash
+riscv64-unknown-elf-gdb examples/sw/app.elf -ex "target extended-remote localhost:3333"
+```
+
+Halt and resume, register and memory access, software breakpoints, single-step and Ctrl-C
+all work. There are no hardware triggers, so breakpoints must be in RAM rather than the
+boot ROM.
+
+### Debugging in simulation
+
+The same debugger can drive CVA5 in Verilator, which is far quicker to iterate on than a
+bitstream:
+
+```bash
+make -C examples/sw boot
+sh test_benches/debug/run_jtag.sh        # simulation, waits for a debugger on port 9999
+openocd -f test_benches/debug/cva5-sim.cfg
+riscv64-unknown-elf-gdb -ex "target extended-remote localhost:3333"
+```
+
+The harness uses riscv-dbg's own TAP instead of BSCANE2, since a simulation cannot drive
+the FPGA's TAP. `+define+DEBUG_TRACE` adds a trace of debug entry and exit, Debug Module
+accesses, issued instructions and cache fills.
+
 ## Documentation and Project Setup
 
 For up-to-date upstream documentation and an automated build environment (toolchain,
@@ -100,6 +170,10 @@ A script to package CVA5 as an IP is available and can be run in Vivado with
 running a small hello-world application from block memory on the Nexys A7 FPGA.
 
 For detailed instructions on executing the hello-world application from block memory on the PYNQ-Z2 FPGA, please review `examples\xilinx\README.pynq_z2.md`. Tested with Vivado 2025.1
+
+The PYNQ-Z2 system in `examples/xilinx/pynq_z2_sys.tcl` additionally carries a RISC-V Debug
+Module and runs programs from AXI block RAM; see
+[Debugging on the PYNQ-Z2](#debugging-on-the-pynq-z2).
 
 ## Publications
 
