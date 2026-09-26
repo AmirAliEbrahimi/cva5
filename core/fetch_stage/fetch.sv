@@ -75,7 +75,12 @@ module fetch
     addr_utils_interface #(CONFIG.IBUS_ADDR.L, CONFIG.IBUS_ADDR.H) ibus_addr_utils ();
 
     memory_sub_unit_interface sub_unit[NUM_SUB_UNITS-1:0]();
-    amo_interface unused();
+    //One dummy AMO interface per sub unit: each sub unit drives the members of
+    //the interface it is given (rs1, set_reservation, ...), so sharing a single
+    //instance puts two drivers on every one of those signals. Instruction fetch
+    //never performs atomics, so these stay unconnected.
+    amo_interface unused_local_mem();
+    amo_interface unused_ibus();
 
     logic [NUM_SUB_UNITS-1:0] sub_unit_address_match;
     logic [NUM_SUB_UNITS-1:0] unit_ready;
@@ -274,7 +279,7 @@ module fetch
             .write_outstanding (),
             .amo (1'b0),
             .amo_type ('x),
-            .amo_unit (unused),
+            .amo_unit (unused_local_mem),
             .unit (sub_unit[LOCAL_MEM_ID]),
             .local_mem (instruction_bram)
         );
@@ -283,13 +288,14 @@ module fetch
 
     generate if (CONFIG.INCLUDE_IBUS) begin : gen_fetch_ibus
         assign sub_unit_address_match[BUS_ID] = ibus_addr_utils.address_range_check(tlb.physical_address);
+
         wishbone_master iwishbone_bus (
             .clk (clk),
             .rst (rst),
             .write_outstanding (),
             .amo (1'b0),
             .amo_type ('x),
-            .amo_unit (unused),
+            .amo_unit (unused_ibus),
             .wishbone (iwishbone),
             .ls (sub_unit[BUS_ID])
         );
