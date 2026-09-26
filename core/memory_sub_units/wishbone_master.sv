@@ -69,13 +69,12 @@ module wishbone_master
     assign wishbone.bte = '0;
 
     always_ff @(posedge clk) begin
-        wishbone.adr[1:0] <= '0;
         unique case (current_state)
             READY : begin //Accept any request
                 ls.ready <= ~ls.new_request | request_is_sc;
                 ls.data_out <= 32'b1;
                 ls.data_valid <= ls.new_request & request_is_sc;
-                wishbone.adr[31:2] <= ls.addr[31:2];
+                wishbone.adr <= ls.addr[31:2]; //Word address, as the interface declares
                 wishbone.sel <= ls.we ? ls.be : '1;
                 wishbone.dat_w <= ls.data_in;
                 wishbone.we <= ls.we;
@@ -135,7 +134,7 @@ module wishbone_master
                     ls.ready <= ~ls.new_request | (request_is_sc & ~amo_unit.reservation_valid);
                     ls.data_out <= {31'b0, ~amo_unit.reservation_valid};
                     ls.data_valid <= ls.new_request & request_is_sc;
-                    wishbone.adr[31:2] <= ls.addr[31:2];
+                    wishbone.adr <= ls.addr[31:2]; //Word address, as the interface declares
                     wishbone.sel <= ls.we ? ls.be : '1;
                     wishbone.dat_w <= ls.data_in;
                     wishbone.we <= ls.we | request_is_sc;

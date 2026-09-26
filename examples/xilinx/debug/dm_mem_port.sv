@@ -9,9 +9,8 @@
  * writes first, then reads, then instruction fetches. One access is in flight
  * at a time; debug-mode code is short and never performance critical.
  *
- * The core's Wishbone master places byte-address bits [29:2] on adr[29:2] with
- * adr[1:0] zero, so adr is used directly as a byte address. The DM decodes only
- * its low 12 bits.
+ * The Wishbone address is a word address, as the interface declares, so it is
+ * shifted up by two here. The DM decodes only its low 12 bits.
  *
  * Licensed under the Apache License, Version 2.0.
  */
@@ -20,7 +19,7 @@ module dm_mem_port (
     input  logic        rst,
 
     // Instruction fetch (Wishbone, from the core's instruction bus)
-    input  logic [29:0] if_adr,
+    input  logic [29:0] if_adr,   // word address
     input  logic        if_cyc,
     input  logic        if_stb,
     output logic        if_ack,
@@ -69,7 +68,7 @@ module dm_mem_port (
 
     assign dm_req   = grant_w | grant_r | grant_i;
     assign dm_we    = grant_w;
-    assign dm_addr  = grant_w ? aw_addr : grant_r ? ar_addr : {2'b00, if_adr};
+    assign dm_addr  = grant_w ? aw_addr : grant_r ? ar_addr : {if_adr, 2'b00};
     assign dm_be    = grant_w ? w_strb : 4'hF;
     assign dm_wdata = w_data;
 
