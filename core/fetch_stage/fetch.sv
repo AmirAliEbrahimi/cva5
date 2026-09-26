@@ -179,7 +179,26 @@ module fetch
     //Issue Control Signals
     assign flush_or_rst = (rst | gc.fetch_flush | early_branch_flush);
 
-    assign new_mem_request = tlb.done & units_ready & ~gc.fetch_hold & ~fetch_attr_fifo.full;
+    //Responses are tracked in one FIFO and assumed to return in request order,
+    //which holds only while consecutive requests go to the same sub unit: a
+    //fast unit can otherwise answer ahead of a slow one and the responses are
+    //paired with the wrong PCs. This can happen after any flush that changes
+    //the fetch target's sub unit, such as debug entry redirecting from cached
+    //memory to the Debug Module. Hold a request that would switch sub units
+    //until the outstanding ones have returned.
+    logic [NUM_SUB_UNITS-1:0] outstanding_unit;
+    logic sub_unit_switch;
+
+    always_ff @(posedge clk) begin
+        if (rst)
+            outstanding_unit <= '0;
+        else if (new_mem_request)
+            outstanding_unit <= sub_unit_address_match;
+    end
+
+    assign sub_unit_switch = (|inflight_count) & (outstanding_unit != sub_unit_address_match);
+
+    assign new_mem_request = tlb.done & units_ready & ~gc.fetch_hold & ~fetch_attr_fifo.full & ~sub_unit_switch;
     assign pc_id_assigned = new_mem_request | (tlb.is_fault & ~fetch_attr_fifo.full);
 
     //////////////////////////////////////////////
