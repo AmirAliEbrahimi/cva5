@@ -46,7 +46,7 @@ ABI       ?= ilp32
 # --- build inputs ----------------------------------------------------------
 SRCS      := crt0.S main.c puts.c
 LDSCRIPT  := link.ld
-CFLAGS    := -march=$(ARCH) -mabi=$(ABI) -Os -ffreestanding -nostdlib -I. -Wl,--build-id=none
+CFLAGS    := -march=$(ARCH) -mabi=$(ABI) -Os -g -ffreestanding -nostdlib -I. -Wl,--build-id=none
 
 # --- sim run arguments (positional: log, signature, program, trace) --------
 LOG       ?= program_log.txt
