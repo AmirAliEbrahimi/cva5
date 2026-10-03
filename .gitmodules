@@ -1,0 +1,6 @@
+[submodule "third_party/riscv-dbg"]
+	path = third_party/riscv-dbg
+	url = https://github.com/pulp-platform/riscv-dbg
+[submodule "third_party/common_cells"]
+	path = third_party/common_cells
+	url = https://github.com/pulp-platform/common_cells

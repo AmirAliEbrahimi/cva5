@@ -75,7 +75,12 @@ module fetch
     addr_utils_interface #(CONFIG.IBUS_ADDR.L, CONFIG.IBUS_ADDR.H) ibus_addr_utils ();
 
     memory_sub_unit_interface sub_unit[NUM_SUB_UNITS-1:0]();
-    amo_interface unused();
+    //One dummy AMO interface per sub unit: each sub unit drives the members of
+    //the interface it is given (rs1, set_reservation, ...), so sharing a single
+    //instance puts two drivers on every one of those signals. Instruction fetch
+    //never performs atomics, so these stay unconnected.
+    amo_interface unused_local_mem();
+    amo_interface unused_ibus();
 
     logic [NUM_SUB_UNITS-1:0] sub_unit_address_match;
     logic [NUM_SUB_UNITS-1:0] unit_ready;
@@ -179,7 +184,26 @@ module fetch
     //Issue Control Signals
     assign flush_or_rst = (rst | gc.fetch_flush | early_branch_flush);
 
-    assign new_mem_request = tlb.done & units_ready & ~gc.fetch_hold & ~fetch_attr_fifo.full;
+    //Responses are tracked in one FIFO and assumed to return in request order,
+    //which holds only while consecutive requests go to the same sub unit: a
+    //fast unit can otherwise answer ahead of a slow one and the responses are
+    //paired with the wrong PCs. This can happen after any flush that changes
+    //the fetch target's sub unit, such as debug entry redirecting from cached
+    //memory to the Debug Module. Hold a request that would switch sub units
+    //until the outstanding ones have returned.
+    logic [NUM_SUB_UNITS-1:0] outstanding_unit;
+    logic sub_unit_switch;
+
+    always_ff @(posedge clk) begin
+        if (rst)
+            outstanding_unit <= '0;
+        else if (new_mem_request)
+            outstanding_unit <= sub_unit_address_match;
+    end
+
+    assign sub_unit_switch = (|inflight_count) & (outstanding_unit != sub_unit_address_match);
+
+    assign new_mem_request = tlb.done & units_ready & ~gc.fetch_hold & ~fetch_attr_fifo.full & ~sub_unit_switch;
     assign pc_id_assigned = new_mem_request | (tlb.is_fault & ~fetch_attr_fifo.full);
 
     //////////////////////////////////////////////
@@ -255,7 +279,7 @@ module fetch
             .write_outstanding (),
             .amo (1'b0),
             .amo_type ('x),
-            .amo_unit (unused),
+            .amo_unit (unused_local_mem),
             .unit (sub_unit[LOCAL_MEM_ID]),
             .local_mem (instruction_bram)
         );
@@ -264,13 +288,14 @@ module fetch
 
     generate if (CONFIG.INCLUDE_IBUS) begin : gen_fetch_ibus
         assign sub_unit_address_match[BUS_ID] = ibus_addr_utils.address_range_check(tlb.physical_address);
+
         wishbone_master iwishbone_bus (
             .clk (clk),
             .rst (rst),
             .write_outstanding (),
             .amo (1'b0),
             .amo_type ('x),
-            .amo_unit (unused),
+            .amo_unit (unused_ibus),
             .wishbone (iwishbone),
             .ls (sub_unit[BUS_ID])
         );

@@ -210,7 +210,12 @@ package riscv_types;
         TIMEH = 12'hC81,
         INSTRETH = 12'hC82,
         HPMCOUNTER3H = 12'hC83,
-        HPMCOUNTER31H = 12'hC9F
+        HPMCOUNTER31H = 12'hC9F,
+        //Debug mode registers (RISC-V External Debug Support 0.13.2)
+        DCSR = 12'h7B0,
+        DPC = 12'h7B1,
+        DSCRATCH0 = 12'h7B2,
+        DSCRATCH1 = 12'h7B3
     } csr_reg_addr_t;
 
     typedef enum logic [2:0] {

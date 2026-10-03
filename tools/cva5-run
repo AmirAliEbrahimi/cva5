@@ -1,0 +1,135 @@
+#!/bin/sh
+#==============================================================================
+# cva5-run -- build a C or assembly program and run it on the PYNQ-Z2 CVA5
+#
+#   tools/cva5-run blink.c                 build, load over JTAG, start the CPU
+#   tools/cva5-run -g blink.c              ... and attach GDB afterwards
+#   tools/cva5-run main.c extra.c          several sources
+#   tools/cva5-run -n main.c               build only, do not touch the board
+#
+# The program is linked for main RAM at 0x4000_0000 and written there over
+# JTAG, so the bitstream is never rebuilt. The board must already be running a
+# bitstream with the Debug Module (see the README).
+#
+# By default the runtime (crt0.S, puts.c) from examples/sw is linked in, so a
+# program can be a bare main() that calls puts(). Use --no-runtime to supply
+# your own _start.
+#==============================================================================
+set -e
+
+usage() {
+    sed -n '3,16p' "$0" | sed 's/^#=*$//; s/^# \{0,1\}//'
+    cat <<'EOF'
+
+Options:
+  -g, --gdb            start GDB attached to the running program afterwards
+  -n, --no-load        build only; leave the board alone
+      --no-runtime     do not link crt0.S and puts.c from examples/sw
+  -o, --out DIR        build directory (default: build/run)
+  -O, --opt LEVEL      optimisation level: 0 1 2 3 s g (default: s)
+      --arch ARCH      -march value (default: rv32im)
+      --abi ABI        -mabi value (default: ilp32)
+      --cross PREFIX   toolchain prefix (default: riscv64-unknown-elf-)
+  -h, --help           this message
+EOF
+}
+
+# Repository root: this script lives in tools/
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+CROSS=${CROSS:-riscv64-unknown-elf-}
+ARCH=${ARCH:-rv32im}
+ABI=${ABI:-ilp32}
+OPT_LEVEL=s
+OUT=build/run
+APP_BASE=0x40000000
+OPENOCD=${OPENOCD:-openocd}
+OCD_DIR=$ROOT/examples/xilinx/openocd
+SW_DIR=$ROOT/examples/sw
+
+WITH_GDB=0
+DO_LOAD=1
+WITH_RUNTIME=1
+SOURCES=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -g|--gdb)        WITH_GDB=1 ;;
+        -n|--no-load)    DO_LOAD=0 ;;
+        --no-runtime)    WITH_RUNTIME=0 ;;
+        -o|--out)        OUT=$2; shift ;;
+        -O|--opt)        OPT_LEVEL=$2; shift ;;
+        --arch)          ARCH=$2; shift ;;
+        --abi)           ABI=$2; shift ;;
+        --cross)         CROSS=$2; shift ;;
+        -h|--help)       usage; exit 0 ;;
+        -*)              echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+        *)               SOURCES="$SOURCES $1" ;;
+    esac
+    shift
+done
+
+[ -n "$SOURCES" ] || { echo "no source files given" >&2; usage >&2; exit 2; }
+
+for f in $SOURCES; do
+    [ -f "$f" ] || { echo "no such file: $f" >&2; exit 1; }
+done
+
+command -v "${CROSS}gcc" >/dev/null 2>&1 || {
+    echo "${CROSS}gcc not found; set --cross or CROSS=" >&2; exit 1; }
+
+mkdir -p "$OUT"
+ELF=$OUT/app.elf
+TCL=$OUT/load.tcl
+
+RUNTIME=""
+if [ "$WITH_RUNTIME" = 1 ]; then
+    RUNTIME="$SW_DIR/crt0.S $SW_DIR/puts.c"
+fi
+
+echo "==> compiling$SOURCES"
+"${CROSS}gcc" -march="$ARCH" -mabi="$ABI" "-O$OPT_LEVEL" -g \
+    -ffreestanding -nostdlib -Wl,--build-id=none \
+    -I"$SW_DIR" -I. \
+    -T "$SW_DIR/fpga_link.ld" \
+    $RUNTIME $SOURCES -lgcc -o "$ELF"
+
+size=$("${CROSS}size" "$ELF" | awk 'NR==2 {print $1+$2}')
+echo "    $ELF  ($size bytes of text+data)"
+
+[ "$DO_LOAD" = 1 ] || exit 0
+
+echo "==> preparing the image"
+python3 "$ROOT/tools/elf-to-load-tcl.py" "$CROSS" "$APP_BASE" "$ELF" "$TCL"
+
+# Vivado's cable server and OpenOCD cannot own the JTAG cable at the same time
+if pgrep -f hw_server >/dev/null 2>&1; then
+    echo "==> stopping hw_server (it holds the JTAG cable)"
+    pkill -f hw_server || true
+    sleep 1
+fi
+
+echo "==> loading over JTAG"
+"$OPENOCD" -f "$OCD_DIR/pynq-z2-jtag.cfg" -f "$OCD_DIR/cva5-pynq-z2-p1.cfg" \
+           -f "$TCL" -c "init; load_program; shutdown"
+
+[ "$WITH_GDB" = 1 ] || exit 0
+
+echo "==> starting OpenOCD for GDB"
+"$OPENOCD" -f "$OCD_DIR/pynq-z2-jtag.cfg" -f "$OCD_DIR/cva5-pynq-z2.cfg" \
+    > "$OUT/openocd.log" 2>&1 &
+OCD_PID=$!
+trap 'kill $OCD_PID 2>/dev/null || true' EXIT INT TERM
+
+# Wait for the gdb port rather than guessing how long OpenOCD needs
+for i in $(seq 1 50); do
+    if grep -q "Listening on port 3333" "$OUT/openocd.log" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+if ! grep -q "Listening on port 3333" "$OUT/openocd.log" 2>/dev/null; then
+    echo "OpenOCD did not come up; see $OUT/openocd.log" >&2
+    exit 1
+fi
+
+echo "==> attaching GDB (quit to stop OpenOCD as well)"
+"${CROSS}gdb" "$ELF" -ex "target extended-remote localhost:3333"

@@ -135,16 +135,36 @@ module dcache_noinv
         tag : addr_utils.getTag(stage1.addr)
     };
 
+    //Post-reset invalidation.
+    //The tag bank is RAM: reset does not clear it, so after any reset that does
+    //not reconfigure the device the cache still holds lines from the previous
+    //run. Sweep every line with valid=0 before allowing a hit. A fill during
+    //the sweep simply loses its tag write and is repeated later.
+    logic[SCONFIG.LINE_ADDR_W-1:0] init_addr;
+    logic init_done;
+    tb_entry_t init_entry;
+    always_ff @ (posedge clk) begin
+        if (rst) begin
+            init_addr <= '0;
+            init_done <= 0;
+        end
+        else if (~init_done) begin
+            init_addr <= init_addr + 1;
+            init_done <= &init_addr;
+        end
+    end
+    assign init_entry = '{valid : 1'b0, tag : '0};
+
     sdp_ram_padded #(
         .ADDR_WIDTH(SCONFIG.LINE_ADDR_W),
         .NUM_COL(CONFIG.DCACHE.WAYS),
         .COL_WIDTH($bits(tb_entry_t)),
         .PIPELINE_DEPTH(0)
     ) tagbank (
-        .a_en(tb_write),
-        .a_wbe(replacement_way),
-        .a_wdata({CONFIG.DCACHE.WAYS{new_entry}}),
-        .a_addr(addr_utils.getTagLineAddr(stage1.addr)),
+        .a_en(~init_done | tb_write),
+        .a_wbe(~init_done ? {CONFIG.DCACHE.WAYS{1'b1}} : replacement_way),
+        .a_wdata(~init_done ? {CONFIG.DCACHE.WAYS{init_entry}} : {CONFIG.DCACHE.WAYS{new_entry}}),
+        .a_addr(~init_done ? init_addr : addr_utils.getTagLineAddr(stage1.addr)),
         .b_en(ls.new_request),
         .b_addr(addr_utils.getTagLineAddr(stage0.addr)),
         .b_rdata(tb_entries),
@@ -154,7 +174,7 @@ module dcache_noinv
     always_comb begin
         hit_ohot = '0;
         for (int i = 0; i < CONFIG.DCACHE.WAYS; i++)
-            hit_ohot[i] = tb_entries[i].valid & (tb_entries[i].tag == addr_utils.getTag(stage1.addr));
+            hit_ohot[i] = init_done & tb_entries[i].valid & (tb_entries[i].tag == addr_utils.getTag(stage1.addr));
     end
     assign hit = |hit_ohot;
     always_ff @(posedge clk) begin
