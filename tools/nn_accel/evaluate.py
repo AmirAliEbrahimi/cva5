@@ -30,7 +30,10 @@ import torchvision
 import torchvision.transforms as transforms
 import hls4ml
 
-CLOCK_NS = 10
+# Matches sweep.py. Only affects the HLS project this script builds for
+# C-simulation, not any reported number -- but keeping them equal stops the
+# two scripts drifting apart. See GOTCHAS.md section 11.
+CLOCK_NS = 8
 NAMES = ["airplane", "automobile", "bird", "cat", "deer",
          "dog", "frog", "horse", "ship", "truck"]
 
