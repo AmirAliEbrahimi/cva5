@@ -201,7 +201,39 @@ silent hang. `CFLAGS` also passes `-Wl,--build-id=none`.
 
 ---
 
-## 11. Vivado 2025.1 toolchain changes
+## 11. HLS schedules to its own edge, leaving nothing for routing
+
+**Symptom.** The same netlist closes at +0.139 ns one day and -1.01 ns after a
+rebuild from a clean clone. Nothing about the IP changed -- same precision,
+same reuse factor, same 6,947 cycles.
+
+**Cause.** HLS packs logic until it hits its budget, which is the target clock
+minus the uncertainty. At a 10 ns target with 27% uncertainty the budget is
+7.30 ns, and the scheduler delivered 7.279 ns -- 21 ps spare *before a single
+wire exists*. Everything routing adds then comes out of Vivado's slack, and on
+this design routing was 43% of the critical path. Placement varies between
+runs, so a design with no margin lands either side of zero at random.
+
+```
+|  Clock |  Target  | Estimated| Uncertainty|
+|ap_clk  |  10.00 ns|  7.279 ns|     2.70 ns|
+```
+
+**Fix.** Tell HLS 8 ns while Vivado still asks for 10. The estimate drops to
+5.834 ns, routing headroom goes from 2.72 ns to 4.17 ns, and the design closes
+at +0.309 ns. Latency is unchanged at 6,947 cycles -- HLS absorbed it in
+scheduling rather than adding pipeline stages -- so it is free.
+
+Also flip `config_schedule -enable_dsp_full_reg` to `true`. hls4ml writes
+`false`, which leaves the DSP48 output register unused, so a combinational
+multiply feeds a CARRY4 chain: 3.863 ns of a 9.84 ns path.
+
+`sweep.py` now does both. Note that HLS reports latency in its own target
+units, so it will say 55.576 us where the hardware takes 69.5 us at 100 MHz.
+
+---
+
+## 12. Vivado 2025.1 toolchain changes
 
 - `vitis_hls` batch binary is gone. Use `vitis-run --mode hls --tcl`.
 - hls4ml emits `config_array_partition -maximum_size`, which 2025.1 renamed to
@@ -212,7 +244,7 @@ silent hang. `CFLAGS` also passes `-Wl,--build-id=none`.
 
 ---
 
-## 12. No printf, no FPU
+## 13. No printf, no FPU
 
 `examples/sw/puts.c` provides only `puts()`, and the build is `-nostdlib`.
 `examples/sw/printf.c` adds `%d %u %s %c %x %%` with width, `-` and `0` flags.

@@ -33,7 +33,18 @@ import torch.nn as nn
 import hls4ml
 
 PART = "xc7z020clg400-1"
-CLOCK_NS = 10
+# Vivado asks for 10 ns (100 MHz); HLS is told 8. HLS schedules right up to
+# its own budget -- target minus the 27% uncertainty -- so asking for 10 gave a
+# 7.279 ns estimate with 21 ps to spare, leaving 2.72 ns for routing. That
+# closed at +0.139 ns once and at -1.01 ns on a rebuild of the identical
+# netlist: same design, different placement, no real margin either way.
+#
+# Asking for 8 gives a 5.834 ns estimate and 4.17 ns of routing headroom, and
+# closes at +0.309 ns. It cost nothing -- still 6947 cycles, still 69.5 us on
+# the board at 100 MHz, because HLS absorbed it in scheduling rather than
+# extra pipeline stages.
+CLOCK_NS       = 8     # what HLS schedules against
+BOARD_CLOCK_NS = 10    # what the hardware runs at, for latency reporting
 INPUT_SHAPE = (3, 32, 32)
 MODEL_PATH = "model_6_8.pt"   # Makefile passes --model explicitly
 
@@ -97,14 +108,21 @@ def tag(precision, rf):
 
 
 def patch_tcl(out_dir):
-    """-maximum_size is the stale Vivado HLS spelling; 2025.1 wants
-    -complete_threshold. hls4ml wraps it in catch{} so it fails silently."""
+    """Fix two hls4ml defaults that this toolchain and device need.
+
+    -maximum_size is the stale Vivado HLS spelling; 2025.1 wants
+    -complete_threshold, and hls4ml wraps it in catch{} so it fails silently.
+    enable_dsp_full_reg=false leaves the DSP48 output unregistered."""
     p = os.path.join(out_dir, "build_prj.tcl")
     s = open(p).read()
-    if "-maximum_size" in s:
-        open(p, "w").write(
-            s.replace("config_array_partition -maximum_size",
-                      "config_array_partition -complete_threshold"))
+    s = s.replace("config_array_partition -maximum_size",
+                  "config_array_partition -complete_threshold")
+    # hls4ml writes enable_dsp_full_reg=false, leaving the DSP48 output
+    # register unused -- a combinational multiply then feeds a CARRY4 chain,
+    # 3.863 ns of a 9.84 ns path. Registering it is nearly free at 17% FF use.
+    s = s.replace("config_schedule -enable_dsp_full_reg=false",
+                  "config_schedule -enable_dsp_full_reg=true")
+    open(p, "w").write(s)
 
 
 def set_build_opts(out_dir):
@@ -190,7 +208,7 @@ def report():
     for name, r in rows:
         fits = r["DSP"] <= BUDGET["DSP"] and r["LUT"] <= BUDGET["LUT"]
         cyc = r["latency"] if r["latency"] else "?"
-        lat_us = f"{r['latency'] * CLOCK_NS / 1000:.1f}us" if r["latency"] else ""
+        lat_us = f"{r['latency'] * BOARD_CLOCK_NS / 1000:.1f}us" if r["latency"] else ""
         print(f"{name:<20} {r['DSP']:>6} {r['LUT']:>7} {r['FF']:>7} "
               f"{r['BRAM_18K']:>5} {cyc:>8}  {'YES ' + lat_us if fits else 'no'}")
 
