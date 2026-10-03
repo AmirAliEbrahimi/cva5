@@ -1,0 +1,64 @@
+#!/bin/sh
+#==============================================================================
+# cva5-qemu -- build a program and run it under the QEMU model of this SoC
+#
+#   tools/cva5-qemu hello.c              build and run
+#   tools/cva5-qemu -g hello.c           wait for GDB on port 1234
+#   tools/cva5-qemu --rom hello.c        run the real boot ROM first
+#   tools/cva5-qemu --elf app.elf        run an existing binary
+#
+# Needs a QEMU built with the cva5-pynq machine; see qemu/README.md. Set
+# QEMU=/path/to/qemu-system-riscv32 if it is not on PATH.
+#
+# Ctrl-A X quits QEMU.
+#==============================================================================
+set -e
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+QEMU=${QEMU:-qemu-system-riscv32}
+OUT=build/qemu
+WITH_GDB=0
+WITH_ROM=0
+ELF=""
+ARGS=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -g|--gdb)   WITH_GDB=1 ;;
+        --rom)      WITH_ROM=1 ;;
+        --elf)      ELF=$2; shift ;;
+        -o|--out)   OUT=$2; shift ;;
+        -h|--help)  sed -n '3,14p' "$0" | sed 's/^#=*$//; s/^# \{0,1\}//'; exit 0 ;;
+        -*)         echo "unknown option: $1" >&2; exit 2 ;;
+        *)          ARGS="$ARGS $1" ;;
+    esac
+    shift
+done
+
+command -v "$QEMU" >/dev/null 2>&1 || {
+    echo "$QEMU not found; build it (see qemu/README.md) or set QEMU=" >&2; exit 1; }
+
+if [ -z "$ELF" ]; then
+    [ -n "$ARGS" ] || { echo "no sources given" >&2; exit 2; }
+    "$ROOT/tools/cva5-run" -n -o "$OUT" $ARGS
+    ELF=$OUT/app.elf
+fi
+
+QFLAGS="-M cva5-pynq -nographic -kernel $ELF"
+
+if [ "$WITH_ROM" = 1 ]; then
+    BOOT=$OUT/boot.elf
+    mkdir -p "$OUT"
+    "${CROSS:-riscv64-unknown-elf-}gcc" -march=rv32im -mabi=ilp32 -nostdlib \
+        -Wl,--build-id=none -T "$ROOT/examples/sw/boot_link.ld" \
+        "$ROOT/examples/sw/boot.S" -o "$BOOT"
+    QFLAGS="$QFLAGS -bios $BOOT"
+fi
+
+if [ "$WITH_GDB" = 1 ]; then
+    echo "==> QEMU is waiting for GDB on port 1234 (target remote :1234)"
+    QFLAGS="$QFLAGS -s -S"
+fi
+
+echo "==> $QEMU $QFLAGS"
+exec $QEMU $QFLAGS

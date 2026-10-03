@@ -157,6 +157,20 @@ Halt and resume, register and memory access, software breakpoints, single-step a
 all work. There are no hardware triggers, so breakpoints must be in RAM rather than the
 boot ROM.
 
+### Running under QEMU
+
+`qemu/cva5_pynq.c` is a QEMU machine with the same memory map, so programs built
+for the board run unmodified on a workstation — far faster than the board for
+software work, though it models no caches, no Debug Module and no timing.
+
+```bash
+tools/cva5-qemu hello.c          # build and run
+tools/cva5-qemu --rom hello.c    # run the real boot ROM first, banner and all
+tools/cva5-qemu -g hello.c       # wait for GDB on port 1234
+```
+
+See [`qemu/README.md`](qemu/README.md) for building QEMU with the machine.
+
 ### Debugging in simulation
 
 The same debugger can drive CVA5 in Verilator, which is far quicker to iterate on than a
