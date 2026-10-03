@@ -1,0 +1,70 @@
+#!/bin/sh
+#==============================================================================
+# build-qemu -- fetch QEMU, add the CVA5 PYNQ-Z2 machine, and build it
+#
+#   tools/build-qemu                 clone, patch and build into build/qemu
+#   tools/build-qemu -j 4            with four parallel jobs
+#   tools/build-qemu --dir ~/qemu    keep the QEMU tree somewhere else
+#
+# QEMU is not vendored here: this clones it at a known-good tag and applies
+# qemu/0001-cva5-pynq-machine.patch, which adds hw/riscv/cva5_pynq.c and
+# registers it. The result is build/qemu/build/qemu-system-riscv32, which
+# tools/cva5-qemu picks up automatically.
+#
+# Debian/Ubuntu build dependencies:
+#   sudo apt install build-essential ninja-build meson pkg-config python3 \
+#                    libglib2.0-dev libpixman-1-dev libfdt-dev flex bison
+#==============================================================================
+set -e
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+QEMU_REPO=${QEMU_REPO:-https://gitlab.com/qemu-project/qemu.git}
+QEMU_TAG=${QEMU_TAG:-v11.1.2}
+DIR=$ROOT/build/qemu
+JOBS=$(nproc 2>/dev/null || echo 2)
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -j|--jobs) JOBS=$2; shift ;;
+        --dir)     DIR=$2; shift ;;
+        --tag)     QEMU_TAG=$2; shift ;;
+        -h|--help) sed -n '3,17p' "$0" | sed 's/^#=*$//; s/^# \{0,1\}//'; exit 0 ;;
+        *)         echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+PATCH=$ROOT/qemu/0001-cva5-pynq-machine.patch
+[ -f "$PATCH" ] || { echo "missing $PATCH" >&2; exit 1; }
+
+if [ ! -d "$DIR/.git" ]; then
+    echo "==> cloning QEMU $QEMU_TAG into $DIR"
+    mkdir -p "$(dirname "$DIR")"
+    git clone --depth 1 --branch "$QEMU_TAG" "$QEMU_REPO" "$DIR"
+else
+    echo "==> using the QEMU tree already in $DIR"
+fi
+
+cd "$DIR"
+if [ -f hw/riscv/cva5_pynq.c ]; then
+    echo "==> the machine is already applied"
+else
+    echo "==> applying the CVA5 machine"
+    git apply "$PATCH"
+fi
+
+if [ ! -f build/build.ninja ]; then
+    echo "==> configuring (riscv32-softmmu only)"
+    ./configure --target-list=riscv32-softmmu --disable-docs --disable-tools \
+                --disable-guest-agent --disable-werror
+fi
+
+echo "==> building with $JOBS jobs"
+make -C build -j "$JOBS" qemu-system-riscv32
+
+BIN=$DIR/build/qemu-system-riscv32
+echo
+echo "built: $BIN"
+"$BIN" -M help | grep cva5 || true
+echo
+echo "run a program with:  tools/cva5-qemu --rom yourfile.c"

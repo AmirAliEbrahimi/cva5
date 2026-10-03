@@ -7,15 +7,23 @@
 #   tools/cva5-qemu --rom hello.c        run the real boot ROM first
 #   tools/cva5-qemu --elf app.elf        run an existing binary
 #
-# Needs a QEMU built with the cva5-pynq machine; see qemu/README.md. Set
-# QEMU=/path/to/qemu-system-riscv32 if it is not on PATH.
+# Needs a QEMU with the cva5-pynq machine: run tools/build-qemu once. Set
+# QEMU=/path/to/qemu-system-riscv32 to use one built elsewhere.
 #
 # Ctrl-A X quits QEMU.
 #==============================================================================
 set -e
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-QEMU=${QEMU:-qemu-system-riscv32}
+# tools/build-qemu puts it here; otherwise fall back to PATH
+QEMU=${QEMU:-}
+if [ -z "$QEMU" ]; then
+    if [ -x "$ROOT/build/qemu/build/qemu-system-riscv32" ]; then
+        QEMU=$ROOT/build/qemu/build/qemu-system-riscv32
+    else
+        QEMU=qemu-system-riscv32
+    fi
+fi
 OUT=build/qemu
 WITH_GDB=0
 WITH_ROM=0

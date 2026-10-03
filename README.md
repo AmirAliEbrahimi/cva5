@@ -169,7 +169,9 @@ tools/cva5-qemu --rom hello.c    # run the real boot ROM first, banner and all
 tools/cva5-qemu -g hello.c       # wait for GDB on port 1234
 ```
 
-See [`qemu/README.md`](qemu/README.md) for building QEMU with the machine.
+QEMU itself is built once with `tools/build-qemu`, which clones it at a pinned
+tag and applies `qemu/0001-cva5-pynq-machine.patch`; see
+[`qemu/README.md`](qemu/README.md).
 
 ### Debugging in simulation
 

@@ -1,63 +1,59 @@
 # QEMU model of the CVA5 PYNQ-Z2 system
 
-`cva5_pynq.c` is a QEMU machine that mirrors `examples/xilinx/cva5_wrapper.sv`:
+`0001-cva5-pynq-machine.patch` adds a QEMU machine that mirrors
+`examples/xilinx/cva5_wrapper.sv`:
 
-| Address       | Size    | What                                               |
-|---------------|---------|----------------------------------------------------|
-| `0x4000_0000` | 128 KiB | main RAM; programs run from here                    |
-| `0x5000_0000` | 4 KiB   | Debug Module window (not modelled)                  |
-| `0x6000_0000` |         | AXI UART Lite                                       |
-| `0x8000_0000` | 1 KiB   | boot ROM, the reset vector                          |
+| Address       | Size    | What                                      |
+|---------------|---------|-------------------------------------------|
+| `0x4000_0000` | 128 KiB | main RAM; programs run from here          |
+| `0x5000_0000` | 4 KiB   | Debug Module window (not modelled)        |
+| `0x6000_0000` |         | AXI UART Lite                             |
+| `0x8000_0000` | 1 KiB   | boot ROM, the reset vector                |
 
 The CPU is RV32IM, machine mode only, matching the wrapper's `CPU_CONFIG`
-(`misa` reads `0x40001100` on hardware).
+(`misa` reads `0x40001100` on hardware). Programs built by `tools/cva5-run` run
+unmodified.
 
-Programs built by `tools/cva5-run` run unmodified.
+QEMU is not vendored here, and a board model cannot be loaded into a stock
+binary: QEMU has no plugin interface for machines, so it must be compiled in.
 
 ## Building
 
 ```bash
-git clone https://gitlab.com/qemu-project/qemu
-cd qemu
-cp /path/to/cva5/qemu/cva5_pynq.c hw/riscv/
+sudo apt install build-essential ninja-build meson pkg-config python3 \
+                 libglib2.0-dev libpixman-1-dev libfdt-dev flex bison
+tools/build-qemu                 # clone, patch and build into build/qemu
 ```
 
-Then register it, by adding to `hw/riscv/meson.build`:
+The patch is tested against the tag `tools/build-qemu` pins (`v11.1.2`). For a
+different version, `tools/build-qemu --tag vX.Y.Z`; the patch may then need
+rebasing.
 
-```meson
-riscv_ss.add(when: 'CONFIG_CVA5_PYNQ', if_true: files('cva5_pynq.c'))
-```
-
-and to `hw/riscv/Kconfig`:
-
-```kconfig
-config CVA5_PYNQ
-    bool
-    default y
-    depends on RISCV32
-    select XILINX
-    select UNIMP
-```
-
-and build:
+To apply it to a QEMU tree you already have:
 
 ```bash
-./configure --target-list=riscv32-softmmu
-make -j$(nproc)
+cd /path/to/qemu
+git apply /path/to/cva5/qemu/0001-cva5-pynq-machine.patch
+./configure --target-list=riscv32-softmmu && make -j$(nproc)
 ```
 
 ## Running
+
+`tools/cva5-qemu` finds the binary `tools/build-qemu` produced:
+
+```bash
+tools/cva5-qemu hello.c          # build and run
+tools/cva5-qemu --rom hello.c    # run the real boot ROM first, banner and all
+tools/cva5-qemu -g hello.c       # wait for GDB on port 1234
+```
+
+Ctrl-A X quits QEMU. Or drive QEMU directly:
 
 ```bash
 qemu-system-riscv32 -M cva5-pynq -nographic -kernel app.elf
 qemu-system-riscv32 -M cva5-pynq -nographic -bios boot.elf -kernel app.elf
 qemu-system-riscv32 -M cva5-pynq -nographic -kernel app.elf -s -S   # wait for gdb
 ```
-
-With `-bios` the real boot ROM runs, banner and all. Without it the ROM holds a
-stub that jumps straight to the application.
-
-`tools/cva5-qemu` wraps all of this; see the top-level README.
 
 ## What is not modelled
 
