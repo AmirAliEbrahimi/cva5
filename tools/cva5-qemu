@@ -18,8 +18,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # tools/build-qemu puts it here; otherwise fall back to PATH
 QEMU=${QEMU:-}
 if [ -z "$QEMU" ]; then
-    if [ -x "$ROOT/build/qemu/build/qemu-system-riscv32" ]; then
-        QEMU=$ROOT/build/qemu/build/qemu-system-riscv32
+    if [ -x "$ROOT/qemu-build/build/qemu-system-riscv32" ]; then
+        QEMU=$ROOT/qemu-build/build/qemu-system-riscv32
     else
         QEMU=qemu-system-riscv32
     fi

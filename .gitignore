@@ -1,2 +1,4 @@
 test_benches/verilator/build
 vivado/build/
+qemu-build/
+build/

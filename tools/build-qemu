@@ -20,7 +20,7 @@ set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 QEMU_REPO=${QEMU_REPO:-https://gitlab.com/qemu-project/qemu.git}
 QEMU_TAG=${QEMU_TAG:-v11.1.2}
-DIR=$ROOT/build/qemu
+DIR=$ROOT/qemu-build
 JOBS=$(nproc 2>/dev/null || echo 2)
 
 while [ $# -gt 0 ]; do
