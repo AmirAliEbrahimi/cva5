@@ -159,19 +159,37 @@ boot ROM.
 
 ### Running under QEMU
 
-`qemu/cva5_pynq.c` is a QEMU machine with the same memory map, so programs built
-for the board run unmodified on a workstation — far faster than the board for
-software work, though it models no caches, no Debug Module and no timing.
+`qemu/0001-cva5-pynq-machine.patch` adds a QEMU machine with the same memory
+map, so programs built for the board run unmodified on a workstation — far
+faster than the board for software work, though it models no caches, no Debug
+Module and no timing.
+
+Build QEMU once:
 
 ```bash
-tools/cva5-qemu hello.c          # build and run
-tools/cva5-qemu --rom hello.c    # run the real boot ROM first, banner and all
-tools/cva5-qemu -g hello.c       # wait for GDB on port 1234
+tools/build-qemu                             # clones, patches and builds into qemu-build/
 ```
 
-QEMU itself is built once with `tools/build-qemu`, which clones it at a pinned
-tag and applies `qemu/0001-cva5-pynq-machine.patch`; see
-[`qemu/README.md`](qemu/README.md).
+Then:
+
+```bash
+tools/cva5-qemu examples/sw/hello.c          # build and run
+tools/cva5-qemu --rom examples/sw/hello.c    # boot ROM first, banner and all
+tools/cva5-qemu -g examples/sw/hello.c       # stop and wait for GDB
+```
+
+Ctrl-A X quits QEMU.
+
+With `-g`, QEMU starts stopped at the reset vector with its gdbstub on port
+1234; attach from another terminal:
+
+```bash
+riscv64-unknown-elf-gdb build/run/app.elf -ex "target remote localhost:1234"
+```
+
+and use it as on the board — `break main`, `continue`, `stepi`, `info
+registers` — except that this is QEMU's own gdbstub, with no OpenOCD and no
+board. See [`qemu/README.md`](qemu/README.md).
 
 ### Debugging in simulation
 

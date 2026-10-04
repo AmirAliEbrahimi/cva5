@@ -22,7 +22,7 @@ binary: QEMU has no plugin interface for machines, so it must be compiled in.
 ```bash
 sudo apt install build-essential ninja-build meson pkg-config python3 \
                  libglib2.0-dev libpixman-1-dev libfdt-dev flex bison
-tools/build-qemu                 # clone, patch and build into build/qemu
+tools/build-qemu                 # clone, patch and build into qemu-build/
 ```
 
 The patch is tested against the tag `tools/build-qemu` pins (`v11.1.2`). For a
@@ -42,9 +42,9 @@ git apply /path/to/cva5/qemu/0001-cva5-pynq-machine.patch
 `tools/cva5-qemu` finds the binary `tools/build-qemu` produced:
 
 ```bash
-tools/cva5-qemu hello.c          # build and run
-tools/cva5-qemu --rom hello.c    # run the real boot ROM first, banner and all
-tools/cva5-qemu -g hello.c       # wait for GDB on port 1234
+tools/cva5-qemu examples/sw/hello.c          # build and run
+tools/cva5-qemu --rom examples/sw/hello.c    # boot ROM first, banner and all
+tools/cva5-qemu -g examples/sw/hello.c       # stop and wait for GDB
 ```
 
 Ctrl-A X quits QEMU. Or drive QEMU directly:
@@ -54,6 +54,33 @@ qemu-system-riscv32 -M cva5-pynq -nographic -kernel app.elf
 qemu-system-riscv32 -M cva5-pynq -nographic -bios boot.elf -kernel app.elf
 qemu-system-riscv32 -M cva5-pynq -nographic -kernel app.elf -s -S   # wait for gdb
 ```
+
+## Debugging
+
+`-g` starts QEMU stopped at the reset vector with its gdbstub on port 1234:
+
+```bash
+tools/cva5-qemu -g examples/sw/hello.c
+```
+
+Then, in another terminal:
+
+```bash
+riscv64-unknown-elf-gdb build/run/app.elf -ex "target remote localhost:1234"
+```
+
+```
+(gdb) break main
+(gdb) continue
+(gdb) info registers
+(gdb) stepi
+(gdb) x/3i $pc
+(gdb) continue
+```
+
+This is QEMU's own gdbstub, so no OpenOCD and no board: `stepi` from the start
+walks the boot ROM before reaching the application. `detach` leaves QEMU
+running; Ctrl-A X stops it.
 
 ## What is not modelled
 
