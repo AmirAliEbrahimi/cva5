@@ -46,11 +46,16 @@ else
 fi
 
 cd "$DIR"
-if [ -f hw/riscv/cva5_pynq.c ]; then
+# Check the registration, not just the source file: meson only compiles the
+# machine if hw/riscv/meson.build and Kconfig name it, and a half-applied patch
+# builds a QEMU that silently lacks the machine.
+if grep -q CONFIG_CVA5_PYNQ hw/riscv/meson.build 2>/dev/null; then
     echo "==> the machine is already applied"
 else
     echo "==> applying the CVA5 machine"
+    rm -f hw/riscv/cva5_pynq.c          # in case only the source was copied in
     git apply "$PATCH"
+    rm -rf build                        # the configuration predates the machine
 fi
 
 if [ ! -f build/build.ninja ]; then
@@ -65,6 +70,10 @@ make -C build -j "$JOBS" qemu-system-riscv32
 BIN=$DIR/build/qemu-system-riscv32
 echo
 echo "built: $BIN"
-"$BIN" -M help | grep cva5 || true
+if ! "$BIN" -M help | grep cva5; then
+    echo "the machine is missing from the build; try again from scratch:" >&2
+    echo "    rm -rf $DIR && tools/build-qemu" >&2
+    exit 1
+fi
 echo
 echo "run a program with:  tools/cva5-qemu --rom yourfile.c"

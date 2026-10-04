@@ -1,6 +1,6 @@
-From baca4910442db74304269819e60ee31e63c748b9 Mon Sep 17 00:00:00 2001
+From 76665a1f7798ac93fb3ad9d50858d287e3a199b2 Mon Sep 17 00:00:00 2001
 From: Amirali Ebrahimi <amirali@users.noreply.github.com>
-Date: Sat, 3 Oct 2026 03:56:27 +0000
+Date: Sun, 4 Oct 2026 00:41:12 +0000
 Subject: [PATCH] hw/riscv: add the CVA5 PYNQ-Z2 machine
 
 Models the SoC in the CVA5 repository's examples/xilinx/cva5_wrapper.sv:
@@ -13,14 +13,14 @@ Programs built for the board run unmodified: -kernel takes the application,
 -bios the boot ROM, and without -bios the ROM holds a stub that jumps to the
 application.
 ---
- hw/riscv/Kconfig     |   7 +++
- hw/riscv/cva5_pynq.c | 142 +++++++++++++++++++++++++++++++++++++++++++
+ hw/riscv/Kconfig     |   7 ++
+ hw/riscv/cva5_pynq.c | 157 +++++++++++++++++++++++++++++++++++++++++++
  hw/riscv/meson.build |   1 +
- 3 files changed, 150 insertions(+)
+ 3 files changed, 165 insertions(+)
  create mode 100644 hw/riscv/cva5_pynq.c
 
 diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
-index d06ac26..89e014f 100644
+index de37c08..cf0ba10 100644
 --- a/hw/riscv/Kconfig
 +++ b/hw/riscv/Kconfig
 @@ -9,6 +9,13 @@ config IBEX
@@ -39,10 +39,10 @@ index d06ac26..89e014f 100644
      default y
 diff --git a/hw/riscv/cva5_pynq.c b/hw/riscv/cva5_pynq.c
 new file mode 100644
-index 0000000..d68bc5c
+index 0000000..f5918df
 --- /dev/null
 +++ b/hw/riscv/cva5_pynq.c
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,157 @@
 +/*
 + * QEMU model of the CVA5 PYNQ-Z2 system.
 + *
@@ -80,6 +80,21 @@ index 0000000..d68bc5c
 +#include "hw/misc/unimp.h"
 +#include "system/address-spaces.h"
 +#include "system/system.h"
++
++/*
++ * Machines in some QEMU versions must declare which of qemu-system-riscv32 and
++ * qemu-system-riscv64 they belong to; without that they register but are
++ * filtered out of the machine list. Later versions dropped the requirement.
++ */
++#if defined(__has_include)
++#  if __has_include("hw/riscv/machines-qom.h")
++#    include "hw/riscv/machines-qom.h"
++#    define CVA5_DEFINE_MACHINE DEFINE_MACHINE_RISCV32
++#  endif
++#endif
++#ifndef CVA5_DEFINE_MACHINE
++#  define CVA5_DEFINE_MACHINE DEFINE_MACHINE
++#endif
 +
 +#define CVA5_RAM_BASE   0x40000000
 +#define CVA5_RAM_SIZE   (128 * KiB)
@@ -184,12 +199,12 @@ index 0000000..d68bc5c
 +    mc->default_cpu_type = TYPE_RISCV_CPU_BASE32;
 +}
 +
-+DEFINE_MACHINE("cva5-pynq", cva5_pynq_machine_init)
++CVA5_DEFINE_MACHINE("cva5-pynq", cva5_pynq_machine_init)
 diff --git a/hw/riscv/meson.build b/hw/riscv/meson.build
-index 7aa3c15..0aef0f6 100644
+index 0d82cea..874b9ed 100644
 --- a/hw/riscv/meson.build
 +++ b/hw/riscv/meson.build
-@@ -16,6 +16,7 @@ riscv_ss.add(when: 'CONFIG_TENSTORRENT', if_true: files('tt_atlantis.c'))
+@@ -15,6 +15,7 @@ riscv_ss.add(when: 'CONFIG_TENSTORRENT', if_true: files('tt_atlantis.c'))
  riscv_ss.add(when: 'CONFIG_ACPI', if_true: files('virt-acpi-build.c'))
  riscv_ss.add(when: 'CONFIG_RISCV_IOMMU', if_true: files(
  	'riscv-iommu.c', 'riscv-iommu-pci.c', 'riscv-iommu-sys.c', 'riscv-iommu-hpm.c'))
