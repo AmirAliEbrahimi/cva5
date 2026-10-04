@@ -2,13 +2,13 @@
 #==============================================================================
 # build-qemu -- fetch QEMU, add the CVA5 PYNQ-Z2 machine, and build it
 #
-#   tools/build-qemu                 clone, patch and build into build/qemu
+#   tools/build-qemu                 clone, patch and build into qemu-build
 #   tools/build-qemu -j 4            with four parallel jobs
 #   tools/build-qemu --dir ~/qemu    keep the QEMU tree somewhere else
 #
 # QEMU is not vendored here: this clones it at a known-good tag and applies
 # qemu/0001-cva5-pynq-machine.patch, which adds hw/riscv/cva5_pynq.c and
-# registers it. The result is build/qemu/build/qemu-system-riscv32, which
+# registers it. The result is qemu-build/build/qemu-system-riscv32, which
 # tools/cva5-qemu picks up automatically.
 #
 # Debian/Ubuntu build dependencies:

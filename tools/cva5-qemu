@@ -2,9 +2,9 @@
 #==============================================================================
 # cva5-qemu -- build a program and run it under the QEMU model of this SoC
 #
-#   tools/cva5-qemu hello.c              build and run
-#   tools/cva5-qemu -g hello.c           wait for GDB on port 1234
-#   tools/cva5-qemu --rom hello.c        run the real boot ROM first
+#   tools/cva5-qemu examples/sw/hello.c   build and run
+#   tools/cva5-qemu -g examples/sw/hello.c   wait for GDB on port 1234
+#   tools/cva5-qemu --rom examples/sw/hello.c run the real boot ROM first
 #   tools/cva5-qemu --elf app.elf        run an existing binary
 #
 # Needs a QEMU with the cva5-pynq machine: run tools/build-qemu once. Set
@@ -24,7 +24,7 @@ if [ -z "$QEMU" ]; then
         QEMU=qemu-system-riscv32
     fi
 fi
-OUT=build/qemu
+OUT=build/run
 WITH_GDB=0
 WITH_ROM=0
 ELF=""
@@ -64,7 +64,9 @@ if [ "$WITH_ROM" = 1 ]; then
 fi
 
 if [ "$WITH_GDB" = 1 ]; then
-    echo "==> QEMU is waiting for GDB on port 1234 (target remote :1234)"
+    echo "==> QEMU is stopped at the reset vector, waiting for GDB on port 1234."
+    echo "    In another terminal:"
+    echo "        ${CROSS:-riscv64-unknown-elf-}gdb $ELF -ex 'target remote localhost:1234'"
     QFLAGS="$QFLAGS -s -S"
 fi
 
