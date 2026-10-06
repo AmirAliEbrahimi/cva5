@@ -147,7 +147,7 @@ update_compile_order -fileset sources_1
 
 # ---- Constraints ----------------------------------------------------------
 # Save the XDC next to the project and point this at it.
-add_files -fileset constrs_1 -norecurse ./examples/xilinx/pynq_z2_cva5.xdc
+add_files -fileset constrs_1 -norecurse ./examples/fpga/pynq_z2_cva5.xdc
 
 #---- Close the project ----------------------------------------------------------
 close_project

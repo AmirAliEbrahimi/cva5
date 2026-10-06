@@ -1,7 +1,7 @@
 # QEMU model of the CVA5 PYNQ-Z2 system
 
 `0001-cva5-pynq-machine.patch` adds a QEMU machine that mirrors
-`examples/xilinx/cva5_wrapper.sv`:
+`examples/fpga/cva5_wrapper.sv`:
 
 | Address       | Size    | What                                      |
 |---------------|---------|-------------------------------------------|

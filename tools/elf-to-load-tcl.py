@@ -7,7 +7,7 @@ Emits:
     set LOAD_ADDR  <base>
     set LOAD_WORDS { 0x... 0x... ... }
 
-The loader procs in examples/xilinx/openocd/cva5-pynq-z2-p1.cfg consume these.
+The loader procs in examples/fpga/openocd/cva5-pynq-z2-p1.cfg consume these.
 Writing a Tcl list keeps the whole flow inside OpenOCD's own interpreter, which
 has no portable way to read a binary file itself.
 """

@@ -4,7 +4,7 @@ Builds a CVA5 (RV32IM) soft SoC that runs the `examples/sw` demo program from
 block RAM, with an AXI UART Lite for console output. A single slide switch
 (SW0) drives the system reset. This mirrors the existing Nexys A7 example.
 
-## Files (in `examples/xilinx/`)
+## Files (in `examples/fpga/`)
 
 | file                          | purpose                                                                 |
 |-------------------------------|-------------------------------------------------------------------------|
@@ -22,8 +22,8 @@ block RAM, with an AXI UART Lite for console output. A single slide switch
 ## Build (Vivado Tcl console, from the repo root)
 
 ```tcl
-source ./examples/xilinx/package_as_ip_pynq_z2.tcl   ;# package CVA5 as IP
-source ./examples/xilinx/pynq_z2_sys.tcl             ;# build the SoC + add the XDC
+source ./examples/fpga/package_as_ip_pynq_z2.tcl   ;# package CVA5 as IP
+source ./examples/fpga/pynq_z2_sys.tcl             ;# build the SoC + add the XDC
 ```
 
 Then in the GUI: **Generate Bitstream**, open the **Hardware Manager**, and

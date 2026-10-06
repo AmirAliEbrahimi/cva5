@@ -33,15 +33,15 @@ verilator --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style \
   $(grep -v '^[[:space:]]*$' tools/compile_order) \
   $CC/cdc_reset_ctrlr_pkg.sv $CC/sync.sv $CC/spill_register_flushable.sv \
   $CC/spill_register.sv $CC/cdc_4phase.sv $CC/cdc_reset_ctrlr.sv \
-  examples/xilinx/debug/vendor/cdc_2phase_clearable.sv $CC/fifo_v3.sv \
+  examples/fpga/debug/vendor/cdc_2phase_clearable.sv $CC/fifo_v3.sv \
   $CC/deprecated/fifo_v2.sv \
   $RD/src/dm_pkg.sv $RD/debug_rom/debug_rom.sv $RD/debug_rom/debug_rom_one_scratch.sv \
   $RD/src/dm_csrs.sv $RD/src/dm_mem.sv $RD/src/dmi_cdc.sv \
   $RD/src/dm_sba.sv $RD/src/dm_top.sv $RD/src/dmi_jtag.sv $RD/src/dmi_jtag_tap.sv \
   test_benches/debug/tc_clk_sim.sv \
-  examples/xilinx/debug/dm_sba_axil.sv examples/xilinx/debug/cva5_debug_subsys.sv \
-  examples/xilinx/debug/dm_mem_port.sv \
-  examples/xilinx/cva5_wrapper.sv \
+  examples/fpga/debug/dm_sba_axil.sv examples/fpga/debug/cva5_debug_subsys.sv \
+  examples/fpga/debug/dm_mem_port.sv \
+  examples/fpga/cva5_wrapper.sv \
   $RD/tb/SimJTAG.sv test_benches/debug/tb_jtag.sv \
   --top-module tb_jtag -Mdir $OUT
 

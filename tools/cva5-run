@@ -44,7 +44,7 @@ OPT_LEVEL=s
 OUT=build/run
 APP_BASE=0x40000000
 OPENOCD=${OPENOCD:-openocd}
-OCD_DIR=$ROOT/examples/xilinx/openocd
+OCD_DIR=$ROOT/examples/fpga/openocd
 SW_DIR=$ROOT/examples/sw
 
 WITH_GDB=0

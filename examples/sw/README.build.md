@@ -73,7 +73,7 @@ are delegated to it, so the RTL build keeps a single source of truth.
   (one 32-bit word per line, what `$readmemh` and the `cva5_top` `LOCAL_MEM`
   parameter expect). `make mif` regenerates `examples/sw/mem.mif` directly from
   `main.c` with no simulator build; copy that to `vivado/ip_repo/src` and rebuild the Vivado project afterwards to bake
-  the new image into block RAM (see `examples/xilinx`).
+  the new image into block RAM (see `examples/fpga`).
 - This program loops forever printing "Hello World!" with a 1-second busy-wait.
   At RTL-sim speed (slower still with tracing) that's a long wait between lines.
   To iterate faster, shrink `usleep(1000*1000)` or `#define MHZ` in `main.c`, or

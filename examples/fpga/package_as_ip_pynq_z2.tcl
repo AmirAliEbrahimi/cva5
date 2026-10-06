@@ -2,7 +2,7 @@ puts "This script will create a project for CVA5 in the ./vivado folder and pack
 
 # Create the project
 create_project -force -part xc7z020clg400-1 CVA5IP ./vivado/CVA5IP
-add_files -force {core examples/xilinx examples/sw}
+add_files -force {core examples/fpga examples/sw}
 
 # ---- Debug subsystem: pulp-platform riscv-dbg v0.9.0 + common_cells v1.24.0
 # Explicit list: riscv-dbg ships two dmi_jtag_tap variants; only the BSCANE2

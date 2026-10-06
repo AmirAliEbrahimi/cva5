@@ -162,7 +162,7 @@ back to verify, and releases the CPU.
 
 ```bash
 pkill -f hw_server                       # Vivado and OpenOCD cannot share the cable
-cd examples/xilinx/openocd
+cd examples/fpga/openocd
 openocd -f pynq-z2-jtag.cfg -f cva5-pynq-z2.cfg
 ```
 
@@ -243,12 +243,12 @@ and many contributions to CVA5 were made under Apache Version 2.0
 ## Examples
 
 A script to package CVA5 as an IP is available and can be run in Vivado with
-`source ./examples/xilinx/package_as_ip.tcl`. A companion script can then create a system
+`source ./examples/fpga/package_as_ip.tcl`. A companion script can then create a system
 running a small hello-world application from block memory on the Nexys A7 FPGA.
 
-For detailed instructions on executing the hello-world application from block memory on the PYNQ-Z2 FPGA, please review `examples\xilinx\README.pynq_z2.md`. Tested with Vivado 2025.1
+For detailed instructions on executing the hello-world application from block memory on the PYNQ-Z2 FPGA, please review `examples/fpga/README.pynq_z2.md`. Tested with Vivado 2025.1
 
-The PYNQ-Z2 system in `examples/xilinx/pynq_z2_sys.tcl` additionally carries a RISC-V Debug
+The PYNQ-Z2 system in `examples/fpga/pynq_z2_sys.tcl` additionally carries a RISC-V Debug
 Module and runs programs from AXI block RAM; see
 [Debugging on the PYNQ-Z2](#debugging-on-the-pynq-z2).
 

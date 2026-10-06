@@ -7,7 +7,7 @@
 #    make boot             build boot.mif, the FPGA boot ROM image
 #    make app              build app.elf, linked for main RAM at 0x4000_0000
 #    make load             build app.elf and load it onto the board over JTAG
-#                          (no bitstream rebuild; see examples/xilinx/openocd)
+#                          (no bitstream rebuild; see examples/fpga/openocd)
 #    make run             build program.hex + sim, then run the sim
 #    make clean           remove generated software files
 #
@@ -71,7 +71,7 @@ APP_BASE    ?= 0x40000000
 APP_LDSCRIPT := fpga_link.ld
 ELF2TCL     := $(CVA5_DIR)/tools/elf-to-load-tcl.py
 OPENOCD     ?= openocd
-OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
+OCD_DIR     := $(CVA5_DIR)/examples/fpga/openocd
 
 .PHONY: all program boot app load sim run clean lint lint-full clean-cva5-sim
 all: program

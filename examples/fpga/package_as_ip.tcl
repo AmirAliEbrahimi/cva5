@@ -2,7 +2,7 @@ puts "This script will create a project for CVA5 in the current folder and packa
 
 # Create the project
 create_project -force -part xc7a100tcsg324-1 CVA5IP ./vivado/CVA5IP
-add_files -force {core examples/xilinx examples/sw}
+add_files -force {core examples/fpga examples/sw}
 set_property top cva5_top [current_fileset]
 update_compile_order -fileset sources_1
 
