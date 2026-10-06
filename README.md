@@ -101,6 +101,25 @@ The PYNQ-Z2 system boots from a small ROM in the CPU's local memory that jumps t
 (128 KB of AXI block RAM at `0x4000_0000`). Programs live in that RAM and are written over
 JTAG, so changing software never means rebuilding the bitstream.
 
+### Memory map
+
+| Address       | Size   | What                                       |
+|---------------|--------|--------------------------------------------|
+| `0x4000_0000` | 128 KB | main RAM; programs run from here           |
+| `0x5000_0000` | 4 KB   | Debug Module (riscv-dbg)                   |
+| `0x6000_0000` | 4 KB   | UART                                       |
+| `0x6000_1000` | 4 KB   | SPI master                                 |
+| `0x6000_2000` | 4 KB   | interrupt controller                       |
+| `0x6000_3000` | 4 KB   | CLINT (`mtime`, `mtimecmp`, `msip`)        |
+| `0x8000_0000` | 1 KB   | boot ROM, the reset vector                 |
+
+Peripherals share one 64 KB window, so the crossbar needs a single rule for all of them.
+The CLINT sits there too rather than at the customary `0x0200_0000`; code lifted from
+elsewhere may hardcode that address and need the constant changed.
+
+[`examples/sw/soc.h`](examples/sw/soc.h) has these as C definitions, and is the map the
+RTL and the QEMU machine follow.
+
 A RISC-V Debug Module (riscv-dbg) sits on the FPGA's own JTAG through BSCANE2, so no extra
 cable is needed: the board's USB connection carries both programming and debugging.
 
