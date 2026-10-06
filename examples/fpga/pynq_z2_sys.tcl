@@ -12,7 +12,7 @@
 # ---- Project --------------------------------------------------------------
 create_project -force -part xc7z020clg400-1 CVA5BD ./vivado/CVA5BD
 set_property board_part tul.com.tw:pynq-z2:part0:1.0 [current_project]
-set_property ip_repo_paths ./vivado/ip_repo [current_project]
+set_property ip_repo_paths [list ./vivado/ip_repo ./vivado/ip_repo_openhw] [current_project]
 update_ip_catalog
 
 # ---- Block design ---------------------------------------------------------
@@ -87,16 +87,19 @@ set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
 # combinationally out of its arbiter FIFO and the crossbar grants in the same
 # cycle; without a break that path misses 100 MHz. One extra cycle on a line
 # fill is irrelevant next to the BRAM access itself.
-create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 slice_mem
-connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_mem] [get_bd_intf_pins slice_mem/S_AXI]
-connect_bd_net $sys_clk  [get_bd_pins slice_mem/aclk]
-connect_bd_net $sys_rstn [get_bd_pins slice_mem/aresetn]
+#
+# cva5_axi_cut wraps pulp-platform's axi_cut and replaces Xilinx's
+# axi_register_slice; package it first with package_openhw_ips.tcl.
+create_bd_cell -type ip -vlnv xilinx.com:user:cva5_axi_cut:1.0 slice_mem
+connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_mem] [get_bd_intf_pins slice_mem/s_axi]
+connect_bd_net $sys_clk  [get_bd_pins slice_mem/clk]
+connect_bd_net $sys_rstn [get_bd_pins slice_mem/rstn]
 
 # S00 = m_axi (already connected by the automation above), M00 = UART.
 # Add S01 = cached memory path, S02 = debugger SBA, M01 = RAM.
 set_property -dict [list CONFIG.NUM_SI {3} CONFIG.NUM_MI {2}] [get_bd_cells $intc]
 
-connect_bd_intf_net [get_bd_intf_pins slice_mem/M_AXI]        [get_bd_intf_pins $intc/S01_AXI]
+connect_bd_intf_net [get_bd_intf_pins slice_mem/m_axi]        [get_bd_intf_pins $intc/S01_AXI]
 connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg]   [get_bd_intf_pins $intc/S02_AXI]
 connect_bd_intf_net [get_bd_intf_pins $intc/M01_AXI]          [get_bd_intf_pins axi_bram_ctrl_0/S_AXI]
 
@@ -125,6 +128,7 @@ proc cva5_seg {args} {
     return ""
 }
 set mem_ram_seg [cva5_seg {cva5_top_0/m_axi_mem/SEG_axi_bram_ctrl_0_Mem0} \
+                          {slice_mem/m_axi/SEG_axi_bram_ctrl_0_Mem0} \
                           {slice_mem/M_AXI/SEG_axi_bram_ctrl_0_Mem0}]
 if {$mem_ram_seg eq ""} { error "cached path has no RAM address segment" }
 set_property range  128K       $mem_ram_seg
@@ -134,6 +138,7 @@ set cpu_ram_seg [get_bd_addr_segs -quiet {cva5_top_0/m_axi/SEG_axi_bram_ctrl_0_M
 if {$cpu_ram_seg ne ""} { exclude_bd_addr_seg $cpu_ram_seg }
 # Likewise the cached path only ever targets RAM; keep the UART out of it.
 set mem_uart_seg [cva5_seg {cva5_top_0/m_axi_mem/SEG_axi_uartlite_0_Reg} \
+                           {slice_mem/m_axi/SEG_axi_uartlite_0_Reg} \
                            {slice_mem/M_AXI/SEG_axi_uartlite_0_Reg}]
 if {$mem_uart_seg ne ""} { exclude_bd_addr_seg $mem_uart_seg }
 
