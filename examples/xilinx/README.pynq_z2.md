@@ -20,8 +20,8 @@ measured to cost nothing against the all-Xilinx baseline of **WNS +0.107** at
 
 | Xilinx IP | replacement | result |
 |-----------|-------------|--------|
-| `axi_register_slice` | `cva5_axi_cut` (pulp `axi_cut`) | free |
-| `axi_interconnect`   | `cva5_axi_xbar` (pulp `axi_xbar`) | free |
+| `axi_register_slice` | `cva5_axi_cut` (pulp `axi_cut`) | **+0.122** (baseline +0.107) |
+| `axi_interconnect`   | `cva5_axi_xbar` (pulp `axi_xbar`) | same build |
 | `axi_bram_ctrl` + `blk_mem_gen` | *kept* — see below | — |
 | `clk_wiz` | *kept* — the MMCM is a hard block | — |
 
@@ -50,6 +50,14 @@ From the crossbar onwards the address decode lives in the RTL, as parameters
 taken from `examples/sw/soc.h`, not in the Vivado address editor. An address
 in no window, or a master reaching for a slave it is not wired to, returns a
 DECERR instead of landing somewhere unexpected.
+
+Validated on hardware, not just in simulation: boot banner over the UART
+(CPU to the peripheral port), `make load` (debugger to RAM), a 128 KB walk
+over system bus access with zero errors, a deliberate unmapped read returning
+`sberror=2` rather than hanging, a full GDB session (reset, load, breakpoint,
+single step, register and memory access, asynchronous halt), and `make
+memtest` passing -- the last of which is the only test that touches the
+cached path through `cva5_axi_cut`.
 
 Run `./test_benches/axi/run_cut.sh` and `./test_benches/axi/run_xbar.sh`
 before spending a synthesis run — 216 and 131 checks. Both take their file
