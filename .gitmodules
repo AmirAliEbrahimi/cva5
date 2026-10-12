@@ -4,3 +4,9 @@
 [submodule "third_party/common_cells"]
 	path = third_party/common_cells
 	url = https://github.com/pulp-platform/common_cells
+[submodule "third_party/axi"]
+	path = third_party/axi
+	url = https://github.com/pulp-platform/axi
+[submodule "third_party/wb2axip"]
+	path = third_party/wb2axip
+	url = https://github.com/ZipCPU/wb2axip

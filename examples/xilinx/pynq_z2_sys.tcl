@@ -12,7 +12,7 @@
 # ---- Project --------------------------------------------------------------
 create_project -force -part xc7z020clg400-1 CVA5BD ./vivado/CVA5BD
 set_property board_part tul.com.tw:pynq-z2:part0:1.0 [current_project]
-set_property ip_repo_paths ./vivado/ip_repo [current_project]
+set_property ip_repo_paths [list ./vivado/ip_repo ./vivado/ip_repo_openhw] [current_project]
 update_ip_catalog
 
 # ---- Block design ---------------------------------------------------------
@@ -55,12 +55,15 @@ create_bd_cell -type ip -vlnv xilinx.com:user:cva5_top:1.0 cva5_top_0
 connect_bd_net [get_bd_pins cva5_top_0/clk]  [get_bd_pins clk_wiz_0/clk_out1]
 connect_bd_net [get_bd_pins cva5_top_0/rstn] [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
 
-# ---- Processor -> UART via AXI interconnect -------------------------------
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
-  -config { Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} \
-            Master {/cva5_top_0/m_axi} Slave {/axi_uartlite_0/S_AXI} \
-            ddr_seg {Auto} intc_ip {New AXI Interconnect} master_apm {0}} \
-  [get_bd_intf_pins axi_uartlite_0/S_AXI]
+# ---- Clock and reset handles ----------------------------------------------
+set sys_clk  [get_bd_pins clk_wiz_0/clk_out1]
+set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
+
+# No AXI automation: there is no Xilinx interconnect in this design. The UART
+# hangs off cva5_axi_xbar's peripheral port, wired explicitly below, so its
+# clock and reset are connected here rather than by the automation rule.
+connect_bd_net $sys_clk  [get_bd_pins axi_uartlite_0/s_axi_aclk]
+connect_bd_net $sys_rstn [get_bd_pins axi_uartlite_0/s_axi_aresetn]
 
 # ---- Main RAM: AXI BRAM, 128 KB at 0x4000_0000 -----------------------------
 # Programs run from here: the CPU reaches it through its caches (m_axi_mem),
@@ -70,53 +73,57 @@ set_property -dict [list CONFIG.SINGLE_PORT_BRAM {1} CONFIG.DATA_WIDTH {32}] [ge
 apply_bd_automation -rule xilinx.com:bd_rule:bram_cntlr -config {BRAM "Auto"} \
   [get_bd_intf_pins axi_bram_ctrl_0/BRAM_PORTA]
 # Memory depth follows the 128 KB address range assigned below.
-
-# ---- One interconnect for every master -------------------------------------
-# All three masters (CPU peripherals m_axi, CPU cached memory via slice_mem,
-# debugger SBA m_axi_dbg) share the interconnect the CPU->UART automation
-# created, so each can reach both the UART and the RAM. The ports are wired
-# explicitly: apply_bd_automation refuses an existing interconnect when the
-# master is a register slice's M_AXI.
-set intc [get_bd_cells -of_objects [get_bd_intf_pins -of_objects \
-            [get_bd_intf_nets -of_objects [get_bd_intf_pins axi_uartlite_0/S_AXI]] \
-            -filter {MODE == Master}]]
-set sys_clk  [get_bd_pins clk_wiz_0/clk_out1]
-set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
-
-# A register slice on the cached path. The adapter computes arvalid
-# combinationally out of its arbiter FIFO and the crossbar grants in the same
-# cycle; without a break that path misses 100 MHz. One extra cycle on a line
-# fill is irrelevant next to the BRAM access itself.
-create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 slice_mem
-connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_mem] [get_bd_intf_pins slice_mem/S_AXI]
-connect_bd_net $sys_clk  [get_bd_pins slice_mem/aclk]
-connect_bd_net $sys_rstn [get_bd_pins slice_mem/aresetn]
-
-# S00 = m_axi (already connected by the automation above), M00 = UART.
-# Add S01 = cached memory path, S02 = debugger SBA, M01 = RAM.
-set_property -dict [list CONFIG.NUM_SI {3} CONFIG.NUM_MI {2}] [get_bd_cells $intc]
-
-connect_bd_intf_net [get_bd_intf_pins slice_mem/M_AXI]        [get_bd_intf_pins $intc/S01_AXI]
-connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg]   [get_bd_intf_pins $intc/S02_AXI]
-connect_bd_intf_net [get_bd_intf_pins $intc/M01_AXI]          [get_bd_intf_pins axi_bram_ctrl_0/S_AXI]
-
-foreach pin {S01_ACLK S02_ACLK M01_ACLK} {
-    connect_bd_net $sys_clk [get_bd_pins $intc/$pin]
-}
-foreach pin {S01_ARESETN S02_ARESETN M01_ARESETN} {
-    connect_bd_net $sys_rstn [get_bd_pins $intc/$pin]
-}
 connect_bd_net $sys_clk  [get_bd_pins axi_bram_ctrl_0/s_axi_aclk]
 connect_bd_net $sys_rstn [get_bd_pins axi_bram_ctrl_0/s_axi_aresetn]
 
+# ---- Register slice on the cached path --------------------------------------
+# cva5_axi_cut wraps pulp-platform's axi_cut and replaces Xilinx's
+# axi_register_slice.
+#
+# It is load bearing, measured: removing it costs 0.321 ns, and the path that
+# then fails runs from the crossbar's read skid buffer into the branch
+# predictor's table. The read channel is the reason -- the crossbar runs in
+# LatencyMode CUT_SLV_AX, which registers AW and AR only, so R is fall-through
+# from the RAM all the way to the slave port, and CVA5's cache feeds rvalid
+# straight into the fetch path. This cut terminates that.
+create_bd_cell -type ip -vlnv xilinx.com:user:cva5_axi_cut:1.0 slice_mem
+connect_bd_net $sys_clk  [get_bd_pins slice_mem/clk]
+connect_bd_net $sys_rstn [get_bd_pins slice_mem/rstn]
+connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_mem] [get_bd_intf_pins slice_mem/s_axi]
+
+# ---- Crossbar -------------------------------------------------------------
+# cva5_axi_xbar wraps pulp-platform's axi_xbar and replaces Xilinx's AXI
+# Interconnect (which Vivado 2025.1 marks discontinued).
+#
+# Unlike the interconnect, the address decode lives inside the IP, as
+# parameters taken from examples/sw/soc.h -- the Vivado address editor no
+# longer decides it. An address in no window, or a master reaching for a
+# slave it is not wired to, returns a DECERR rather than landing somewhere
+# unexpected. The segments assigned below are bookkeeping for point-to-point
+# links, not decoding.
+#
+#   m_axi      -> s_axi_cpu    peripherals only
+#   m_axi_mem  -> s_axi_mem    RAM only (through the register slice)
+#   m_axi_dbg  -> s_axi_dbg    both
+create_bd_cell -type ip -vlnv xilinx.com:user:cva5_axi_xbar:1.0 axi_xbar_0
+connect_bd_net $sys_clk  [get_bd_pins axi_xbar_0/clk]
+connect_bd_net $sys_rstn [get_bd_pins axi_xbar_0/rstn]
+
+connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi]     [get_bd_intf_pins axi_xbar_0/s_axi_cpu]
+connect_bd_intf_net [get_bd_intf_pins slice_mem/m_axi]      [get_bd_intf_pins axi_xbar_0/s_axi_mem]
+connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg] [get_bd_intf_pins axi_xbar_0/s_axi_dbg]
+
+connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_ram]    [get_bd_intf_pins axi_bram_ctrl_0/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_periph] [get_bd_intf_pins axi_uartlite_0/S_AXI]
+
 # ---- Address map ----------------------------------------------------------
+# Every link here is point to point, so nothing in the block design decodes
+# an address. The crossbar passes the full address through and each slave
+# takes the low bits of it, which is what the Xilinx interconnect did before;
+# the segments therefore sit at the real addresses from examples/sw/soc.h and
+# the address editor describes what the hardware actually does.
 assign_bd_address
-set_property offset 0x60000000 [get_bd_addr_segs {cva5_top_0/m_axi/SEG_axi_uartlite_0_Reg}]
-set_property offset 0x60000000 [get_bd_addr_segs {cva5_top_0/m_axi_dbg/SEG_axi_uartlite_0_Reg}]
-set_property range  128K       [get_bd_addr_segs {cva5_top_0/m_axi_dbg/SEG_axi_bram_ctrl_0_Mem0}]
-set_property offset 0x40000000 [get_bd_addr_segs {cva5_top_0/m_axi_dbg/SEG_axi_bram_ctrl_0_Mem0}]
-# The cached path's address space stays with the master, but name it either
-# way in case the register slice carries it.
+
 proc cva5_seg {args} {
     foreach p $args {
         set s [get_bd_addr_segs -quiet $p]
@@ -124,18 +131,17 @@ proc cva5_seg {args} {
     }
     return ""
 }
-set mem_ram_seg [cva5_seg {cva5_top_0/m_axi_mem/SEG_axi_bram_ctrl_0_Mem0} \
-                          {slice_mem/M_AXI/SEG_axi_bram_ctrl_0_Mem0}]
-if {$mem_ram_seg eq ""} { error "cached path has no RAM address segment" }
-set_property range  128K       $mem_ram_seg
-set_property offset 0x40000000 $mem_ram_seg
-# The CPU's peripheral bus only decodes 0x6xxx_xxxx, so exclude RAM from it for now.
-set cpu_ram_seg [get_bd_addr_segs -quiet {cva5_top_0/m_axi/SEG_axi_bram_ctrl_0_Mem0}]
-if {$cpu_ram_seg ne ""} { exclude_bd_addr_seg $cpu_ram_seg }
-# Likewise the cached path only ever targets RAM; keep the UART out of it.
-set mem_uart_seg [cva5_seg {cva5_top_0/m_axi_mem/SEG_axi_uartlite_0_Reg} \
-                           {slice_mem/M_AXI/SEG_axi_uartlite_0_Reg}]
-if {$mem_uart_seg ne ""} { exclude_bd_addr_seg $mem_uart_seg }
+
+set ram_seg [cva5_seg {axi_xbar_0/m_axi_ram/SEG_axi_bram_ctrl_0_Mem0} \
+                      {axi_xbar_0/m_axi_ram/SEG_axi_bram_ctrl_0_reg0}]
+if {$ram_seg eq ""} { error "the crossbar's RAM port has no address segment" }
+set_property offset 0x40000000 $ram_seg
+set_property range  128K       $ram_seg
+
+set uart_seg [cva5_seg {axi_xbar_0/m_axi_periph/SEG_axi_uartlite_0_Reg}]
+if {$uart_seg eq ""} { error "the crossbar's peripheral port has no address segment" }
+set_property offset 0x60000000 $uart_seg
+set_property range  64K        $uart_seg
 
 # ---- Finalise -------------------------------------------------------------
 regenerate_bd_layout

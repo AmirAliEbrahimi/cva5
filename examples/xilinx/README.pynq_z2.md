@@ -12,6 +12,92 @@ block RAM, with an AXI UART Lite for console output. A single slide switch
 | `pynq_z2_sys.tcl`             | builds the SoC block design (clock, reset, CVA5, AXI UART Lite) + XDC    |
 | `pynq_z2_cva5.xdc`            | pin constraints — reset switch and PMOD UART                            |
 
+## Open-hardware AXI blocks
+
+Two of the Xilinx AXI IPs are replaced with pulp-platform blocks, both
+measured to cost nothing against the all-Xilinx baseline of **WNS +0.107** at
+100 MHz on the `xc7z020clg400-1`:
+
+| Xilinx IP | replacement | result |
+|-----------|-------------|--------|
+| `axi_register_slice` | `cva5_axi_cut` (pulp `axi_cut`) | free |
+| `axi_interconnect`   | `cva5_axi_xbar` (pulp `axi_xbar`) | free |
+| `axi_bram_ctrl` + `blk_mem_gen` | *kept* — see below | — |
+| `clk_wiz` | *kept* — the MMCM is a hard block | — |
+
+Build order from the repository root:
+
+```tcl
+source ./examples/xilinx/package_as_ip_pynq_z2.tcl   ;# CVA5 core as IP
+source ./examples/xilinx/package_openhw_ips.tcl      ;# the two AXI blocks
+source ./examples/xilinx/pynq_z2_sys.tcl             ;# the SoC block design
+```
+
+Each wrapper under `axi/` presents flat AXI ports so Vivado's IP packager
+infers the bus interfaces; the pulp modules underneath take SystemVerilog
+structs, which a block design cannot carry. `tools/vendor-pulp-sv.py`
+generates the include-free copies in `vendor/`, because the IP packager
+flattens sources and the pulp `` `include `` paths then cannot resolve.
+`tools/vendor-pulp-sv.py --check` fails if they are stale.
+
+The crossbar's peripheral port converts AXI4 to AXI4-Lite with ZipCPU's
+formally verified `axi2axilite`. pulp's `axi_to_axi_lite` was tried first and
+missed 100 MHz by 3.2 ns: its burst splitter, ID queue and atomic filter are
+built for a general AXI port, none of which a window carrying single-beat
+register accesses can reach.
+
+From the crossbar onwards the address decode lives in the RTL, as parameters
+taken from `examples/sw/soc.h`, not in the Vivado address editor. An address
+in no window, or a master reaching for a slave it is not wired to, returns a
+DECERR instead of landing somewhere unexpected.
+
+Run `./test_benches/axi/run_cut.sh` and `./test_benches/axi/run_xbar.sh`
+before spending a synthesis run — 216 and 131 checks. Both take their file
+lists from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so what is
+simulated is exactly what is synthesised.
+
+### Why the memory is still Xilinx
+
+Replacing `axi_bram_ctrl` + `blk_mem_gen` was attempted twice and abandoned
+on measurement both times. Recorded here so it is not attempted a third time
+the same way:
+
+| attempt | WNS |
+|---------|-----|
+| baseline, all Xilinx | **+0.107** |
+| `demofull` + inferred block RAM behind AXI4 | −0.107, −0.023 with `cascade_height` |
+| block RAM on CVA5's native `mem_interface` | −0.143 |
+| the same, with a registered read return | −0.316 |
+
+In both designs the failing path is the core's own fetch-to-predictor
+recurrence — I$ or BP tag read, tag compare, early branch flush, PC select,
+branch predictor table address — and it is routing-dominated, 56–74% of the
+budget. The Xilinx pair keeps that path shorter than anything hand-built
+here, and the reason was never established.
+
+Things that were measured along the way, so they are not retried:
+
+- `cascade_height` on an inferred array is worth 0.084 ns, but **not** via a
+  hardware cascade: UG473 restricts `CASCADEIN`/`CASCADEOUT` to 64K x 1 in
+  true-dual-port mode, and a 32-bit byte-enabled array is neither. It only
+  shallows the fabric output mux. Placement confirms it — the members of a
+  cascade group land in different BRAM columns, which a real cascade cannot.
+- Block RAM displacement is **not** the mechanism. The core's block RAMs
+  cluster on consecutive sites by themselves, with the critical path's launch
+  and capture adjacent, whichever memory is used.
+- A pblock confining the AXI blocks to a clock-region strip costs 0.077 ns.
+  Placement reached +0.029 and routing lost it; this is not a
+  placement-freedom problem.
+- 32 RAMB36 is the floor for 128 KB with byte enables, so the footprint
+  cannot shrink without shrinking `RAM_SIZE`.
+- The JTAG domain is intentionally left unconstrained, which is why the build
+  reports ~247 critical warnings (`TIMING-17`). Constraining it creates a TCK
+  clock, and that in turn produces the CDC and clock-relationship warnings
+  that then want waiving. lowRISC's `ibex-demo-system` ships the same
+  `riscv-dbg` on this same part with a single `create_clock` on the input pin
+  and nothing else; this follows that. Note it does mean the debug domain is
+  untimed.
+
 ## Prerequisites
 
 - Vivado (part `xc7z020clg400-1`).
