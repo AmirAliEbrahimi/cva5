@@ -38,16 +38,43 @@ if {[llength $tck_pin] != 1} {
 create_clock -period 100.000 -name jtag_tck -waveform {0.000 50.000} $tck_pin
 
 # TCK is driven by whatever the cable is doing and has no relationship to the
-# system clock. riscv-dbg crosses between the two domains with a two-phase
-# handshake (dmi_cdc), which is what makes the crossing safe; this line is what
-# stops the timer trying to prove it with setup checks that cannot be met and
-# do not mean anything. It has to come with the create_clock above, not after
-# it: on its own, the create_clock would replace 243 critical warnings with a
-# heap of impossible paths between the two domains.
+# system clock, so the paths between the two domains must not be analysed as if
+# they were synchronous. What they must not be is unanalysed either, and that is
+# the difference between the two ways of saying it.
 #
-# One group means "asynchronous to every other clock in the design", so the
-# CLINT's or a second clock's arrival needs no edit here.
-set_clock_groups -asynchronous -name jtag_tck_async -group [get_clocks jtag_tck]
+# riscv-dbg crosses between the domains with two cdc_2phase_clearable instances
+# inside dmi_cdc, and that module states what it needs in its own header:
+#
+#   CONSTRAINT: Requires max_delay of min_period(src_clk_i, dst_clk_i) through
+#   the paths async_req, async_ack, async_data.
+#
+# The handshake is what makes the crossing safe, but only on one condition: the
+# payload (async_data) is deliberately not synchronised, so correctness depends
+# on it having settled by the time the destination domain sees the synchronised
+# request. A two-stage sync on async_req gives it two destination cycles to do
+# that -- and only a bound on the data path turns "two cycles" into a guarantee
+# rather than an expectation. The module marks async_req, async_ack and
+# async_data `dont_touch` precisely so they survive synthesis and can be
+# constrained; the same applies to the cdc_4phase crossings inside
+# cdc_reset_ctrlr, which carry the identical note.
+#
+# min_period(TCK, system clock) = min(100, 10) = 10 ns. Constraining clock to
+# clock covers every crossing in both directions, including the reset
+# controller's, without naming a single net -- and keeps covering them when the
+# CLINT or a second clock arrives.
+#
+# This REPLACES a set_clock_groups -asynchronous, which was wrong in a way that
+# is quiet: a clock group outranks set_max_delay in Vivado's exception
+# precedence, so the two cannot be combined -- the group would win and the bound
+# would be silently ignored. It also outranked reality, which is how 849
+# endpoint pairs came back from report_cdc as Critical with the payload
+# unclassified: paths the timer had been told to stop looking at.
+set other_clks [remove_from_collection [get_clocks] [get_clocks jtag_tck]]
+if {[llength $other_clks] == 0} {
+    puts "ERROR: pynq_z2_cva5.xdc: no system clock found to bound the JTAG CDC against"
+}
+set_max_delay -datapath_only 10.000 -from [get_clocks jtag_tck] -to $other_clks
+set_max_delay -datapath_only 10.000 -from $other_clks -to [get_clocks jtag_tck]
 
 # ---- Reset: slide switch SW0 (active-low) --------------------------------
 # Switch HIGH (up) = run, switch LOW (down) = reset asserted.
