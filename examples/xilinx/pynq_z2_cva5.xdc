@@ -58,23 +58,52 @@ create_clock -period 100.000 -name jtag_tck -waveform {0.000 50.000} $tck_pin
 # constrained; the same applies to the cdc_4phase crossings inside
 # cdc_reset_ctrlr, which carry the identical note.
 #
-# min_period(TCK, system clock) = min(100, 10) = 10 ns. Constraining clock to
-# clock covers every crossing in both directions, including the reset
-# controller's, without naming a single net -- and keeps covering them when the
-# CLINT or a second clock arrives.
+# Two constraints, because neither alone is right and they are not
+# interchangeable:
 #
-# This REPLACES a set_clock_groups -asynchronous, which was wrong in a way that
-# is quiet: a clock group outranks set_max_delay in Vivado's exception
-# precedence, so the two cannot be combined -- the group would win and the bound
-# would be silently ignored. It also outranked reality, which is how 849
-# endpoint pairs came back from report_cdc as Critical with the payload
-# unclassified: paths the timer had been told to stop looking at.
-set other_clks [remove_from_collection [get_clocks] [get_clocks jtag_tck]]
-if {[llength $other_clks] == 0} {
-    puts "ERROR: pynq_z2_cva5.xdc: no system clock found to bound the JTAG CDC against"
+#   set_clock_groups -asynchronous     stops the timer computing setup and hold
+#                                      between two clocks whose phase relation
+#                                      is unknowable. Without it the clocks are
+#                                      "related with no common node", which
+#                                      Vivado reports as a critical warning
+#                                      saying the design could fail -- and it is
+#                                      right, because those numbers are fiction.
+#
+#   set_bus_skew                       bounds the spread between the payload's
+#                                      own bits, which is the requirement the
+#                                      handshake actually has. It is NOT a
+#                                      timing exception, so the clock group does
+#                                      not override it; report_bus_skew checks it
+#                                      independently and reports a slack.
+#
+# What does not work is set_max_delay -datapath_only, which was the previous
+# attempt: a clock group outranks it in Vivado's exception precedence, so the two
+# cannot be combined -- the group wins and the bound is silently discarded -- and
+# used alone instead of the group it leaves the clocks related, which is the
+# critical warning above.
+#
+# The value is the number of destination cycles the payload is held for. The
+# destination sees the request only after a two-stage synchroniser, so the data
+# has at least two destination clocks to settle, and the handshake holds it until
+# the acknowledge returns. Two destination periods is therefore conservative in
+# the safe direction: 2 x 10 ns for the request (TCK into the core's clock) and
+# 2 x 100 ns for the response (the core's clock into TCK). Measured skew is
+# 1.857 ns against the 20 ns requirement, so neither bound puts the router under
+# any pressure -- they exist to keep it that way.
+#
+# Found via the one i_dmi_cdc instance rather than by filtering every cell in
+# the design on its hierarchical name, for the reason XDCB #1 gives above.
+set dmi_cdc [get_cells -quiet -hierarchical i_dmi_cdc]
+if {[llength $dmi_cdc] != 1} {
+    puts "ERROR: pynq_z2_cva5.xdc: expected 1 i_dmi_cdc, found [llength $dmi_cdc]"
 }
-set_max_delay -datapath_only 10.000 -from [get_clocks jtag_tck] -to $other_clks
-set_max_delay -datapath_only 10.000 -from $other_clks -to [get_clocks jtag_tck]
+set_clock_groups -asynchronous -name jtag_tck_async -group [get_clocks jtag_tck]
+set_bus_skew 20.000 \
+    -from [get_cells $dmi_cdc/i_cdc_req/i_src/data_src_q_reg*] \
+    -to   [get_cells $dmi_cdc/i_cdc_req/i_dst/data_dst_q_reg*]
+set_bus_skew 200.000 \
+    -from [get_cells $dmi_cdc/i_cdc_resp/i_src/data_src_q_reg*] \
+    -to   [get_cells $dmi_cdc/i_cdc_resp/i_dst/data_dst_q_reg*]
 
 # ---- Reset: slide switch SW0 (active-low) --------------------------------
 # Switch HIGH (up) = run, switch LOW (down) = reset asserted.

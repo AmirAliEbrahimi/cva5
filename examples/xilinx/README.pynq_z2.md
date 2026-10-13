@@ -10,7 +10,8 @@ block RAM inside the core, with an AXI UART Lite for console output. A single sl
 |-------------------------------|-------------------------------------------------------------------------|
 | `package_as_ip_pynq_z2.tcl`   | packages the CVA5 core as a Vivado IP into `./vivado/ip_repo`            |
 | `pynq_z2_sys.tcl`             | builds the SoC block design (clock, reset, CVA5, AXI UART Lite) + XDC    |
-| `pynq_z2_cva5.xdc`            | pin constraints — reset switch and PMOD UART                            |
+| `pynq_z2_cva5.xdc`            | pins (reset switch, PMOD UART) and the JTAG clock and CDC constraints    |
+| `pynq_z2_waivers.xdc`         | the TIMING-9 methodology waiver (implementation only)                   |
 
 ## Open-hardware AXI blocks
 
@@ -191,21 +192,62 @@ Two constraints in `pynq_z2_cva5.xdc` fix it, and they have to go together:
 - `create_clock` at 100 ns on the `BSCANE2` TCK pin — the 10 MHz the OpenOCD
   config asks the adapter for. Found through the cell, not by filtering every
   pin in the design on its hierarchical name (`XDCB #1`).
-- `set_max_delay -datapath_only 10.000` between TCK and the system clock in
-  both directions. **Not** `set_clock_groups -asynchronous`, which was the
-  first attempt and was wrong: `cdc_2phase_clearable` states its own
-  requirement in its header — *"max_delay of min_period(src_clk_i, dst_clk_i)
-  through the paths async_req, async_ack, async_data"* — and marks those nets
-  `dont_touch` so they survive synthesis to be constrained. A clock group
-  removes the paths from analysis instead of bounding them, and the handshake
-  is only safe because `async_data` is held stable while a two-stage
-  synchroniser carries `async_req` across. That argument needs the data path
-  bounded. With the group in place `report_cdc` returned two Critical rows and
-  849 endpoint pairs it could not classify.
+- `set_clock_groups -asynchronous` on `jtag_tck`, so the timer does not compute
+  setup and hold between two clocks whose phase relationship is unknowable.
+- `set_bus_skew` on each `cdc_2phase_clearable` payload — two destination
+  periods, so 20 ns for the request (TCK into the core's clock) and 200 ns for
+  the response.
 
-The two cannot be combined: `set_clock_groups` outranks `set_max_delay` in
-Vivado's exception precedence, so leaving the group in would silently discard
-the bound and look like it had worked.
+The second one is the part that took three tries, so the reasoning is worth
+keeping. `cdc_2phase_clearable` states its requirement in its own header —
+*"max_delay of min_period(src_clk_i, dst_clk_i) through the paths async_req,
+async_ack, async_data"* — and marks those nets `dont_touch` so they survive
+synthesis to be constrained. The handshake is only safe because `async_data`
+is held stable while a two-stage synchroniser carries `async_req` across, and
+that argument needs the data bounded, not ignored.
+
+Each of the two obvious ways to write it leaves one critical warning, and they
+cannot be combined, because **`set_clock_groups` outranks `set_max_delay` in
+Vivado's exception precedence** — the group wins and the bound is silently
+discarded:
+
+| constraint | what is left |
+|---|---|
+| `set_clock_groups` alone | `report_cdc`: 2 Critical, 849 endpoint pairs with the payload unclassified — nothing is bounded |
+| `set_max_delay -datapath_only` alone | `TIMING-6` Critical: clocks *"related with no common node, the design could fail in hardware"* |
+
+`set_bus_skew` is the way out, because **it is not a timing exception**: the
+clock group does not override it and `report_bus_skew` checks it separately.
+Measured on the routed design with both in force — requirement 20.000, actual
+**1.857**, slack **+18.143** over 41 endpoints, and `report_methodology` at
+**0 violations**. The router is under no pressure from the bound; it is there
+to keep things that way.
+
+One Warning remains after that, and it is waived in `pynq_z2_waivers.xdc`:
+**TIMING-9, "Unknown CDC Logic"** — no double-register synchroniser on the
+capture side. That is structural for any handshake CDC. The payload
+deliberately has no synchroniser, which is the point of qualifying it with a
+handshake: req and ack cross through three ASYNC_REG stages, and putting a
+synchroniser on the payload would break the protocol rather than secure it.
+AMD's own `set_bus_skew` example documents this exact topology.
+
+Two things about that waiver worth knowing before touching it:
+
+- **The rule is `TIMING-9`, not `TIMING-1`.** The implementation log prints
+  "TIMING #1 Warning", which is a *count within the TIMING category*, not a
+  rule ID — `TIMING-1` is "Invalid Clock Waveform on Clock Modifying Block"
+  and waiving it does nothing. This cost a run to learn once already.
+- **It is design-wide, because it has to be.** `create_waiver` rejects
+  `-from`/`-to` for anything but `-type CDC` (Vivado_Tcl 4-903), so a
+  methodology waiver cannot be scoped to an instance. TIMING-9 is therefore
+  the build's only automatic alarm for an asynchronous crossing that genuinely
+  forgot its synchroniser, and it will not fire for a new one either. If
+  another clock domain is ever added, read `report_cdc` by hand: **Unsafe** and
+  **No ASYNC_REG** are the columns that matter, and both are zero today.
+
+The waiver lives in its own file with `USED_IN {implementation}` because
+methodology checks run after place and route — and because a waiver created in
+an interactive session does nothing for a run. It has to be in the build.
 
 ## Prerequisites
 
