@@ -22,10 +22,16 @@
 # adapter for. The DTM is a shift register and a small FSM, so the number only
 # has to be honest about the cable, not tight.
 #
-# Matched by instance name rather than by cell type because only one of the two
-# BSCANE2s has TCK connected. If riscv-dbg ever renames it, create_clock gets
-# an empty object list and stops the run, which is the right way to find out.
-set tck_pin [get_pins -quiet -hierarchical -filter {NAME =~ */i_tap_dtmcs/TCK}]
+# Found through the cell rather than by filtering every pin in the design on
+# its hierarchical name, which is what XDCB #1 asks for: `get_pins -hierarchical
+# -filter {NAME =~ ...}` walks the whole pin list, while -of_objects starts from
+# the one cell. The instance is named rather than selected by REF_NAME ==
+# BSCANE2 because there are two of them and only this one has TCK connected.
+#
+# If riscv-dbg ever renames it, create_clock gets an empty object list and stops
+# the run, which is the right way to find out.
+set tck_pin [get_pins -quiet -filter {REF_PIN_NAME == TCK} \
+                 -of_objects [get_cells -quiet -hierarchical i_tap_dtmcs]]
 if {[llength $tck_pin] != 1} {
     puts "ERROR: pynq_z2_cva5.xdc: expected 1 BSCANE2 TCK pin, found [llength $tck_pin]"
 }
