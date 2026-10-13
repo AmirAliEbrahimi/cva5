@@ -26,7 +26,10 @@ Software targets (this makefile):
 ```bash
 cd examples/sw
 make            # main.c -> main.elf -> program.hex   (sim image)
-make mif        # main.c -> main.elf -> mem.mif        (FPGA block-RAM image, no sim)
+make ram        # idle.S  -> idle.elf -> ram.mif       (the image the bitstream preloads)
+make app        # main.c  -> app.elf                   (linked for main RAM)
+make load       # build app.elf and write it to the board over JTAG
+make memtest    # build and run the main RAM test on the board
 make run        # build program.hex + sim, then run the sim
 make clean      # remove generated software files
 ```
@@ -67,13 +70,20 @@ are delegated to it, so the RTL build keeps a single source of truth.
   it the run never ends (and the buffered log never flushes).
 
 ## Notes
-- The shipped `mem.mif` is the prebuilt image; `make` regenerates an equivalent
-  `program.hex` from source (with clean LF endings).
-- Putting your build on the FPGA: `program.hex` and `mem.mif` are the same format
-  (one 32-bit word per line, what `$readmemh` and the `cva5_top` `LOCAL_MEM`
-  parameter expect). `make mif` regenerates `examples/sw/mem.mif` directly from
-  `main.c` with no simulator build; copy that to `vivado/ip_repo/src` and rebuild the Vivado project afterwards to bake
-  the new image into block RAM (see `examples/xilinx`).
+- Getting your build onto the FPGA, the normal way: `make load`. It links
+  `main.c` for main RAM, writes it over the debug module's system bus and
+  releases the core. No Vivado rebuild, no bitstream.
+- The other way is the preload. `ram.mif` is the image `$readmemh` bakes into
+  block RAM at configuration, named by `cva5_top`'s `LOCAL_MEM` parameter and
+  built by `make ram` from `idle.S` — a park loop that prints nothing, so a
+  freshly programmed board is silent and the UART carries only what you load.
+  Point `IDLE_SRCS` at something else, re-run `make ram`, and rebuild the
+  Vivado project to change what runs before the first load (see
+  `examples/xilinx`). `ram.mif` is generated and gitignored; `make clean`
+  deliberately leaves it alone, because losing it costs a Vivado rebuild.
+- `program.hex` and `ram.mif` are the same format (one 32-bit word per line)
+  but not interchangeable: `program.hex` is linked for the simulator's memory
+  and `ram.mif` for main RAM on the board.
 - This program loops forever printing "Hello World!" with a 1-second busy-wait.
   At RTL-sim speed (slower still with tracing) that's a long wait between lines.
   To iterate faster, shrink `usleep(1000*1000)` or `#define MHZ` in `main.c`, or

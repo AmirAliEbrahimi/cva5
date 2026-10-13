@@ -103,11 +103,11 @@ before spending a synthesis run — 216 and 131 checks. Both take their file
 lists from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so what is
 simulated is exactly what is synthesised.
 
-### Why the memory is still Xilinx
+### Replacing the memory behind AXI: three attempts that failed
 
-Replacing `axi_bram_ctrl` + `blk_mem_gen` was attempted twice and abandoned
-on measurement both times. Recorded here so it is not attempted a third time
-the same way:
+Putting the RAM behind an AXI slave, in place of `axi_bram_ctrl` +
+`blk_mem_gen`, was attempted three times and abandoned on measurement every
+time. Recorded so it is not attempted a fourth way:
 
 | attempt | WNS |
 |---------|-----|
@@ -116,11 +116,16 @@ the same way:
 | block RAM on CVA5's native `mem_interface` | −0.143 |
 | the same, with a registered read return | −0.316 |
 
-In both designs the failing path is the core's own fetch-to-predictor
+In all of them the failing path is the core's own fetch-to-predictor
 recurrence — I$ or BP tag read, tag compare, early branch flush, PC select,
-branch predictor table address — and it is routing-dominated, 56–74% of the
-budget. The Xilinx pair keeps that path shorter than anything hand-built
-here, and the reason was never established.
+branch predictor table address — routing-dominated at 56–74% of the budget.
+
+The resolution was not a better AXI slave. It was that the AXI memory path
+should not exist: upstream runs this core from local memory with both caches
+off, and once it does, the memory needs no bus master at all and the
+fetch-to-predictor recurrence is the only thing left of this path. See
+**Memory** above. The one bus master that remains is the debugger, which is
+why `cva5_ram_port` exists and why it is the shape it is.
 
 Things that were measured along the way, so they are not retried:
 
@@ -137,13 +142,70 @@ Things that were measured along the way, so they are not retried:
   placement-freedom problem.
 - 32 RAMB36 is the floor for 128 KB with byte enables, so the footprint
   cannot shrink without shrinking `RAM_SIZE`.
-- The JTAG domain is intentionally left unconstrained, which is why the build
-  reports ~247 critical warnings (`TIMING-17`). Constraining it creates a TCK
-  clock, and that in turn produces the CDC and clock-relationship warnings
-  that then want waiving. lowRISC's `ibex-demo-system` ships the same
-  `riscv-dbg` on this same part with a single `create_clock` on the input pin
-  and nothing else; this follows that. Note it does mean the debug domain is
-  untimed.
+
+### Timing: there is no single critical path
+
+The design closes at 100 MHz, and the number it closes by is not a score. On
+the routed run, **112 setup paths sit within 0.22 ns of WNS and over 1000
+within 1.0 ns** — the query hit its own `-max_paths` limit, so the real count
+is higher. Four consecutive builds produced four *different* worst paths, all
+inside 0.6 ns of each other:
+
+| build | worst path | arrival | WNS |
+|-------|-----------|---------|-----|
+| local memory, caches off | debugger → RAM enable | 8.831 | **+0.485** |
+| + buffered bus write | load-store → RAM enable | 9.157 | **+0.063** |
+| + core out of the W handshake | d_tlb → RAM write data | 8.571 | **+0.582** |
+| + JTAG clock constrained | fetch BRAM → branch predictor | 8.889 | **+0.378** |
+
+Which one reports as WNS is decided by placement, so fixing any one of them
+promotes the next. A change that re-places a few hundred registers re-deals
+the whole hand — the last row moved 0.2 ns on a constraint change that added
+no logic and touched nothing on the path that reported.
+
+**So judge a change here on two things: does the design still close, and does
+the worst path land in the RTL that changed.** Not on which way the number
+moved. A delta under ~0.25 ns is not evidence of anything.
+
+The current limiter is instruction fetch reading local memory, computing the
+next PC, and addressing the branch predictor's tag bank in one cycle. 4.33 ns
+of its 8.889 is spent before any logic runs: 2.454 ns of RAMB36 access plus
+1.879 ns getting out of a 32-block array. It is upstream's fetch path, and it
+exists in this shape because the core runs from local memory with no I$ —
+which is the configuration upstream ships.
+
+Hold is the one thing a slower clock cannot rescue: **WHS +0.028**, met but
+thin, and worth a glance after any change that moves placement.
+
+### The JTAG domain is constrained
+
+It was not, for a long time, and the build reported 243 `TIMING-17` critical
+warnings — every register in `i_dmi_jtag` reached by no timing clock at all.
+That is not cosmetic: a register with no clock has no requirement, so nothing
+stops the placer putting the two ends of the TAP's shift chain at opposite
+corners of the die. It worked because 10 MHz forgives almost anything on a
+part that closes at 100 MHz.
+
+Two constraints in `pynq_z2_cva5.xdc` fix it, and they have to go together:
+
+- `create_clock` at 100 ns on the `BSCANE2` TCK pin — the 10 MHz the OpenOCD
+  config asks the adapter for. Found through the cell, not by filtering every
+  pin in the design on its hierarchical name (`XDCB #1`).
+- `set_max_delay -datapath_only 10.000` between TCK and the system clock in
+  both directions. **Not** `set_clock_groups -asynchronous`, which was the
+  first attempt and was wrong: `cdc_2phase_clearable` states its own
+  requirement in its header — *"max_delay of min_period(src_clk_i, dst_clk_i)
+  through the paths async_req, async_ack, async_data"* — and marks those nets
+  `dont_touch` so they survive synthesis to be constrained. A clock group
+  removes the paths from analysis instead of bounding them, and the handshake
+  is only safe because `async_data` is held stable while a two-stage
+  synchroniser carries `async_req` across. That argument needs the data path
+  bounded. With the group in place `report_cdc` returned two Critical rows and
+  849 endpoint pairs it could not classify.
+
+The two cannot be combined: `set_clock_groups` outranks `set_max_delay` in
+Vivado's exception precedence, so leaving the group in would silently discard
+the bound and look like it had worked.
 
 ## Prerequisites
 
@@ -154,18 +216,42 @@ Things that were measured along the way, so they are not retried:
 
 ## Build (Vivado Tcl console, from the repo root)
 
+```sh
+make -C examples/sw ram                              # ram.mif, baked into the IP
+```
 ```tcl
 source ./examples/xilinx/package_as_ip_pynq_z2.tcl   ;# package CVA5 as IP
+source ./examples/xilinx/package_openhw_ips.tcl      ;# the open-hardware AXI blocks
 source ./examples/xilinx/pynq_z2_sys.tcl             ;# build the SoC + add the XDC
 ```
 
 Then in the GUI: **Generate Bitstream**, open the **Hardware Manager**, and
 program the device.
 
-The demo program is `examples/sw/mem.mif` (the `cva5_top` `LOCAL_MEM`
-parameter). To change it, rebuild the software under `examples/sw` and copy the
-generated `program.hex` over `examples/sw/mem.mif` as they share the same
-one-word-per-line hex format that `$readmemh` expects, then re-run the build.
+The image the bitstream preloads is `examples/sw/ram.mif`, named by `cva5_top`'s
+`LOCAL_MEM` parameter and built by `make -C examples/sw ram`. It is a park loop
+that prints nothing, so a freshly programmed board is silent. Programs are
+normally loaded over JTAG instead — `make -C examples/sw load` — which needs no
+Vivado rebuild at all; the preload only decides what runs before the first load.
+Point `IDLE_SRCS` at something else if you want the board to come up doing
+something.
+
+## What is tested, and how
+
+| check | command | covers |
+|-------|---------|--------|
+| crossbar | `sh test_benches/axi/run_xbar.sh` | 131 checks, decode and DECERR |
+| register cut | `sh test_benches/axi/run_cut.sh` | 216 checks |
+| RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
+| SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |
+| silent boot | program the board | the preload prints nothing |
+| debugger load | `make -C examples/sw load` | SBA block write, verify, release |
+| DM bring-up | `openocd … -c "init; p1_diag; shutdown"` | DM, SBA, RAM read/write over JTAG |
+| **all of main memory** | `make -C examples/sw memtest` | **the only thing that addresses all 128 KB**, so the only thing that reaches cascade rows above the first. Prints on the serial console, not the terminal |
+| QEMU parity | `tools/cva5-qemu` | same reset vector and map as the board |
+
+Run the four simulation checks before spending a synthesis run. All of the
+above pass on the current design.
 
 ## Pin map (`xc7z020clg400-1`)
 
