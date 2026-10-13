@@ -2,7 +2,8 @@
 # CVA5 SoC block design for the PYNQ-Z2
 #
 # Builds a CVA5 (RISC-V) soft SoC that runs a demo application from block
-# memory, with an AXI UART Lite for I/O. A single slide switch (SW0) drives
+# memory inside the core, with an AXI UART Lite for I/O. A single slide
+# switch (SW0) drives
 # the system reset.
 #
 # Install the PYNQ-Z2 / Digilent board support files before running:
@@ -51,6 +52,8 @@ connect_bd_net [get_bd_pins clk_wiz_0/locked]   [get_bd_pins proc_sys_reset_0/dc
 
 # ---- Processor ------------------------------------------------------------
 create_bd_cell -type ip -vlnv xilinx.com:user:cva5_top:1.0 cva5_top_0
+# 128 KB of local memory, preloaded with the image examples/sw builds.
+set_property -dict [list CONFIG.WORDS {32768} CONFIG.LOCAL_MEM {ram.mif}] [get_bd_cells cva5_top_0]
 # Core clock + active-low reset (cva5_top exposes 'clk' and 'rstn').
 connect_bd_net [get_bd_pins cva5_top_0/clk]  [get_bd_pins clk_wiz_0/clk_out1]
 connect_bd_net [get_bd_pins cva5_top_0/rstn] [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
@@ -65,31 +68,22 @@ set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
 connect_bd_net $sys_clk  [get_bd_pins axi_uartlite_0/s_axi_aclk]
 connect_bd_net $sys_rstn [get_bd_pins axi_uartlite_0/s_axi_aresetn]
 
-# ---- Main RAM: AXI BRAM, 128 KB at 0x4000_0000 -----------------------------
-# Programs run from here: the CPU reaches it through its caches (m_axi_mem),
-# the debugger loads it over SBA (m_axi_dbg).
-create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 axi_bram_ctrl_0
-set_property -dict [list CONFIG.SINGLE_PORT_BRAM {1} CONFIG.DATA_WIDTH {32}] [get_bd_cells axi_bram_ctrl_0]
-apply_bd_automation -rule xilinx.com:bd_rule:bram_cntlr -config {BRAM "Auto"} \
-  [get_bd_intf_pins axi_bram_ctrl_0/BRAM_PORTA]
-# Memory depth follows the 128 KB address range assigned below.
-connect_bd_net $sys_clk  [get_bd_pins axi_bram_ctrl_0/s_axi_aclk]
-connect_bd_net $sys_rstn [get_bd_pins axi_bram_ctrl_0/s_axi_aresetn]
-
-# ---- Register slice on the cached path --------------------------------------
-# cva5_axi_cut wraps pulp-platform's axi_cut and replaces Xilinx's
-# axi_register_slice.
+# ---- Main RAM ---------------------------------------------------------------
+# There is no memory IP here any more. Main memory is a 128 KB true dual-port
+# block RAM inside cva5_top, inferred from RTL -- no axi_bram_ctrl, no
+# blk_mem_gen. Instruction fetch owns one port and load/store the other, both a
+# single cycle away, which is why the core needs no caches: the data cache used
+# to sit in front of this same on-chip RAM and paid for it with the worst path
+# in the SoC.
 #
-# It is load bearing, measured: removing it costs 0.321 ns, and the path that
-# then fails runs from the crossbar's read skid buffer into the branch
-# predictor's table. The read channel is the reason -- the crossbar runs in
-# LatencyMode CUT_SLV_AX, which registers AW and AR only, so R is fall-through
-# from the RAM all the way to the slave port, and CVA5's cache feeds rvalid
-# straight into the fetch path. This cut terminates that.
-create_bd_cell -type ip -vlnv xilinx.com:user:cva5_axi_cut:1.0 slice_mem
-connect_bd_net $sys_clk  [get_bd_pins slice_mem/clk]
-connect_bd_net $sys_rstn [get_bd_pins slice_mem/rstn]
-connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_mem] [get_bd_intf_pins slice_mem/s_axi]
+# The register slice on the cached path went with the caches. It was load
+# bearing while it existed -- removing it cost 0.321 ns, because the crossbar
+# runs in LatencyMode CUT_SLV_AX and left R fall-through into the fetch path --
+# but there is no cached path left for it to cut.
+#
+# The debugger still has to reach the RAM to load programs, so cva5_top exposes
+# an AXI4-Lite slave that takes the cycles the core's load-store unit leaves
+# idle. The crossbar's RAM port drives it, below.
 
 # ---- Crossbar -------------------------------------------------------------
 # cva5_axi_xbar wraps pulp-platform's axi_xbar and replaces Xilinx's AXI
@@ -110,10 +104,13 @@ connect_bd_net $sys_clk  [get_bd_pins axi_xbar_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins axi_xbar_0/rstn]
 
 connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi]     [get_bd_intf_pins axi_xbar_0/s_axi_cpu]
-connect_bd_intf_net [get_bd_intf_pins slice_mem/m_axi]      [get_bd_intf_pins axi_xbar_0/s_axi_mem]
 connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg] [get_bd_intf_pins axi_xbar_0/s_axi_dbg]
 
-connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_ram]    [get_bd_intf_pins axi_bram_ctrl_0/S_AXI]
+# The crossbar keeps its third slave port for now; nothing drives it since the
+# cached master is gone. Shrinking it to two is a separate change, kept out of
+# this one so the memory rework is measured on its own.
+
+connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_ram]    [get_bd_intf_pins cva5_top_0/s_axi_ram]
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_periph] [get_bd_intf_pins axi_uartlite_0/S_AXI]
 
 # ---- Address map ----------------------------------------------------------
@@ -132,8 +129,8 @@ proc cva5_seg {args} {
     return ""
 }
 
-set ram_seg [cva5_seg {axi_xbar_0/m_axi_ram/SEG_axi_bram_ctrl_0_Mem0} \
-                      {axi_xbar_0/m_axi_ram/SEG_axi_bram_ctrl_0_reg0}]
+set ram_seg [cva5_seg {axi_xbar_0/m_axi_ram/SEG_cva5_top_0_Reg} \
+                      {axi_xbar_0/m_axi_ram/SEG_cva5_top_0_reg0}]
 if {$ram_seg eq ""} { error "the crossbar's RAM port has no address segment" }
 set_property offset 0x40000000 $ram_seg
 set_property range  128K       $ram_seg

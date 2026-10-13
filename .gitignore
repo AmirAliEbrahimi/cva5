@@ -2,3 +2,4 @@ test_benches/verilator/build
 vivado/
 qemu-build/
 build/
+examples/sw/ram.mif

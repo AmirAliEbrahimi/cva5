@@ -132,7 +132,7 @@ The example program has its own targets:
 
 ```bash
 cd examples/sw
-make boot     # boot.mif, the ROM image baked into the bitstream (before building it)
+make ram      # ram.mif, the image the bitstream preloads into main memory
 make load     # build app.elf and write it into RAM over JTAG, then start the CPU
 ```
 

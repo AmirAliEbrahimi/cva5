@@ -4,7 +4,7 @@
 #
 #  Software targets (this makefile):
 #    make / make program   build program.hex (sim image) from main.c
-#    make boot             build boot.mif, the FPGA boot ROM image
+#    make ram              build ram.mif, the image the bitstream preloads
 #    make app              build app.elf, linked for main RAM at 0x4000_0000
 #    make load             build app.elf and load it onto the board over JTAG
 #                          (no bitstream rebuild; see examples/xilinx/openocd)
@@ -65,19 +65,23 @@ DETERMINISTIC ?= 0
 CVA5_MAK = $(MAKE) -C $(CVA5_DIR) -f tools/cva5.mak \
            CVA5_DIR=$(CVA5_DIR) TRACE_ENABLE=$(TRACE_ENABLE) DETERMINISTIC=$(DETERMINISTIC)
 
-# --- FPGA: boot ROM + application in main RAM ------------------------------
-# The boot ROM is baked into the bitstream and only jumps to the application.
-# The application lives in AXI BRAM and is loaded by the debugger over SBA, so
-# changing software never needs a Vivado rebuild.
-BOOT_BASE   ?= 0x80000000
-BOOT_SIZE   ?= 1024
+# --- FPGA: main RAM image and the application ------------------------------
+# Main memory is 128 KB of block RAM inside the core, and the reset vector
+# points at the bottom of it, so there is no separate boot ROM: the CPU starts
+# executing whatever is there.
+#
+# ram.mif is the image the bitstream preloads, so a freshly programmed board
+# runs something without a debugger attached. `make load` then writes a
+# different program over JTAG and never needs a Vivado rebuild -- the preload
+# only decides what runs before the first load.
+RAM_WORDS   ?= 32768
 APP_BASE    ?= 0x40000000
 APP_LDSCRIPT := fpga_link.ld
 ELF2TCL     := $(CVA5_DIR)/tools/elf-to-load-tcl.py
 OPENOCD     ?= openocd
 OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 
-.PHONY: all program boot app load memtest sim run clean lint lint-full clean-cva5-sim
+.PHONY: all program ram app load memtest sim run clean lint lint-full clean-cva5-sim
 all: program
 program: program.hex
 
@@ -87,14 +91,20 @@ main.elf: $(SRCS) $(LDSCRIPT)
 program.hex: main.elf
 	python3 $(ELF2HW) $(CROSS) $(BASE_ADDR) $(RAM_SIZE) $< program.hex program.sim
 
-boot: boot.mif
+ram: ram.mif
 app: app.elf
 
-boot.elf: boot.S boot_link.ld
-	$(CC) -march=$(ARCH) -mabi=$(ABI) -nostdlib -Wl,--build-id=none -T boot_link.ld boot.S -o $@
+# The preload parks in a loop and prints nothing, so a board that has just been
+# programmed is silent and the UART carries only what you load. Point this at
+# another program if you want the board to come up doing something.
+IDLE_SRCS := idle.S
 
-boot.mif: boot.elf
-	python3 $(ELF2HW) $(CROSS) $(BOOT_BASE) $(BOOT_SIZE) $< boot.mif boot.sim
+idle.elf: $(IDLE_SRCS) $(APP_LDSCRIPT)
+	$(CC) -march=$(ARCH) -mabi=$(ABI) -nostdlib -Wl,--build-id=none \
+	      -T $(APP_LDSCRIPT) $(IDLE_SRCS) -o $@
+
+ram.mif: idle.elf
+	python3 $(ELF2HW) $(CROSS) $(APP_BASE) $$(( $(RAM_WORDS) * 4 )) $< ram.mif ram.sim
 
 app.elf: $(SRCS) $(APP_LDSCRIPT)
 	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(SRCS) -lgcc -o $@
@@ -134,10 +144,10 @@ run: program.hex sim
 
 clean:
 	rm -f main.elf program.hex program.sim \
-	      app.elf app.elf.bin load.tcl boot.elf boot.sim \
+	      app.elf app.elf.bin load.tcl idle.elf ram.sim \
 	      memtest.elf memtest.tcl \
 	      main.elf.rawbinary main.elf.dissasembled \
 		  trace.fst.hier \
 	      $(LOG) $(SIG) $(TRACE)
-# Note: boot.mif is NOT removed here — the bitstream is built from it, so
-# losing it would mean a Vivado rebuild. `make boot` regenerates it.
+# Note: ram.mif is NOT removed here — the bitstream is built from it, so
+# losing it would mean a Vivado rebuild. `make ram` regenerates it.

@@ -1,7 +1,7 @@
 # CVA5 on the PYNQ-Z2
 
 Builds a CVA5 (RV32IM) soft SoC that runs the `examples/sw` demo program from
-block RAM, with an AXI UART Lite for console output. A single slide switch
+block RAM inside the core, with an AXI UART Lite for console output. A single slide switch
 (SW0) drives the system reset. This mirrors the existing Nexys A7 example.
 
 ## Files (in `examples/xilinx/`)
@@ -25,9 +25,48 @@ measured to cost nothing against the all-Xilinx baseline of **WNS +0.107** at
 | `axi_bram_ctrl` + `blk_mem_gen` | *kept* — see below | — |
 | `clk_wiz` | *kept* — the MMCM is a hard block | — |
 
+### Memory
+
+Main memory is 128 KB of **true dual-port block RAM inside `cva5_top`**,
+inferred from `tdp_ram.sv` — no `axi_bram_ctrl`, no `blk_mem_gen`, no Xilinx
+memory IP at all. Instruction fetch owns one port and load/store the other, so
+both are a single cycle away and **neither cache is enabled**.
+
+That is how upstream configures this core, and it is how lowRISC's
+ibex-demo-system is built: a `ram_2p` with fetch on one port and everything
+else on the other. The caches were ours, and they were expensive. The data
+cache sat in front of on-chip RAM that was already a few cycles away and paid
+for it with the worst path in the SoC — tag RAM output, into the hit
+comparator's carry chain, into the store queue's attribute RAM *address*. The
+register slice on the cached path, itself load bearing at 0.321 ns, existed
+only to cut the burst path the instruction cache created. All of it is gone.
+
+The reset vector is the bottom of RAM, so there is no separate boot ROM
+either. `make ram` builds the preload image the bitstream bakes in. It is a park loop
+that prints nothing, so a freshly programmed board is silent and the UART
+carries only what you load over JTAG.
+
+The debugger still has to reach that RAM to load programs, and the local
+memory interface has no handshake — the core raises `en` and expects its data
+next cycle, with no way to be told to wait. So `cva5_ram_port` sits in front
+of the load/store port and gives the debugger only the cycles the core leaves
+idle. The core can never be stalled by it; the debugger can always wait, since
+SBA is paced by JTAG. During `make load` the core is in reset and every cycle
+is idle.
+
+`cva5_ram_port` is a full AXI4 slave rather than AXI4-Lite, because the
+crossbar's RAM port is AXI4 and a block design will not join the two
+protocols. SBA only ever issues single beats, but handling bursts costs little
+and is what a future master on that port would want.
+
+The crossbar still has its third slave port, unconnected now that the cached
+master is gone. Shrinking it is a separate change, deliberately not folded in
+here so this one can be measured on its own.
+
 Build order from the repository root:
 
 ```tcl
+# make -C examples/sw ram                            ;# ram.mif, baked into the IP
 source ./examples/xilinx/package_as_ip_pynq_z2.tcl   ;# CVA5 core as IP
 source ./examples/xilinx/package_openhw_ips.tcl      ;# the two AXI blocks
 source ./examples/xilinx/pynq_z2_sys.tcl             ;# the SoC block design

@@ -14,6 +14,11 @@
 # blocks a PL-only SoC cannot provide itself stay Xilinx: the MMCM (clk_wiz).
 #==============================================================================
 
+# Sourced twice in one interactive Vivado session, `dict set` would add to
+# whatever these already held, and an IP removed from this file would go on
+# being packaged from the stale copy in memory. Start from nothing.
+unset -nocomplain openhw_ips openhw_busifs openhw_sim_only
+
 set openhw_repo ./vivado/ip_repo_openhw
 
 # Each entry: IP name -> source files, in compile order: packages and leaf

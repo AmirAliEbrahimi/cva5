@@ -4,7 +4,6 @@
 #
 #   tools/cva5-qemu examples/sw/hello.c   build and run
 #   tools/cva5-qemu -g examples/sw/hello.c   wait for GDB on port 1234
-#   tools/cva5-qemu --rom examples/sw/hello.c run the real boot ROM first
 #   tools/cva5-qemu --elf app.elf        run an existing binary
 #
 # Needs a QEMU with the cva5-pynq machine: run tools/build-qemu once. Set
@@ -33,7 +32,6 @@ ARGS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -g|--gdb)   WITH_GDB=1 ;;
-        --rom)      WITH_ROM=1 ;;
         --elf)      ELF=$2; shift ;;
         -o|--out)   OUT=$2; shift ;;
         -h|--help)  sed -n '3,14p' "$0" | sed 's/^#=*$//; s/^# \{0,1\}//'; exit 0 ;;
@@ -53,15 +51,6 @@ if [ -z "$ELF" ]; then
 fi
 
 QFLAGS="-M cva5-pynq -nographic -kernel $ELF"
-
-if [ "$WITH_ROM" = 1 ]; then
-    BOOT=$OUT/boot.elf
-    mkdir -p "$OUT"
-    "${CROSS:-riscv64-unknown-elf-}gcc" -march=rv32im -mabi=ilp32 -nostdlib \
-        -Wl,--build-id=none -T "$ROOT/examples/sw/boot_link.ld" \
-        "$ROOT/examples/sw/boot.S" -o "$BOOT"
-    QFLAGS="$QFLAGS -bios $BOOT"
-fi
 
 if [ "$WITH_GDB" = 1 ]; then
     echo "==> QEMU is stopped at the reset vector, waiting for GDB on port 1234."

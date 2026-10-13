@@ -5,10 +5,10 @@
 
 | Address       | Size    | What                                      |
 |---------------|---------|-------------------------------------------|
-| `0x4000_0000` | 128 KiB | main RAM; programs run from here          |
+| `0x4000_0000` | 128 KiB | main RAM; the reset vector, programs run here |
 | `0x5000_0000` | 4 KiB   | Debug Module window (not modelled)        |
 | `0x6000_0000` |         | AXI UART Lite                             |
-| `0x8000_0000` | 1 KiB   | boot ROM, the reset vector                |
+
 
 The CPU is RV32IM, machine mode only, matching the wrapper's `CPU_CONFIG`
 (`misa` reads `0x40001100` on hardware). Programs built by `tools/cva5-run` run
@@ -43,7 +43,6 @@ git apply /path/to/cva5/qemu/0001-cva5-pynq-machine.patch
 
 ```bash
 tools/cva5-qemu examples/sw/hello.c          # build and run
-tools/cva5-qemu --rom examples/sw/hello.c    # boot ROM first, banner and all
 tools/cva5-qemu -g examples/sw/hello.c       # stop and wait for GDB
 ```
 
@@ -51,7 +50,6 @@ Ctrl-A X quits QEMU. Or drive QEMU directly:
 
 ```bash
 qemu-system-riscv32 -M cva5-pynq -nographic -kernel app.elf
-qemu-system-riscv32 -M cva5-pynq -nographic -bios boot.elf -kernel app.elf
 qemu-system-riscv32 -M cva5-pynq -nographic -kernel app.elf -s -S   # wait for gdb
 ```
 
