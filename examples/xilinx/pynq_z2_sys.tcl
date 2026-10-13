@@ -82,8 +82,10 @@ connect_bd_net $sys_rstn [get_bd_pins axi_uartlite_0/s_axi_aresetn]
 # but there is no cached path left for it to cut.
 #
 # The debugger still has to reach the RAM to load programs, so cva5_top exposes
-# an AXI4-Lite slave that takes the cycles the core's load-store unit leaves
-# idle. The crossbar's RAM port drives it, below.
+# an AXI4 slave that takes the cycles the core's load-store unit leaves idle.
+# Full AXI4 rather than Lite because the crossbar's RAM port is AXI4 and a block
+# design will not join the two protocols. The crossbar's RAM port drives it,
+# below.
 
 # ---- Crossbar -------------------------------------------------------------
 # cva5_axi_xbar wraps pulp-platform's axi_xbar and replaces Xilinx's AXI
@@ -97,8 +99,9 @@ connect_bd_net $sys_rstn [get_bd_pins axi_uartlite_0/s_axi_aresetn]
 # links, not decoding.
 #
 #   m_axi      -> s_axi_cpu    peripherals only
-#   m_axi_mem  -> s_axi_mem    RAM only (through the register slice)
-#   m_axi_dbg  -> s_axi_dbg    both
+#   m_axi_dbg  -> s_axi_dbg    RAM and peripherals
+#
+# s_axi_mem was the cached master's port and nothing drives it now; see below.
 create_bd_cell -type ip -vlnv xilinx.com:user:cva5_axi_xbar:1.0 axi_xbar_0
 connect_bd_net $sys_clk  [get_bd_pins axi_xbar_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins axi_xbar_0/rstn]

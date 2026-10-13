@@ -9,7 +9,7 @@
 #    make load             build app.elf and load it onto the board over JTAG
 #                          (no bitstream rebuild; see examples/xilinx/openocd)
 #    make memtest          build and run the main RAM test on the board. The
-#                          only test that exercises the cached path; result
+#                          only thing that addresses all 128 KB; the result
 #                          appears on the serial console, not here.
 #    make run             build program.hex + sim, then run the sim
 #    make clean           remove generated software files
@@ -117,8 +117,9 @@ load: load.tcl
 	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
 	           -f load.tcl -c "init; load_program; shutdown"
 
-# Main RAM test. Same flow as 'load', different image. The pass or fail line
-# comes out on the serial console; this target only reports the load.
+# Main RAM test. Same flow as 'load', different image: the test runs on the
+# CPU once the debugger releases it, so the pass or fail line comes out on the
+# serial console and this target only reports the load.
 memtest.elf: $(MEMTEST_SRCS) $(APP_LDSCRIPT)
 	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(MEMTEST_SRCS) -lgcc -o $@
 

@@ -1,23 +1,28 @@
 /*
  * Main RAM test, run on the CPU.
  *
- * This is the only test that exercises the cached path -- the core's
- * mem_interface, through cva5_axi_cut and the crossbar's s_axi_mem port, to
- * the memory. Everything reachable over JTAG goes through the debug module's
- * system bus access instead, which takes a different crossbar port entirely,
- * and the Hello World demo is 200 bytes: a handful of cache lines, no
- * writebacks worth the name.
+ * This is the only thing that reads and writes all 128 KB of main memory. The
+ * Hello World demo is 200 bytes and lives at the bottom of it, so without this
+ * the great majority of the array is never addressed by anything: the memory
+ * is 32 block RAMs, eight deep in the cascade and four wide, and a test that
+ * touches only the first few kilobytes proves one row of them.
+ *
+ * It also covers the only two things between the core and that array --
+ * cva5_ram_port's byte-enable and address muxes -- from the core's side.
+ * The bus side of the same muxes is covered on the way in, since `make
+ * memtest` puts this program there over the debug module's system bus access.
  *
  * Three passes, each aimed at something specific:
  *
- *   1. address-in-address and its inverse over 92 KB. The D$ is 8 KB,
- *      direct-mapped with 16-byte lines, so a walk this size evicts every
- *      line many times over -- burst line fills in one direction and dirty
- *      writebacks in the other.
- *   2. byte stores over 4 KB, which is the only way to put partial wstrb
- *      on the bus from software.
+ *   1. address-in-address and its inverse over 92 KB, so every word in the
+ *      region is written, read back, and then written again with the opposite
+ *      value: a stuck bit or a cascade row that decodes wrongly shows up as a
+ *      mismatch whichever way it is stuck.
+ *   2. byte stores over 4 KB, which is the only way to put partial byte
+ *      enables on the RAM from software.
  *   3. a strided walk, 64 interleaved sequences 4 KB apart, so consecutive
- *      accesses always miss and the fill/writeback pair never gets to batch.
+ *      accesses land in different cascade rows rather than marching through
+ *      one of them.
  *
  * The region is 0x40008000-0x4001F000: clear of the program at the base of
  * RAM, and 4 KB below _stack_top at 0x40020000.

@@ -72,10 +72,12 @@ dict set openhw_ips cva5_axi_xbar {
 # SIMULATION ONLY -- not packaged, not in the block design.
 #
 # cva5_axi_ram was an attempt to replace axi_bram_ctrl + blk_mem_gen with
-# ZipCPU's demofull plus an inferred block-RAM array. It works, and its
-# testbench passes, but it costs 0.13 ns of setup slack against the Xilinx
-# pair on this part at 100 MHz, so the block design keeps the Xilinx IPs.
-# See README.pynq_z2.md for the measurements.
+# ZipCPU's demofull plus an inferred block-RAM array. It works and its
+# testbench passes, but it cost 0.13 ns of setup slack against the Xilinx pair
+# on this part at 100 MHz, so the block design kept the Xilinx IPs. That
+# question is now moot in both directions: main memory moved inside the core
+# as a tdp_ram driven by the local memory interface, and the block design has
+# no memory IP of any kind. See README.pynq_z2.md for the measurements.
 #
 # The file list stays here so tools/ip-filelist.py can build the crossbar
 # testbench's source list -- tb_axi_xbar uses this as its memory slave, which
