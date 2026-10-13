@@ -155,12 +155,17 @@ update_compile_order -fileset sources_1
 # Save the XDC next to the project and point this at it.
 add_files -fileset constrs_1 -norecurse ./examples/xilinx/pynq_z2_cva5.xdc
 
-# The methodology waiver goes in its own file, restricted to implementation:
-# methodology checks run after place and route, and a waiver created in an
-# interactive session does nothing for a run -- it has to be in the build.
-add_files -fileset constrs_1 -norecurse ./examples/xilinx/pynq_z2_waivers.xdc
+# The JTAG clock, its clock-domain crossing and the waiver for the methodology
+# check they provoke go in a second file, restricted to implementation. They
+# all name cells inside cva5_top, which is a packaged IP synthesised out of
+# context: during top-level synthesis that hierarchy is a black box, so every
+# query in there returns nothing and the constraints fail with "No valid
+# object(s) found" even though the implementation run resolves them fine. And a
+# waiver created in an interactive session does nothing for a run -- it has to
+# be in the build.
+add_files -fileset constrs_1 -norecurse ./examples/xilinx/pynq_z2_jtag.xdc
 set_property USED_IN {implementation} \
-    [get_files ./examples/xilinx/pynq_z2_waivers.xdc]
+    [get_files ./examples/xilinx/pynq_z2_jtag.xdc]
 
 #---- Close the project ----------------------------------------------------------
 close_project

@@ -10,8 +10,8 @@ block RAM inside the core, with an AXI UART Lite for console output. A single sl
 |-------------------------------|-------------------------------------------------------------------------|
 | `package_as_ip_pynq_z2.tcl`   | packages the CVA5 core as a Vivado IP into `./vivado/ip_repo`            |
 | `pynq_z2_sys.tcl`             | builds the SoC block design (clock, reset, CVA5, AXI UART Lite) + XDC    |
-| `pynq_z2_cva5.xdc`            | pins (reset switch, PMOD UART) and the JTAG clock and CDC constraints    |
-| `pynq_z2_waivers.xdc`         | the TIMING-9 methodology waiver (implementation only)                   |
+| `pynq_z2_cva5.xdc`            | pins only — reset switch and PMOD UART                                  |
+| `pynq_z2_jtag.xdc`            | JTAG clock, its CDC constraints, TIMING-9 waiver (implementation only)  |
 
 ## Open-hardware AXI blocks
 
@@ -245,9 +245,23 @@ Two things about that waiver worth knowing before touching it:
   another clock domain is ever added, read `report_cdc` by hand: **Unsafe** and
   **No ASYNC_REG** are the columns that matter, and both are zero today.
 
-The waiver lives in its own file with `USED_IN {implementation}` because
-methodology checks run after place and route — and because a waiver created in
-an interactive session does nothing for a run. It has to be in the build.
+All of this lives in `pynq_z2_jtag.xdc` with `USED_IN {implementation}`, and
+that scoping is load bearing. Every query in that file names a cell inside
+`cva5_top`, which is a packaged IP synthesised out of context: during top-level
+synthesis the whole hierarchy is a black box, so `get_cells -hierarchical
+i_tap_dtmcs` returns nothing and `create_clock` and `set_clock_groups` fail with
+*"No valid object(s) found"* — while the implementation run, reading the same
+file against the full netlist, resolves them fine. Unscoped, the file works and
+complains at you every synthesis run. The waiver has the same requirement for a
+different reason: methodology checks run after place and route, and a waiver
+created in an interactive session does nothing for a run at all.
+
+One more XDC constraint that is easy to get wrong: **there is no control flow
+in an XDC.** `set` is allowed; `if` is rejected outright with *"Command 'if' is
+not supported in the xdc constraint file"*. Guards like `if {[llength $x] != 1}`
+silently do nothing useful — and nothing is lost by dropping them, because
+`create_clock` and `set_bus_skew` both fail loudly on an empty collection,
+which is all the guard was there to say.
 
 ## Prerequisites
 
