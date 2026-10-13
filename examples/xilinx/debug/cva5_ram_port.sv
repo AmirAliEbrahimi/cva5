@@ -31,6 +31,23 @@
  * straight through from the RAM's own output register, so the core sees no
  * added latency: in the cycle it reads, it is the one that held the port.
  *
+ * Write data is buffered one beat before it reaches the RAM, and nothing on
+ * the bus side drives the RAM combinationally. That costs the bus a cycle of
+ * latency and is the only thing here that exists for timing rather than for
+ * function. The enable and byte-write pins of a 128 KB inferred RAM are a
+ * 32-deep array of RAMB36s: wbe arrives at eight of them through a net with
+ * eight loads. Letting `wvalid` and `wstrb` reach that fanout directly put the
+ * crossbar's AW/W arbitration -- the demux select register, the in-flight
+ * counter, the mux's W arbiter, eight levels of logic in all -- in front of
+ * it, and made the worst path in the SoC a debugger write: 8.831 ns, 81% of
+ * it routing. Latching the beat here cuts the array's fanout off that chain
+ * and leaves the bus side one flop away from the RAM.
+ *
+ * The cycle it costs buys nothing back for the core and cannot be noticed by
+ * the bus. The port still takes a beat per cycle at full rate, because a
+ * pending beat retires in the same cycle the next one is accepted; only the
+ * first beat and the B response move one cycle later.
+ *
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -103,6 +120,14 @@ module cva5_ram_port #(
     logic [7:0] beats_left;
     logic [ID_WIDTH-1:0] cur_id;
 
+    //The one buffered write beat. `cur_addr` is its address: it advances when
+    //the beat retires into the RAM, not when it is accepted, so it names the
+    //access the RAM is being given this cycle in both directions.
+    logic wr_pend;
+    logic wr_last;
+    logic [3:0] wr_strb;
+    logic [31:0] wr_data;
+
     // The core takes the port whenever it asks for it; the bus gets what is
     // left. This is the whole arbitration policy.
     logic port_free;
@@ -110,30 +135,39 @@ module cva5_ram_port #(
 
     assign s_axi_awready = (state == IDLE) & s_axi_awvalid;
     assign s_axi_arready = (state == IDLE) & s_axi_arvalid & ~s_axi_awvalid;
-    assign s_axi_wready = (state == WRITE) & port_free;
+
+    //Room for a beat: either the buffer is empty, or the beat in it is going
+    //into the RAM this cycle. Closed after the last beat of the burst, so a
+    //master that leaves wvalid high cannot be given a beat the burst did not
+    //ask for.
+    assign s_axi_wready = (state == WRITE) & ~wr_last & (~wr_pend | port_free);
 
     assign s_axi_bresp = 2'b00;   //the RAM always answers
     assign s_axi_rresp = 2'b00;
     assign s_axi_bid = cur_id;
     assign s_axi_rid = cur_id;
 
+    //Both of these are registers and `port_free` -- no bus signal reaches the
+    //RAM's pins. That is the point of the buffer.
     logic bus_writes, bus_reads;
-    assign bus_writes = (state == WRITE) & s_axi_wvalid & port_free;
+    assign bus_writes = wr_pend & port_free;
     assign bus_reads = (state == READ) & port_free;
 
     assign ram_en = core_en | bus_writes | bus_reads;
     assign ram_addr = core_en ? core_addr : cur_addr;
-    assign ram_wdata = core_en ? core_wdata : s_axi_wdata;
-    assign ram_wbe = core_en ? core_be : (bus_writes ? s_axi_wstrb : 4'h0);
+    assign ram_wdata = core_en ? core_wdata : wr_data;
+    assign ram_wbe = core_en ? core_be : (bus_writes ? wr_strb : 4'h0);
 
     // Only ever sampled by the core in a cycle it held the port.
     assign core_rdata = ram_rdata;
 
-    // Only the three things that must come up idle are reset: the state and the
-    // two response valids, which are outputs that may not assert on their own.
-    // Everything else here is datapath -- the address, the beat count, the ID
-    // and the read data are all loaded from a request before anything reads
-    // them, so their value out of reset is never observed.
+    // Only the things that must come up idle are reset: the state, the two
+    // response valids, which are outputs that may not assert on their own, and
+    // the write buffer's two control bits -- a stale wr_pend out of reset
+    // would write a word into the RAM nobody asked for. Everything else here
+    // is datapath -- the address, the beat count, the ID, the buffered write
+    // data and the read data are all loaded from a request before anything
+    // reads them, so their value out of reset is never observed.
     //
     // That is not tidiness. On a 7-series part the reset is part of a slice's
     // control set, and flops that carry one cannot share a slice with flops
@@ -145,6 +179,8 @@ module cva5_ram_port #(
             state <= IDLE;
             s_axi_bvalid <= 0;
             s_axi_rvalid <= 0;
+            wr_pend <= 0;
+            wr_last <= 0;
         end
         else begin
             case (state)
@@ -163,14 +199,29 @@ module cva5_ram_port #(
                     end
                 end
 
-                //One beat per cycle the core leaves idle. The write itself is
-                //the combinational ram_* above; this only advances.
-                WRITE : if (s_axi_wvalid & port_free) begin
-                    cur_addr <= cur_addr + 1;
-                    beats_left <= beats_left - 1;
-                    if (s_axi_wlast) begin
-                        s_axi_bvalid <= 1;
-                        state <= WRESP;
+                //One beat per cycle the core leaves idle: the buffered beat
+                //goes into the RAM and the next is accepted in its place. The
+                //two branches are written as separate ifs and in this order
+                //on purpose -- an accept in the same cycle as a retire must
+                //leave wr_pend set, which the later assignment does. They can
+                //never disagree about wr_last: a retire only looks at it when
+                //it is set, and an accept is only offered when it is clear.
+                WRITE : begin
+                    if (wr_pend & port_free) begin
+                        wr_pend <= 0;
+                        cur_addr <= cur_addr + 1;
+                        if (wr_last) begin
+                            wr_last <= 0;
+                            s_axi_bvalid <= 1;
+                            state <= WRESP;
+                        end
+                    end
+                    if (s_axi_wvalid & s_axi_wready) begin
+                        wr_pend <= 1;
+                        wr_last <= s_axi_wlast;
+                        wr_data <= s_axi_wdata;
+                        wr_strb <= s_axi_wstrb;
+                        beats_left <= beats_left - 1;
                     end
                 end
 
