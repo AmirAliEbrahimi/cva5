@@ -135,12 +135,12 @@ proc cva5_seg {args} {
 set ram_seg [cva5_seg {axi_xbar_0/m_axi_ram/SEG_cva5_top_0_Reg} \
                       {axi_xbar_0/m_axi_ram/SEG_cva5_top_0_reg0}]
 if {$ram_seg eq ""} { error "the crossbar's RAM port has no address segment" }
-set_property offset 0x40000000 $ram_seg
+set_property offset 0x80000000 $ram_seg
 set_property range  128K       $ram_seg
 
 set uart_seg [cva5_seg {axi_xbar_0/m_axi_periph/SEG_axi_uartlite_0_Reg}]
 if {$uart_seg eq ""} { error "the crossbar's peripheral port has no address segment" }
-set_property offset 0x60000000 $uart_seg
+set_property offset 0x10000000 $uart_seg
 set_property range  64K        $uart_seg
 
 # ---- Finalise -------------------------------------------------------------

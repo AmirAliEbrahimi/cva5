@@ -22,7 +22,7 @@ in the `docs` directory.
 >   (see [Quick Start: Simulation](#quick-start-simulation) and
 >   [`examples/sw/README.build.md`](examples/sw/README.build.md));
 > - RISC-V external debug support (debug mode, `dcsr`/`dpc`/`dscratch`, `dret`,
->   single-step) and a PYNQ-Z2 system that runs programs from AXI block RAM, so software
+>   single-step) and a PYNQ-Z2 system that runs programs from on-chip block RAM, so software
 >   can be loaded and debugged over JTAG without rebuilding the bitstream (see
 >   [Debugging on the PYNQ-Z2](#debugging-on-the-pynq-z2)).
 >
@@ -98,7 +98,7 @@ make -f tools/cva5.mak CVA5_DIR="$PWD" lint-full   # lint with -Wall
 ## Debugging on the PYNQ-Z2
 
 The PYNQ-Z2 system boots from a small ROM in the CPU's local memory that jumps to main RAM
-(128 KB of AXI block RAM at `0x4000_0000`). Programs live in that RAM and are written over
+(128 KB of block RAM inside the core at `0x8000_0000`). Programs live in that RAM and are written over
 JTAG, so changing software never means rebuilding the bitstream.
 
 A RISC-V Debug Module (riscv-dbg) sits on the FPGA's own JTAG through BSCANE2, so no extra
@@ -107,7 +107,7 @@ cable is needed: the board's USB connection carries both programming and debuggi
 On reset the ROM prints a banner, so a restart is visible on the console:
 
 ```
-CVA5 boot: starting application at 0x40000000
+Hello from CVA5
 ```
 
 ### Running a program
@@ -126,7 +126,7 @@ tools/cva5-run -n main.c               # build only, leave the board alone
 By default the runtime from `examples/sw` (`crt0.S`, `puts.c`) is linked in, so a program
 can be a bare `main()` that calls `puts()`. With `--no-runtime` nothing but your own
 sources is linked and you provide `_start`; the linker script still places the entry point
-at `0x4000_0000` and defines `_stack_top`.
+at `0x8000_0000`, reserves the first 0x40 bytes for the trap handler, and defines `_stack_top`.
 
 The example program has its own targets:
 
@@ -230,7 +230,7 @@ running a small hello-world application from block memory on the Nexys A7 FPGA.
 For detailed instructions on executing the hello-world application from block memory on the PYNQ-Z2 FPGA, please review `examples\xilinx\README.pynq_z2.md`. Tested with Vivado 2025.1
 
 The PYNQ-Z2 system in `examples/xilinx/pynq_z2_sys.tcl` additionally carries a RISC-V Debug
-Module and runs programs from AXI block RAM; see
+Module and runs programs from on-chip block RAM; see
 [Debugging on the PYNQ-Z2](#debugging-on-the-pynq-z2).
 
 ## Publications

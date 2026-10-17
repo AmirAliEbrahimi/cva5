@@ -10,7 +10,7 @@ module tb_sba;
   logic sba_req, sba_we, sba_gnt, sba_rvalid, sba_rerr;
   logic [31:0] sba_addr, sba_wdata, sba_rdata; logic [3:0] sba_be;
 
-  dm_top #(.NrHarts(1), .BusWidth(32), .DmBaseAddress(32'h5000_0000)) dut (
+  dm_top #(.NrHarts(1), .BusWidth(32), .DmBaseAddress(32'h0000_0000)) dut (
     .clk_i(clk), .rst_ni(rst_n), .next_dm_addr_i('0), .testmode_i(1'b0),
     .ndmreset_o(ndmreset), .ndmreset_ack_i(1'b0), .dmactive_o(), .debug_req_o(),
     .unavailable_i(1'b1), .hartinfo_i('0),
@@ -32,14 +32,14 @@ module tb_sba;
     .m_axi_araddr(araddr), .m_axi_arprot(arprot), .m_axi_arvalid(arvalid), .m_axi_arready(arready),
     .m_axi_rdata(rdata), .m_axi_rresp(rresp), .m_axi_rvalid(rvalid), .m_axi_rready(rready));
 
-  // AXI4-Lite slave model: 1 KB RAM at 0x4000_0000, random-ish backpressure, SLVERR elsewhere
+  // AXI4-Lite slave model: 1 KB RAM at 0x8000_0000, random-ish backpressure, SLVERR elsewhere
   logic [31:0] mem [256];
   logic [7:0] lfsr = 8'h5a; always_ff @(posedge clk) lfsr <= {lfsr[6:0], lfsr[7]^lfsr[5]^lfsr[4]^lfsr[3]};
   logic aw_got, w_got; logic [31:0] aw_q, w_q; logic [3:0] s_q;
   assign awready = ~aw_got & lfsr[0];
   assign wready  = ~w_got & lfsr[1];
   assign arready = ~rvalid & lfsr[2];
-  function automatic bit hit(input logic [31:0] a); return a[31:10] == 22'h100000; endfunction
+  function automatic bit hit(input logic [31:0] a); return a[31:10] == 22'h200000; endfunction
   always_ff @(posedge clk) begin
     if (!rst_n) begin aw_got<=0; w_got<=0; bvalid<=0; rvalid<=0; end else begin
       if (awvalid & awready) begin aw_got<=1; aw_q<=awaddr; end
@@ -77,16 +77,21 @@ module tb_sba;
 
     // 32-bit burst write with autoincrement
     wr(7'h38, (2<<17) | (1<<16));
-    wr(7'h39, 32'h4000_0010);
+    wr(7'h39, 32'h8000_0010);
     foreach (pat[i]) begin wr(7'h3c, pat[i]); wait_idle(sbcs); end
     // byte write into word 1
     wr(7'h38, (0<<17));
-    wr(7'h39, 32'h4000_0016); wr(7'h3c, 32'h000000AA); wait_idle(sbcs);
+    wr(7'h39, 32'h8000_0016); wr(7'h3c, 32'h000000AA); wait_idle(sbcs);
     // read back with readonaddr + readondata + autoincrement
     wr(7'h38, (1<<20) | (2<<17) | (1<<16) | (1<<15));
-    wr(7'h39, 32'h4000_0010); wait_idle(sbcs);
+    wr(7'h39, 32'h8000_0010); wait_idle(sbcs);
     foreach (pat[i]) begin
-      logic [31:0] exp = (i==1) ? 32'h12AA5678 : pat[i];
+      // Assigned, not initialised at the declaration: a variable declared in a
+      // procedural block has static lifetime, so an initialiser runs once at
+      // time zero rather than per iteration. Verilator 5.032 was lenient about
+      // it; 5.49 is not, and reported every word against pat[0].
+      logic [31:0] exp;
+      exp = (i==1) ? 32'h12AA5678 : pat[i];
       rd(7'h3c, q); wait_idle(sbcs);
       if (q !== exp) begin $display("FAIL word %0d: got %h exp %h", i, q, exp); errors++; end
       else $display("ok   word %0d = %h", i, q);

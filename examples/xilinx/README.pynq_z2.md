@@ -11,6 +11,7 @@ block RAM inside the core, with an AXI UART Lite for console output. A single sl
 | `package_as_ip_pynq_z2.tcl`   | packages the CVA5 core as a Vivado IP into `./vivado/ip_repo`            |
 | `pynq_z2_sys.tcl`             | builds the SoC block design (clock, reset, CVA5, AXI UART Lite) + XDC    |
 | `pynq_z2_cva5.xdc`            | pins only — reset switch and PMOD UART                                  |
+| `vendor/boot_rom.sv`          | riscv-dbg's boot ROM, hand-vendored (see Memory map)                    |
 | `pynq_z2_jtag.xdc`            | JTAG clock, its CDC constraints, TIMING-9 waiver (implementation only)  |
 
 ## Open-hardware AXI blocks
@@ -25,6 +26,60 @@ measured to cost nothing against the all-Xilinx baseline of **WNS +0.107** at
 | `axi_interconnect`   | `cva5_axi_xbar` (pulp `axi_xbar`) | same build |
 | `axi_bram_ctrl` + `blk_mem_gen` | *kept* — see below | — |
 | `clk_wiz` | *kept* — the MMCM is a hard block | — |
+
+### Memory map
+
+The addresses follow **CVA6's**, so the choices are a CORE-V convention rather
+than ours, and anything written against a CORE-V system lands in the right
+place. `examples/sw/soc.h` is the software copy and the single source of truth
+for it.
+
+| region | base | size | state |
+|---|---|---|---|
+| Debug Module | `0x0000_0000` | 4 KB | present |
+| boot ROM | `0x0001_0000` | 64 KB | reserved |
+| CLINT | `0x0200_0000` | 768 KB | reserved |
+| PLIC | `0x0C00_0000` | 64 MB | reserved |
+| UART | `0x1000_0000` | 4 KB | present |
+| timer | `0x1800_0000` | 4 KB | reserved |
+| SPI | `0x2000_0000` | 8 MB | reserved |
+| main RAM | `0x8000_0000` | 128 KB | present |
+
+"Reserved" means the window is spoken for and nothing is there yet, so adding
+the device later moves nothing. The sizes are CVA6's even where ours will be
+smaller: the window is reserved, not the device.
+
+The core's peripheral bus covers `0x0000_0000`–`0x7FFF_FFFF` — everything that
+is not RAM is a peripheral, which is the whole of the split now that RAM is the
+only thing above `0x8000_0000`. The crossbar decodes within it and returns a
+DECERR for an address no slave claims, so the wide range costs nothing and the
+CLINT and PLIC need no edit to it.
+
+**The Debug Module at zero has one consequence worth knowing.** Nothing in
+`examples/sw` writes `mtvec`, so the core's `RESET_TVEC` is the trap vector for
+the whole life of the program — and it cannot be left at its reset value of
+zero, because every trap would jump into the debug ROM and execute whatever it
+found. So `trap.S` puts a trap handler at the base of RAM and `crt0.S`'s `_start`
+sits 0x40 above it:
+
+```
+0x8000_0000   trap_entry    reads mcause/mepc/mtval into t0/t1/t2 and parks
+0x8000_0040   _start        RESET_VEC points here
+```
+
+`fpga_link.ld` asserts both addresses, so the hardware parameters and the image
+cannot drift apart silently. The handler lives in its own file because the
+preload image (`idle.S`) does not link `crt0.S`, and an assert on a symbol that
+image lacks would break `make ram` — grow the handler past its slot and the link
+fails rather than the board jumping into the middle of it. The handler
+deliberately does not print: a trap can arrive with a broken stack or before
+the UART is usable, and a handler that faults while reporting a fault tells you
+nothing. `make load`'s OpenOCD can read those three registers.
+
+CVA6 has a boot ROM at `0x0001_0000` because its main memory is external DDR,
+which comes up empty — something has to exist at reset to fill it. Ours is
+on-chip block RAM that `$readmemh` initialises from `ram.mif` at FPGA
+configuration, so the bitstream does that job and the window is only reserved.
 
 ### Memory
 

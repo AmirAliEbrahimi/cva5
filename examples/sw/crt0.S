@@ -1,9 +1,16 @@
-/* Startup for the CVA5 verilator sim.
+/* Startup for the CVA5 examples.
+ *
  * After main() returns we execute 0x00a00013 (addi x0,x0,10), the
- * "success termination" NOP the testbench watches for to end the run
- * and flush the log. */
-.section .text.init
-.globl _start
+ * "success termination" NOP the Verilator testbench watches for to end the run
+ * and flush the log.
+ *
+ * On the board _start sits at RAM_BASE + 0x40, because the first 0x40 bytes
+ * hold the trap handler -- see trap.S, which every image links, and
+ * fpga_link.ld, which places both and asserts their addresses.
+ */
+
+    .section .text.init
+    .globl _start
 _start:
     la   sp, _stack_top
     la   t0, __bss_start

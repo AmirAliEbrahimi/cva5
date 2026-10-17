@@ -26,7 +26,10 @@ create_bd_cell -type ip -vlnv xilinx.com:user:cva5_top:1.0 cva5_top_0
 # Connect processor to UART via interconnect
 apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config { Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} Master {/cva5_top_0/m_axi} Slave {/axi_uartlite_0/S_AXI} ddr_seg {Auto} intc_ip {New AXI Interconnect} master_apm {0}}  [get_bd_intf_pins axi_uartlite_0/S_AXI]
 # Set address space
-set_property offset 0x60000000 [get_bd_addr_segs {cva5_top_0/m_axi/SEG_axi_uartlite_0_Reg}]
+# 0x1000_0000 is where cva5_wrapper's map puts the UART (CVA6's address), and
+# this board shares the packaged cva5_top with the PYNQ-Z2 example, so one
+# examples/sw build has to work on both. Untested: no Nexys board here.
+set_property offset 0x10000000 [get_bd_addr_segs {cva5_top_0/m_axi/SEG_axi_uartlite_0_Reg}]
 
 regenerate_bd_layout
 

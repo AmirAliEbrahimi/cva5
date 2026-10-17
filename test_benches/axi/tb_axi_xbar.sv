@@ -30,9 +30,14 @@ module tb_axi_xbar #(
     localparam int unsigned ID_WIDTH     = 32'd6;
     localparam int unsigned MST_ID_WIDTH = ID_WIDTH + 2;
 
-    localparam logic [31:0] RAM_BASE    = 32'h4000_0000;
-    localparam logic [31:0] PERIPH_BASE = 32'h6000_0000;
-    localparam logic [31:0] UNMAPPED    = 32'h5000_0000;  // the DM window
+    // Mirrors cva5_axi_xbar's defaults, which follow CVA6's map.
+    localparam logic [31:0] RAM_BASE    = 32'h8000_0000;
+    localparam logic [31:0] PERIPH_BASE = 32'h1000_0000;
+    // An address in neither window, to prove the decode returns DECERR rather
+    // than landing somewhere. Not the Debug Module's window, which sits at
+    // 0x0000_0000 now and never reaches this crossbar in any case -- the DM
+    // hangs off the core inside cva5_top.
+    localparam logic [31:0] UNMAPPED    = 32'h5000_0000;
 
     localparam logic [1:0] RESP_OKAY   = 2'b00;
     localparam logic [1:0] RESP_DECERR = 2'b11;

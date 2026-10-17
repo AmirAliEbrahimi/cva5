@@ -11,8 +11,8 @@
 // the JTAG pins are brought out of cva5_wrapper.
 //
 // Memory map matches the PYNQ-Z2 system:
-//   0x4000_0000  128 KB RAM      (CPU cached path m_axi_mem, debugger SBA)
-//   0x6000_0000  UART Lite-like  (CPU peripheral bus m_axi, debugger SBA)
+//   0x8000_0000  128 KB RAM      (debugger SBA; the core reaches it as local memory)
+//   0x1000_0000  UART Lite-like  (CPU peripheral bus m_axi, debugger SBA)
 //   0x8000_0000  boot ROM        (inside cva5_wrapper, loaded from boot.mif)
 //
 // Build and run with test_benches/debug/run_jtag.sh.
@@ -20,7 +20,7 @@
 module tb_jtag;
 
     localparam int unsigned RAM_WORDS = 32768;      // 128 KB
-    localparam logic [31:0] RAM_BASE  = 32'h40000000;
+    localparam logic [31:0] RAM_BASE  = 32'h80000000;
 
     logic clk = 0;
     always #5 clk = ~clk;                            // 100 MHz
@@ -279,7 +279,7 @@ module tb_jtag;
         $readmemh("boot.mif", dut.local_mem.mem, 0);
         // Program in RAM: app.mif if present, otherwise a counting loop that
         // gives the debugger something observable (x1 increments forever):
-        //   40000000: addi x1, x0, 0
+        //   80000000: addi x1, x0, 0
         //   40000004: addi x1, x1, 1
         //   40000008: j    40000004
         begin

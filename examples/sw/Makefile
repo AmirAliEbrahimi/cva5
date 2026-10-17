@@ -5,7 +5,7 @@
 #  Software targets (this makefile):
 #    make / make program   build program.hex (sim image) from main.c
 #    make ram              build ram.mif, the image the bitstream preloads
-#    make app              build app.elf, linked for main RAM at 0x4000_0000
+#    make app              build app.elf, linked for main RAM at 0x8000_0000
 #    make load             build app.elf and load it onto the board over JTAG
 #                          (no bitstream rebuild; see examples/xilinx/openocd)
 #    make memtest          build and run the main RAM test on the board. The
@@ -47,8 +47,8 @@ ARCH      ?= rv32im
 ABI       ?= ilp32
 
 # --- build inputs ----------------------------------------------------------
-SRCS      := crt0.S main.c puts.c
-MEMTEST_SRCS := crt0.S memtest.c puts.c
+SRCS      := crt0.S trap.S main.c puts.c
+MEMTEST_SRCS := crt0.S trap.S memtest.c puts.c
 LDSCRIPT  := link.ld
 CFLAGS    := -march=$(ARCH) -mabi=$(ABI) -Os -g -ffreestanding -nostdlib -I. -Wl,--build-id=none
 
@@ -66,16 +66,17 @@ CVA5_MAK = $(MAKE) -C $(CVA5_DIR) -f tools/cva5.mak \
            CVA5_DIR=$(CVA5_DIR) TRACE_ENABLE=$(TRACE_ENABLE) DETERMINISTIC=$(DETERMINISTIC)
 
 # --- FPGA: main RAM image and the application ------------------------------
-# Main memory is 128 KB of block RAM inside the core, and the reset vector
-# points at the bottom of it, so there is no separate boot ROM: the CPU starts
-# executing whatever is there.
+# Main memory is 128 KB of block RAM inside the core at 0x8000_0000. The reset
+# vector points 0x40 above its base -- crt0.S puts the trap handler in those
+# first 64 bytes, because the Debug Module now sits at address zero and a trap
+# can no longer be left to go there. fpga_link.ld asserts the layout.
 #
 # ram.mif is the image the bitstream preloads, so a freshly programmed board
 # runs something without a debugger attached. `make load` then writes a
 # different program over JTAG and never needs a Vivado rebuild -- the preload
 # only decides what runs before the first load.
 RAM_WORDS   ?= 32768
-APP_BASE    ?= 0x40000000
+APP_BASE    ?= 0x80000000
 APP_LDSCRIPT := fpga_link.ld
 ELF2TCL     := $(CVA5_DIR)/tools/elf-to-load-tcl.py
 OPENOCD     ?= openocd
@@ -85,8 +86,11 @@ OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 all: program
 program: program.hex
 
+# The sim image is a different SoC: its UART sits in the peripheral range that
+# upstream's EXAMPLE_CONFIG declares, not at the board's address. soc.h keeps
+# both and CVA5_SIM picks. See the note in soc.h.
 main.elf: $(SRCS) $(LDSCRIPT)
-	$(CC) $(CFLAGS) -T $(LDSCRIPT) $(SRCS) -lgcc -o $@
+	$(CC) $(CFLAGS) -DCVA5_SIM -T $(LDSCRIPT) $(SRCS) -lgcc -o $@
 
 program.hex: main.elf
 	python3 $(ELF2HW) $(CROSS) $(BASE_ADDR) $(RAM_SIZE) $< program.hex program.sim
@@ -97,7 +101,7 @@ app: app.elf
 # The preload parks in a loop and prints nothing, so a board that has just been
 # programmed is silent and the UART carries only what you load. Point this at
 # another program if you want the board to come up doing something.
-IDLE_SRCS := idle.S
+IDLE_SRCS := idle.S trap.S
 
 idle.elf: $(IDLE_SRCS) $(APP_LDSCRIPT)
 	$(CC) -march=$(ARCH) -mabi=$(ABI) -nostdlib -Wl,--build-id=none \

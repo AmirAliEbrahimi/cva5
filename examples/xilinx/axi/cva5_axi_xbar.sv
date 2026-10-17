@@ -42,9 +42,9 @@
 module cva5_axi_xbar #(
     // Address map. Defaults match examples/sw/soc.h; each base must be
     // aligned to its size.
-    parameter logic [31:0] RAM_BASE    = 32'h4000_0000,
+    parameter logic [31:0] RAM_BASE    = 32'h8000_0000,
     parameter logic [31:0] RAM_SIZE    = 32'h0002_0000,  // 128 KB
-    parameter logic [31:0] PERIPH_BASE = 32'h6000_0000,
+    parameter logic [31:0] PERIPH_BASE = 32'h1000_0000,
     parameter logic [31:0] PERIPH_SIZE = 32'h0001_0000,  // 64 KB
 
     // Width of each master port's address bus. Leave at 32 unless a slave

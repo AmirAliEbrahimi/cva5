@@ -5,9 +5,9 @@
 
 | Address       | Size    | What                                      |
 |---------------|---------|-------------------------------------------|
-| `0x4000_0000` | 128 KiB | main RAM; the reset vector, programs run here |
-| `0x5000_0000` | 4 KiB   | Debug Module window (not modelled)        |
-| `0x6000_0000` |         | AXI UART Lite                             |
+| `0x0000_0000` | 4 KiB   | Debug Module window (not modelled)        |
+| `0x1000_0000` |         | AXI UART Lite                             |
+| `0x8000_0000` | 128 KiB | main RAM; programs run here, entry at +0x40 |
 
 
 The CPU is RV32IM, machine mode only, matching the wrapper's `CPU_CONFIG`

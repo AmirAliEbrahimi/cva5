@@ -148,10 +148,22 @@ module cva5_wrapper
 
     ////////////////////////////////////////////////////
     //Implementation
-    //Instantiates a CVA5 processor using local memory
-    //Program start address 0x8000_0000
-    //Local memory space from 0x8000_0000 through 0x80FF_FFFF
-    //Peripheral bus from 0x6000_0000 through 0x6FFF_FFFF
+    //Instantiates a CVA5 processor using local memory.
+    //
+    //The address map follows CVA6's, so that the choices are a CORE-V
+    //convention rather than ours. examples/sw/soc.h is the software copy and
+    //carries the full table; the parts this wrapper decides are:
+    //
+    //  0x0000_0000   4 KB   Debug Module -- ROM, program buffer, data regs
+    //  0x1000_0000   4 KB   UART, out through the peripheral bus
+    //  0x8000_0000 128 KB   main RAM, instruction fetch and load/store
+    //
+    //Peripheral bus covers 0x0000_0000 through 0x7FFF_FFFF: everything that is
+    //not RAM is a peripheral, which is the whole of the split now that RAM is
+    //the only thing above 0x8000_0000. The crossbar decodes within it and
+    //returns a DECERR for an address no slave claims, so the wide range costs
+    //nothing and needs no edit when the CLINT and PLIC arrive at CVA6's
+    //0x0200_0000 and 0x0C00_0000.
 
     localparam wb_group_config_t WB_CPU_CONFIG = '{
         0 : '{0: ALU_ID, default : NON_WRITEBACK_ID},
@@ -161,9 +173,23 @@ module cva5_wrapper
     };
 
     //Debug Module base address. Its 4 KB window holds the debug ROM
-    //(halt at +0x800), program buffer and abstract data registers.
-    localparam logic [31:0] DM_BASE = 32'h5000_0000;
-    localparam logic [31:0] RAM_BASE = 32'h4000_0000;
+    //(halt at +0x800), program buffer and abstract data registers. At zero,
+    //as in CVA6. Nothing outside the chip observes it -- OpenOCD reaches the
+    //DM over DMI, not the system bus -- but it does mean a trap can no longer
+    //be left to go to address zero, which is what TRAP_VEC below is for.
+    localparam logic [31:0] DM_BASE = 32'h0000_0000;
+    localparam logic [31:0] RAM_BASE = 32'h8000_0000;
+
+    //Where a trap goes, and where execution starts. Nothing in examples/sw
+    //writes mtvec, so RESET_TVEC is the trap vector for the whole life of the
+    //program and has to be a real address: with the Debug Module at zero, the
+    //reset value of zero would send every trap into the debug ROM.
+    //
+    //crt0.S puts its handler at the base of RAM and _start 0x40 above it, and
+    //examples/sw/fpga_link.ld asserts both. Change the 0x40 here and the link
+    //fails rather than the board jumping into the middle of the handler.
+    localparam logic [31:0] TRAP_VEC = RAM_BASE;
+    localparam logic [31:0] APP_ENTRY = RAM_BASE + 32'h40;
 
     localparam cpu_config_t CPU_CONFIG = '{
         //ISA options
@@ -183,8 +209,8 @@ module cva5_wrapper
         CSRS : '{
             MACHINE_IMPLEMENTATION_ID : 0,
             CPU_ID : 0,
-            RESET_VEC : RAM_BASE,
-            RESET_TVEC : 32'h00000000,
+            RESET_VEC : APP_ENTRY,
+            RESET_TVEC : TRAP_VEC,
             MCONFIGPTR : '0,
             INCLUDE_ZICNTR : 1,
             INCLUDE_ZIHPM : 0,
@@ -200,8 +226,8 @@ module cva5_wrapper
         },
         INCLUDE_ICACHE : 0,
         ICACHE_ADDR : '{
-            L: 32'h40000000,
-            H: 32'h4FFFFFFF
+            L: RAM_BASE,
+            H: RAM_BASE + 32'h0FFFFFFF
         },
         ICACHE : '{
             LINES : 512,
@@ -210,8 +236,8 @@ module cva5_wrapper
             USE_EXTERNAL_INVALIDATIONS : 0,
             USE_NON_CACHEABLE : 0,
             NON_CACHEABLE : '{
-                L: 32'h70000000,
-                H: 32'h7FFFFFFF
+                L: 32'h0000_0000,
+                H: 32'h0000_0000
             }
         },
         ITLB : '{
@@ -220,8 +246,8 @@ module cva5_wrapper
         },
         INCLUDE_DCACHE : 0,
         DCACHE_ADDR : '{
-            L: 32'h40000000,
-            H: 32'h4FFFFFFF
+            L: RAM_BASE,
+            H: RAM_BASE + 32'h0FFFFFFF
         },
         DCACHE : '{
             LINES : 512,
@@ -230,8 +256,8 @@ module cva5_wrapper
             USE_EXTERNAL_INVALIDATIONS : 0,
             USE_NON_CACHEABLE : 0,
             NON_CACHEABLE : '{
-                L: 32'h70000000,
-                H: 32'h7FFFFFFF
+                L: 32'h0000_0000,
+                H: 32'h0000_0000
             }
         },
         DTLB : '{
@@ -261,8 +287,8 @@ module cva5_wrapper
         //(split off by address in this wrapper)
         INCLUDE_PERIPHERAL_BUS : 1,
         PERIPHERAL_BUS_ADDR : '{
-            L : DM_BASE,
-            H : 32'h6FFFFFFF
+            L : 32'h0000_0000,
+            H : RAM_BASE - 1
         },
         PERIPHERAL_BUS_TYPE : AXI_BUS,
         //Branch Predictor Options

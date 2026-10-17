@@ -7,7 +7,7 @@
 #   tools/cva5-run main.c extra.c          several sources
 #   tools/cva5-run -n main.c               build only, do not touch the board
 #
-# The program is linked for main RAM at 0x4000_0000 and written there over
+# The program is linked for main RAM at 0x8000_0000 and written there over
 # JTAG, so the bitstream is never rebuilt. The board must already be running a
 # bitstream with the Debug Module (see the README).
 #
@@ -42,7 +42,7 @@ ARCH=${ARCH:-rv32im}
 ABI=${ABI:-ilp32}
 OPT_LEVEL=s
 OUT=build/run
-APP_BASE=0x40000000
+APP_BASE=0x80000000
 OPENOCD=${OPENOCD:-openocd}
 OCD_DIR=$ROOT/examples/xilinx/openocd
 SW_DIR=$ROOT/examples/sw

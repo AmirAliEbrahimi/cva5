@@ -5,7 +5,7 @@
  *   tools/cva5-qemu examples/sw/hello.c     under QEMU
  *
  * puts() comes from the runtime in this directory, which both scripts link in
- * by default; it writes to the AXI UART Lite at 0x6000_0000.
+ * by default; it writes to the AXI UART Lite, at 0x1000_0000 on the board.
  */
 #include <stdio.h>
 

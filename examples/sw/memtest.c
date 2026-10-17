@@ -24,8 +24,8 @@
  *      accesses land in different cascade rows rather than marching through
  *      one of them.
  *
- * The region is 0x40008000-0x4001F000: clear of the program at the base of
- * RAM, and 4 KB below _stack_top at 0x40020000.
+ * The region is RAM_BASE+0x8000 to RAM_BASE+0x1F000: clear of the program at
+ * the base of RAM, and 4 KB below _stack_top at the top of the 128 KB.
  *
  * Build and run with:  make memtest
  *
@@ -33,9 +33,11 @@
  */
 
 #include <stdio.h>
+#include "soc.h"
 
-#define TEST_BASE 0x40008000u
-#define TEST_END  0x4001F000u
+/* Clear of the program at the base of RAM, and 4 KB below _stack_top. */
+#define TEST_BASE (RAM_BASE + 0x8000u)
+#define TEST_END  (RAM_BASE + 0x1F000u)
 
 static void puthex(unsigned v) {
     char b[11];
