@@ -14,6 +14,8 @@ block RAM inside the core, with lowRISC's UART for console output. A single slid
 | `vendor/boot_rom.sv`          | riscv-dbg's boot ROM, hand-vendored (see Boot ROM)                      |
 | `vendor/uart.sv`              | lowRISC's UART, hand-vendored (see UART)                                |
 | `axi/cva5_uart.sv`            | that UART behind an AXI4-Lite slave port                                |
+| `vendor/cva5_clint.sv`        | CVA5's CLINT, vendored with a 1 MHz prescaler (see CLINT)               |
+| `axi/cva5_clint_axi.sv`       | that CLINT as a block-design peripheral                                 |
 | `pynq_z2_jtag.xdc`            | JTAG clock, its CDC constraints, TIMING-9 waiver (implementation only)  |
 
 ## Open-hardware AXI blocks
@@ -415,9 +417,11 @@ split off the core's peripheral bus inside `cva5_wrapper`, the way the Debug
 Module's registers are, which cost nothing but left it invisible to the
 debugger.
 
-Only the bus side leaves `cva5_top`. The CLINT itself stays inside, because
-`mtime`, `mtip` and `msip` have to reach the core and that is 66 signals that
-would otherwise cross the block design.
+It is its own block-design IP, `cva5_clint_axi`. `mtime`, `mtip` and `msip`
+leave it as 66 plain nets and land on `cva5_top`'s interrupt inputs. It first
+shipped *inside* `cva5_top` to avoid those 66 signals, which was optimising the
+wrong thing: `cva5_top` is the core, its memory and its debug module, and a
+timer is none of those.
 
 **A port added to `cva5_wrapper.sv` has to be added to `cva5_top.v` as well.**
 That file is a plain-Verilog, port-for-port wrapper that exists only because
@@ -433,9 +437,8 @@ contents are pure duplication, and the one most easily forgotten.
 **Its reset is `rstn` alone, never `ndmreset`** — the rule the Debug Module and
 the RAM port already follow, and for the same reason: `cpu_hold` asserts
 `ndmreset` and *then* talks to the system bus, so a peripheral the debugger can
-reach must not be held in reset by it, or the access never completes. That
-became load bearing the moment the CLINT moved onto the bus; while it was
-behind the wrapper's split it was merely tidy.
+reach must not be held in reset by it, or the access never completes. Now that
+the CLINT is outside `cva5_top`, `ndmreset` simply never reaches it.
 
 `clint_wrapper` ignores write strobes, so a sub-word write to one of its
 registers writes the whole word. Software writes these a word at a time, which

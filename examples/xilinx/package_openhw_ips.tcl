@@ -83,6 +83,14 @@ dict set openhw_ips cva5_axi_xbar {
 # scoped; identical copies of a module are not the same problem. If synthesis
 # does complain that fifo_v3 is declared more than once, the fix is a renamed
 # vendored copy for this IP, not a change to the UART.
+# The CLINT, as a peripheral rather than something inside the CPU IP. mtime,
+# mtip and msip leave as plain nets and land on cva5_top's interrupt inputs.
+dict set openhw_ips cva5_clint_axi {
+    examples/xilinx/vendor/cva5_clint.sv
+    examples/xilinx/vendor/cva5_clint_wrapper.sv
+    examples/xilinx/axi/cva5_clint_axi.sv
+}
+
 dict set openhw_ips cva5_uart {
     third_party/common_cells/src/fifo_v3.sv
     examples/xilinx/vendor/uart.sv
@@ -115,6 +123,7 @@ dict set openhw_busifs cva5_axi_cut {s_axi m_axi}
 dict set openhw_busifs cva5_axi_xbar {s_axi_cpu s_axi_mem s_axi_dbg m_axi_ram m_axi_uart m_axi_clint}
 dict set openhw_busifs cva5_axi_ram {s_axi}
 dict set openhw_busifs cva5_uart {s_axi}
+dict set openhw_busifs cva5_clint_axi {s_axi}
 
 # Entries present for the testbenches' file lists but deliberately not
 # packaged. See the note above cva5_axi_ram.

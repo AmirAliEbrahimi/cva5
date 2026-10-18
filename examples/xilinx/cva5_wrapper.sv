@@ -100,29 +100,12 @@ module cva5_wrapper
         output logic s_axi_ram_rvalid,
         input logic s_axi_ram_rready,
 
-        //CLINT, AXI4-Lite slave. Driven by the crossbar's Lite peripheral
-        //fan-out. 16 address bits is the 64 KB the CLINT decodes, and it is
-        //what tells Vivado the size of this port's address block -- a 32-bit
-        //port would offer a 4 GB aperture that can only sit at zero.
-        input logic [15:0] s_axi_clint_awaddr,
-        input logic [2:0] s_axi_clint_awprot,
-        input logic s_axi_clint_awvalid,
-        output logic s_axi_clint_awready,
-        input logic [31:0] s_axi_clint_wdata,
-        input logic [3:0] s_axi_clint_wstrb,
-        input logic s_axi_clint_wvalid,
-        output logic s_axi_clint_wready,
-        output logic [1:0] s_axi_clint_bresp,
-        output logic s_axi_clint_bvalid,
-        input logic s_axi_clint_bready,
-        input logic [15:0] s_axi_clint_araddr,
-        input logic [2:0] s_axi_clint_arprot,
-        input logic s_axi_clint_arvalid,
-        output logic s_axi_clint_arready,
-        output logic [31:0] s_axi_clint_rdata,
-        output logic [1:0] s_axi_clint_rresp,
-        output logic s_axi_clint_rvalid,
-        input logic s_axi_clint_rready,
+        //From cva5_clint_axi, the CLINT peripheral on the bus. mtime is the
+        //core's time CSR as well as the CLINT's counter, and it ticks once
+        //per microsecond.
+        input logic [63:0] mtime,
+        input logic mtip,
+        input logic msip,
 
         //Debug System Bus Access, AXI4-Lite master
         output logic [31:0] m_axi_dbg_awaddr,
@@ -166,7 +149,6 @@ module cva5_wrapper
     wishbone_interface dwishbone(); //Unused
     wishbone_interface iwishbone(); //Debug Module fetches
     mem_interface mem[1]();
-    logic[63:0] mtime;          //from the CLINT, below
     interrupt_t s_interrupt;    //Unused: no supervisor mode in this config
     interrupt_t m_interrupt;    //timer and software from the CLINT
 
@@ -413,17 +395,16 @@ module cva5_wrapper
 
     cva5 #(.CONFIG(CPU_CONFIG), .INCLUDE_DEBUG(1), .DM_BASE(DM_BASE)) cpu(.mem(mem[0]), .*);
 
-    //mtime used to be a counter here, incrementing every clock. The CLINT owns
-    //it now, so the core's time CSR and the CLINT's mtime are the same
-    //counter, ticking once per microsecond.
-    assign mtime = clint_mtime;
-
+    //mtime, mtip and msip arrive from cva5_clint_axi. mtime was a counter in
+    //this file once, incrementing every clock; then the CLINT owned it but sat
+    //inside this module. It is a peripheral on the bus now, which is where a
+    //timer belongs.
     assign s_interrupt = '{default: '0};
     //external stays low until the PLIC arrives; the UART's irq is what will
     //feed it.
     assign m_interrupt = '{
-        software : clint_msip,
-        timer    : clint_mtip,
+        software : msip,
+        timer    : mtip,
         external : 1'b0
     };
 
@@ -465,72 +446,6 @@ module cva5_wrapper
     assign m_axi.bresp = pb_wr_dm ? 2'b00 : m_axi_bresp;
     assign m_axi.bid = 6'b0;
 
-    ////////////////////////////////////////////////////
-    //CLINT: mtime, mtimecmp, msip, and the timer and software interrupts
-    //
-    //TICKS_PER_USEC makes mtime count microseconds rather than core clocks;
-    //see examples/xilinx/vendor/clint.sv for why that divergence from
-    //apu/clint exists. It is the core clock in MHz, so it comes from
-    //CLOCK_MHZ above rather than being written here twice.
-    //
-    //clint_wrapper ignores write strobes, so a sub-word write to one of its
-    //registers writes the whole word. Software writes mtime and mtimecmp a
-    //word at a time, which is what the layout is designed for.
-    //
-    //Reset by rstn alone, never by ndmreset -- the same rule the Debug Module
-    //and the RAM port follow, and for the same reason. cpu_hold asserts
-    //ndmreset and THEN talks to the system bus, so a peripheral the debugger
-    //can reach must not be held in reset by it: the access would never
-    //complete. The CLINT became reachable the moment it moved onto the
-    //crossbar, which is what makes this load bearing rather than tidy.
-    logic clint_rst = 1'b1; //Held in reset at configuration
-    always_ff @(posedge clk) clint_rst <= ~rstn;
-
-    logic [63:0] clint_mtime;
-    logic clint_msip, clint_mtip;
-
-    cva5_clint_wrapper #(
-        .NUM_CORES (1),
-        .AXI (1'b1),
-        .TICKS_PER_USEC (CLOCK_MHZ)
-    ) clint_inst (
-        .clk (clk),
-        .rst (clint_rst),
-        .mtime (clint_mtime),
-        .msip (clint_msip),
-        .mtip (clint_mtip),
-
-        //Wishbone side unused; AXI = 1 selects the AXI-Lite port
-        .wb_cyc (1'b0),
-        .wb_stb (1'b0),
-        .wb_we (1'b0),
-        .wb_adr ('0),
-        .wb_dat_i ('0),
-        .wb_dat_o (),
-        .wb_ack (),
-
-        //The crossbar's AXI4-Lite CLINT port. awprot/arprot and the write
-        //strobes arrive and are dropped: clint_wrapper has no ports for them.
-        .s_axi_awvalid (s_axi_clint_awvalid),
-        .s_axi_awaddr (32'(s_axi_clint_awaddr)),
-        .s_axi_awready (s_axi_clint_awready),
-        .s_axi_wvalid (s_axi_clint_wvalid),
-        .s_axi_wdata (s_axi_clint_wdata),
-        .s_axi_wready (s_axi_clint_wready),
-        .s_axi_bvalid (s_axi_clint_bvalid),
-        .s_axi_bready (s_axi_clint_bready),
-        .s_axi_arvalid (s_axi_clint_arvalid),
-        .s_axi_araddr (32'(s_axi_clint_araddr)),
-        .s_axi_arready (s_axi_clint_arready),
-        .s_axi_rvalid (s_axi_clint_rvalid),
-        .s_axi_rdata (s_axi_clint_rdata),
-        .s_axi_rready (s_axi_clint_rready)
-    );
-
-    //Nothing in the CLINT can fail, and the crossbar has already decided the
-    //address is in its window.
-    assign s_axi_clint_bresp = 2'b00;
-    assign s_axi_clint_rresp = 2'b00;
 
     ////////////////////////////////////////////////////
     //Instruction bus split: the Debug Module's memory and the boot ROM

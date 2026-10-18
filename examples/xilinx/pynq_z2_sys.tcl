@@ -74,6 +74,17 @@ set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
 connect_bd_net $sys_clk  [get_bd_pins cva5_uart_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins cva5_uart_0/rstn]
 
+# ---- CLINT ------------------------------------------------------------------
+# A peripheral on the bus, not something inside the CPU IP. mtime is 64 bits
+# and it leaves as 64 plain nets, which is the price of the CLINT being where
+# it belongs; cva5_top is the core, its memory and its debug module.
+create_bd_cell -type ip -vlnv xilinx.com:user:cva5_clint_axi:1.0 cva5_clint_0
+connect_bd_net $sys_clk  [get_bd_pins cva5_clint_0/clk]
+connect_bd_net $sys_rstn [get_bd_pins cva5_clint_0/rstn]
+connect_bd_net [get_bd_pins cva5_clint_0/mtime] [get_bd_pins cva5_top_0/mtime]
+connect_bd_net [get_bd_pins cva5_clint_0/mtip]  [get_bd_pins cva5_top_0/mtip]
+connect_bd_net [get_bd_pins cva5_clint_0/msip]  [get_bd_pins cva5_top_0/msip]
+
 # ---- Main RAM ---------------------------------------------------------------
 # There is no memory IP here any more. Main memory is a 128 KB true dual-port
 # block RAM inside cva5_top, inferred from RTL -- no axi_bram_ctrl, no
@@ -127,7 +138,7 @@ connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg] [get_bd_intf_pins ax
 
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_ram]    [get_bd_intf_pins cva5_top_0/s_axi_ram]
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_uart]  [get_bd_intf_pins cva5_uart_0/s_axi]
-connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_clint] [get_bd_intf_pins cva5_top_0/s_axi_clint]
+connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_clint] [get_bd_intf_pins cva5_clint_0/s_axi]
 
 # ---- Address map ----------------------------------------------------------
 # Every link here is point to point, so nothing in the block design decodes
@@ -162,12 +173,10 @@ if {$uart_seg eq ""} { error "the crossbar's peripheral port has no address segm
 set_property offset 0x10000000 $uart_seg
 set_property range  4K         $uart_seg
 
-# The CLINT lives inside cva5_top, because mtime, mtip and msip have to reach
-# the core -- 66 signals that would otherwise cross the block design. Only the
-# bus side comes back out here. 64K, matching the 16-bit address port.
-set clint_seg [cva5_seg {axi_xbar_0/m_axi_clint/SEG_cva5_top_0_reg0} \
-                        {axi_xbar_0/m_axi_clint/SEG_cva5_top_0_Reg} \
-                        {axi_xbar_0/m_axi_clint/SEG_cva5_top_0_s_axi_clint}]
+# 64K, matching cva5_clint_axi's 16-bit slave address port.
+set clint_seg [cva5_seg {axi_xbar_0/m_axi_clint/SEG_cva5_clint_0_reg0} \
+                        {axi_xbar_0/m_axi_clint/SEG_cva5_clint_0_Reg} \
+                        {axi_xbar_0/m_axi_clint/SEG_cva5_clint_0_s_axi}]
 if {$clint_seg eq ""} { error "the crossbar's CLINT port has no address segment" }
 set_property offset 0x02000000 $clint_seg
 set_property range  64K        $clint_seg
