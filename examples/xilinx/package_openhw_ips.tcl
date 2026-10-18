@@ -62,6 +62,9 @@ dict set openhw_ips cva5_axi_xbar {
     examples/xilinx/vendor/axi_lite_to_axi.sv
     examples/xilinx/vendor/axi_xbar_unmuxed.sv
     examples/xilinx/vendor/axi_xbar.sv
+    examples/xilinx/vendor/axi_lite_demux.sv
+    examples/xilinx/vendor/axi_lite_mux.sv
+    examples/xilinx/vendor/axi_lite_xbar.sv
     third_party/wb2axip/rtl/sfifo.v
     third_party/wb2axip/rtl/skidbuffer.v
     third_party/wb2axip/rtl/axi_addr.v
@@ -109,7 +112,7 @@ dict set openhw_ips cva5_axi_ram {
 
 # AXI interfaces Vivado infers from the port names, to be bound to the clock.
 dict set openhw_busifs cva5_axi_cut {s_axi m_axi}
-dict set openhw_busifs cva5_axi_xbar {s_axi_cpu s_axi_mem s_axi_dbg m_axi_ram m_axi_periph}
+dict set openhw_busifs cva5_axi_xbar {s_axi_cpu s_axi_mem s_axi_dbg m_axi_ram m_axi_uart m_axi_clint}
 dict set openhw_busifs cva5_axi_ram {s_axi}
 dict set openhw_busifs cva5_uart {s_axi}
 

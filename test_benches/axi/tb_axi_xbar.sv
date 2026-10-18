@@ -24,7 +24,8 @@ module tb_axi_xbar #(
     // script can cover both the deployed configuration (32, the full address
     // passed through for the slave to truncate) and a narrowed port.
     parameter int unsigned RAM_AW    = 32'd32,
-    parameter int unsigned PERIPH_AW = 32'd32
+    parameter int unsigned UART_AW = 32'd12,
+    parameter int unsigned CLINT_AW = 32'd16
 );
 
     localparam int unsigned ID_WIDTH     = 32'd6;
@@ -33,6 +34,7 @@ module tb_axi_xbar #(
     // Mirrors cva5_axi_xbar's defaults, which follow CVA6's map.
     localparam logic [31:0] RAM_BASE    = 32'h8000_0000;
     localparam logic [31:0] PERIPH_BASE = 32'h1000_0000;
+    localparam logic [31:0] CLINT_BASE  = 32'h0200_0000;
     // An address in neither window, to prove the decode returns DECERR rather
     // than landing somewhere. Not the Debug Module's window, which sits at
     // 0x0000_0000 now and never reaches this crossbar in any case -- the DM
@@ -144,14 +146,23 @@ module tb_axi_xbar #(
     logic [1:0]              ram_bresp;
     logic [MST_ID_WIDTH-1:0] ram_bid;
 
-    logic [PERIPH_AW-1:0] per_awaddr, per_araddr;
-    logic [2:0]           per_awprot, per_arprot;
-    logic                 per_awvalid, per_awready, per_wvalid, per_wready;
-    logic [31:0]          per_wdata, per_rdata;
-    logic [3:0]           per_wstrb;
-    logic                 per_bvalid, per_bready, per_arvalid, per_arready;
-    logic                 per_rvalid, per_rready;
-    logic [1:0]           per_bresp, per_rresp;
+    logic [UART_AW-1:0] uart_awaddr, uart_araddr;
+    logic [2:0]           uart_awprot, uart_arprot;
+    logic                 uart_awvalid, uart_awready, uart_wvalid, uart_wready;
+    logic [31:0]          uart_wdata, uart_rdata;
+    logic [3:0]           uart_wstrb;
+    logic                 uart_bvalid, uart_bready, uart_arvalid, uart_arready;
+    logic                 uart_rvalid, uart_rready;
+    logic [1:0]           uart_bresp, uart_rresp;
+
+    logic [CLINT_AW-1:0] clint_awaddr, clint_araddr;
+    logic [2:0]          clint_awprot, clint_arprot;
+    logic                clint_awvalid, clint_awready, clint_wvalid, clint_wready;
+    logic [31:0]         clint_wdata, clint_rdata;
+    logic [3:0]          clint_wstrb;
+    logic                clint_bvalid, clint_bready, clint_arvalid, clint_arready;
+    logic                clint_rvalid, clint_rready;
+    logic [1:0]          clint_bresp, clint_rresp;
 
     cva5_axi_xbar #(
         .RAM_BASE            (RAM_BASE),
@@ -159,7 +170,10 @@ module tb_axi_xbar #(
         .PERIPH_BASE         (PERIPH_BASE),
         .PERIPH_SIZE         (32'h0001_0000),
         .M_RAM_ADDR_WIDTH    (RAM_AW),
-        .M_PERIPH_ADDR_WIDTH (PERIPH_AW),
+        .M_UART_ADDR_WIDTH   (UART_AW),
+        .M_CLINT_ADDR_WIDTH  (CLINT_AW),
+        .CLINT_BASE          (CLINT_BASE),
+        .CLINT_SIZE          (32'h0001_0000),
         .ID_WIDTH            (ID_WIDTH)
     ) dut (
         .clk(clk), .rstn(rstn),
@@ -228,16 +242,27 @@ module tb_axi_xbar #(
         .m_axi_ram_bready(ram_bready), .m_axi_ram_bvalid(ram_bvalid),
         .m_axi_ram_bresp(ram_bresp), .m_axi_ram_bid(ram_bid),
 
-        .m_axi_periph_awaddr(per_awaddr), .m_axi_periph_awprot(per_awprot),
-        .m_axi_periph_awvalid(per_awvalid), .m_axi_periph_awready(per_awready),
-        .m_axi_periph_wdata(per_wdata), .m_axi_periph_wstrb(per_wstrb),
-        .m_axi_periph_wvalid(per_wvalid), .m_axi_periph_wready(per_wready),
-        .m_axi_periph_bresp(per_bresp), .m_axi_periph_bvalid(per_bvalid),
-        .m_axi_periph_bready(per_bready),
-        .m_axi_periph_araddr(per_araddr), .m_axi_periph_arprot(per_arprot),
-        .m_axi_periph_arvalid(per_arvalid), .m_axi_periph_arready(per_arready),
-        .m_axi_periph_rdata(per_rdata), .m_axi_periph_rresp(per_rresp),
-        .m_axi_periph_rvalid(per_rvalid), .m_axi_periph_rready(per_rready)
+        .m_axi_uart_awaddr(uart_awaddr), .m_axi_uart_awprot(uart_awprot),
+        .m_axi_uart_awvalid(uart_awvalid), .m_axi_uart_awready(uart_awready),
+        .m_axi_uart_wdata(uart_wdata), .m_axi_uart_wstrb(uart_wstrb),
+        .m_axi_uart_wvalid(uart_wvalid), .m_axi_uart_wready(uart_wready),
+        .m_axi_uart_bresp(uart_bresp), .m_axi_uart_bvalid(uart_bvalid),
+        .m_axi_uart_bready(uart_bready),
+        .m_axi_uart_araddr(uart_araddr), .m_axi_uart_arprot(uart_arprot),
+        .m_axi_uart_arvalid(uart_arvalid), .m_axi_uart_arready(uart_arready),
+        .m_axi_uart_rdata(uart_rdata), .m_axi_uart_rresp(uart_rresp),
+        .m_axi_uart_rvalid(uart_rvalid), .m_axi_uart_rready(uart_rready),
+
+        .m_axi_clint_awaddr(clint_awaddr), .m_axi_clint_awprot(clint_awprot),
+        .m_axi_clint_awvalid(clint_awvalid), .m_axi_clint_awready(clint_awready),
+        .m_axi_clint_wdata(clint_wdata), .m_axi_clint_wstrb(clint_wstrb),
+        .m_axi_clint_wvalid(clint_wvalid), .m_axi_clint_wready(clint_wready),
+        .m_axi_clint_bresp(clint_bresp), .m_axi_clint_bvalid(clint_bvalid),
+        .m_axi_clint_bready(clint_bready),
+        .m_axi_clint_araddr(clint_araddr), .m_axi_clint_arprot(clint_arprot),
+        .m_axi_clint_arvalid(clint_arvalid), .m_axi_clint_arready(clint_arready),
+        .m_axi_clint_rdata(clint_rdata), .m_axi_clint_rresp(clint_rresp),
+        .m_axi_clint_rvalid(clint_rvalid), .m_axi_clint_rready(clint_rready)
     );
 
     //==================================================================
@@ -279,66 +304,126 @@ module tb_axi_xbar #(
     );
 
     //==================================================================
-    // Peripheral model on master port 1 (AXI4-Lite, 4 registers)
+    // UART model behind the Lite fan-out (AXI4-Lite, 4 registers)
     //==================================================================
-    logic [31:0] periph [4];
-    logic [PERIPH_AW-1:0] pw_addr;
-    logic                 pw_have_addr = 0, pw_have_data = 0;
-    logic [31:0]          pw_data;
+    logic [31:0] uart_regs [4];
+    logic [UART_AW-1:0] uw_addr;
+    logic                 uw_have_addr = 0, uw_have_data = 0;
+    logic [31:0]          uw_data;
 
-    assign per_awready = !pw_have_addr;
-    assign per_wready  = !pw_have_data;
+    assign uart_awready = !uw_have_addr;
+    assign uart_wready  = !uw_have_data;
 
     always_ff @(posedge clk or negedge rstn) begin
         if (!rstn) begin
-            pw_have_addr <= 0;
-            pw_have_data <= 0;
-            per_bvalid   <= 0;
+            uw_have_addr <= 0;
+            uw_have_data <= 0;
+            uart_bvalid   <= 0;
         end else begin
-            if (per_awvalid && per_awready) begin
-                pw_addr      <= per_awaddr;
-                pw_have_addr <= 1;
+            if (uart_awvalid && uart_awready) begin
+                uw_addr      <= uart_awaddr;
+                uw_have_addr <= 1;
             end
-            if (per_wvalid && per_wready) begin
-                pw_data      <= per_wdata;
-                pw_have_data <= 1;
+            if (uart_wvalid && uart_wready) begin
+                uw_data      <= uart_wdata;
+                uw_have_data <= 1;
             end
-            if (pw_have_addr && pw_have_data && !per_bvalid) begin
-                periph[pw_addr[3:2]] <= pw_data;
-                pw_have_addr <= 0;
-                pw_have_data <= 0;
-                per_bvalid   <= 1;
-                per_bresp    <= RESP_OKAY;
+            if (uw_have_addr && uw_have_data && !uart_bvalid) begin
+                uart_regs[uw_addr[3:2]] <= uw_data;
+                uw_have_addr <= 0;
+                uw_have_data <= 0;
+                uart_bvalid   <= 1;
+                uart_bresp    <= RESP_OKAY;
             end
-            if (per_bvalid && per_bready)
-                per_bvalid <= 0;
+            if (uart_bvalid && uart_bready)
+                uart_bvalid <= 0;
         end
     end
 
-    assign per_arready = !per_rvalid;
+    assign uart_arready = !uart_rvalid;
 
     always_ff @(posedge clk or negedge rstn) begin
         if (!rstn) begin
-            per_rvalid <= 0;
+            uart_rvalid <= 0;
         end else begin
-            if (per_arvalid && per_arready) begin
-                per_rvalid <= 1;
-                per_rdata  <= periph[per_araddr[3:2]];
-                per_rresp  <= RESP_OKAY;
-            end else if (per_rvalid && per_rready) begin
-                per_rvalid <= 0;
+            if (uart_arvalid && uart_arready) begin
+                uart_rvalid <= 1;
+                uart_rdata  <= uart_regs[uart_araddr[3:2]];
+                uart_rresp  <= RESP_OKAY;
+            end else if (uart_rvalid && uart_rready) begin
+                uart_rvalid <= 0;
             end
         end
+    end
+
+
+    //==================================================================
+    // CLINT model behind the Lite fan-out (AXI4-Lite, 4 registers)
+    //==================================================================
+    logic [31:0] clint_regs [4];
+    logic [CLINT_AW-1:0] cw_addr;
+    logic                cw_have_addr = 0, cw_have_data = 0;
+    logic [31:0]         cw_data;
+
+    assign clint_awready = !cw_have_addr;
+    assign clint_wready  = !cw_have_data;
+
+    always_ff @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            cw_have_addr <= 0;
+            cw_have_data <= 0;
+            clint_bvalid <= 0;
+        end else begin
+            if (clint_awvalid && clint_awready) begin
+                cw_addr      <= clint_awaddr;
+                cw_have_addr <= 1;
+            end
+            if (clint_wvalid && clint_wready) begin
+                cw_data      <= clint_wdata;
+                cw_have_data <= 1;
+            end
+            if (cw_have_addr && cw_have_data && !clint_bvalid) begin
+                clint_regs[cw_addr[3:2]] <= cw_data;
+                cw_have_addr <= 0;
+                cw_have_data <= 0;
+                clint_bvalid <= 1;
+                clint_bresp  <= RESP_OKAY;
+            end
+            if (clint_bvalid && clint_bready)
+                clint_bvalid <= 0;
+        end
+    end
+
+    assign clint_arready = !clint_rvalid;
+
+    always_ff @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            clint_rvalid <= 0;
+        end else begin
+            if (clint_arvalid && clint_arready) begin
+                clint_rvalid <= 1;
+                clint_rdata  <= clint_regs[clint_araddr[3:2]];
+                clint_rresp  <= RESP_OKAY;
+            end else if (clint_rvalid && clint_rready) begin
+                clint_rvalid <= 0;
+            end
+        end
+    end
+
+    logic [CLINT_AW-1:0] seen_clint_awaddr, seen_clint_araddr;
+    always_ff @(posedge clk) begin
+        if (clint_awvalid && clint_awready) seen_clint_awaddr <= clint_awaddr;
+        if (clint_arvalid && clint_arready) seen_clint_araddr <= clint_araddr;
     end
 
     // What the master ports last saw, so the address truncation can be checked.
     logic [RAM_AW-1:0]    seen_ram_awaddr, seen_ram_araddr;
-    logic [PERIPH_AW-1:0] seen_per_awaddr, seen_per_araddr;
+    logic [UART_AW-1:0] seen_uart_awaddr, seen_uart_araddr;
     always_ff @(posedge clk) begin
         if (ram_awvalid && ram_awready) seen_ram_awaddr <= ram_awaddr;
         if (ram_arvalid && ram_arready) seen_ram_araddr <= ram_araddr;
-        if (per_awvalid && per_awready) seen_per_awaddr <= per_awaddr;
-        if (per_arvalid && per_arready) seen_per_araddr <= per_araddr;
+        if (uart_awvalid && uart_awready) seen_uart_awaddr <= uart_awaddr;
+        if (uart_arvalid && uart_arready) seen_uart_araddr <= uart_araddr;
     end
 
     //==================================================================
@@ -510,7 +595,8 @@ module tb_axi_xbar #(
         mem_araddr = 0; mem_arlen = 0; mem_arsize = 0; mem_arburst = 0;
         mem_arcache = 0; mem_arid = 0;
 
-        for (int unsigned i = 0; i < 4; i++) periph[i] = 32'h0;
+        for (int unsigned i = 0; i < 4; i++) uart_regs[i] = 32'h0;
+        for (int unsigned i = 0; i < 4; i++) clint_regs[i] = 32'h0;
 
         repeat (4) step();
         rstn = 1;
@@ -530,9 +616,9 @@ module tb_axi_xbar #(
 
         lite_write(PORT_DBG, PERIPH_BASE + 32'h4, 32'hCAFE_0001, resp);
         expect_eq("dbg write to peripheral resp", resp, RESP_OKAY);
-        expect_eq("dbg write landed in peripheral", periph[1], 32'hCAFE_0001);
-        expect_eq("peripheral port address", seen_per_awaddr,
-                  (PERIPH_BASE + 32'h4) & ((32'd1 << PERIPH_AW) - 1));
+        expect_eq("dbg write landed in the UART", uart_regs[1], 32'hCAFE_0001);
+        expect_eq("peripheral port address", seen_uart_awaddr,
+                  (PERIPH_BASE + 32'h4) & ((32'd1 << UART_AW) - 1));
 
         lite_read(PORT_DBG, PERIPH_BASE + 32'h4, rdata, resp);
         expect_eq("dbg read from peripheral resp", resp, RESP_OKAY);
@@ -543,7 +629,47 @@ module tb_axi_xbar #(
         //--------------------------------------------------------------
         lite_write(PORT_CPU, PERIPH_BASE + 32'h8, 32'h1357_9BDF, resp);
         expect_eq("cpu write to peripheral resp", resp, RESP_OKAY);
-        expect_eq("cpu write landed in peripheral", periph[2], 32'h1357_9BDF);
+        expect_eq("cpu write landed in the UART", uart_regs[2], 32'h1357_9BDF);
+
+        //--------------------------------------------------------------
+        // The AXI4-Lite fan-out: both peripherals are behind one AXI4
+        // master port and one axi2axilite, so the decode that separates
+        // them is the Lite crossbar's, not the main crossbar's.
+        //--------------------------------------------------------------
+        $display("-- the Lite peripheral fan-out");
+
+        lite_write(PORT_CPU, CLINT_BASE + 32'h4, 32'h0BAD_C0DE, resp);
+        expect_eq("cpu write to the CLINT resp", resp, RESP_OKAY);
+        expect_eq("cpu write landed in the CLINT", clint_regs[1], 32'h0BAD_C0DE);
+        expect_eq("...and not in the UART", uart_regs[1], 32'hCAFE_0001);
+
+        lite_read(PORT_CPU, CLINT_BASE + 32'h4, rdata, resp);
+        expect_eq("cpu read from the CLINT resp", resp, RESP_OKAY);
+        expect_eq("cpu read from the CLINT", rdata, 32'h0BAD_C0DE);
+
+        //The debugger reaches it too, which is the point of moving the CLINT
+        //out of the wrapper's peripheral split and onto the bus.
+        lite_write(PORT_DBG, CLINT_BASE + 32'h8, 32'h5EED_5EED, resp);
+        expect_eq("dbg write to the CLINT resp", resp, RESP_OKAY);
+        expect_eq("dbg write landed in the CLINT", clint_regs[2], 32'h5EED_5EED);
+        lite_read(PORT_DBG, CLINT_BASE + 32'h8, rdata, resp);
+        expect_eq("dbg read from the CLINT", rdata, 32'h5EED_5EED);
+
+        //Each port sees only its own window's low bits.
+        expect_eq("CLINT saw its offset, truncated",
+                  32'(seen_clint_awaddr),
+                  (CLINT_BASE + 32'h8) & ((32'd1 << CLINT_AW) - 1));
+
+        //An address inside the main crossbar's peripheral rule but claimed by
+        //no Lite rule is the Lite crossbar's error slave, not a hang.
+        lite_write(PORT_CPU, 32'h3000_0000, 32'hDEAD_0001, resp);
+        expect_eq("write to an unclaimed peripheral address DECERRs",
+                  resp, RESP_DECERR);
+        lite_read(PORT_CPU, 32'h3000_0000, rdata, resp);
+        expect_eq("read from an unclaimed peripheral address DECERRs",
+                  resp, RESP_DECERR);
+        expect_eq("the UART is untouched by it", uart_regs[0], 32'h0);
+        expect_eq("the CLINT is untouched by it", clint_regs[0], 32'h0);
 
         lite_read(PORT_CPU, PERIPH_BASE + 32'h8, rdata, resp);
         expect_eq("cpu read from peripheral resp", resp, RESP_OKAY);
@@ -625,7 +751,7 @@ module tb_axi_xbar #(
 
         mem_write(PERIPH_BASE, 8'd0, 6'h07, 32'hBAAD_BAAD, resp);
         expect_eq("cached port cannot reach the peripheral", resp, RESP_DECERR);
-        expect_eq("...and the peripheral is untouched", periph[0], 32'h0);
+        expect_eq("...and the UART is untouched", uart_regs[0], 32'h0);
 
         //--------------------------------------------------------------
         // Two masters in flight at once
@@ -642,15 +768,15 @@ module tb_axi_xbar #(
                 expect_eq("concurrent peripheral write resp", r, RESP_OKAY);
             end
         join
-        expect_eq("concurrent peripheral write landed", periph[3], 32'h9999_8888);
+        expect_eq("concurrent UART write landed", uart_regs[3], 32'h9999_8888);
         mem_read_check(RAM_BASE + 32'h400, 8'd7, 6'h11, 32'h5555_0000, resp);
         expect_eq("concurrent cached read back resp", resp, RESP_OKAY);
 
         repeat (10) step();
 
         if (errors == 0)
-            $display("PASS tb_axi_xbar: %0d checks (RAM_AW=%0d PERIPH_AW=%0d)",
-                     checks, RAM_AW, PERIPH_AW);
+            $display("PASS tb_axi_xbar: %0d checks (RAM_AW=%0d UART_AW=%0d CLINT_AW=%0d)",
+                     checks, RAM_AW, UART_AW, CLINT_AW);
         else
             $display("FAIL tb_axi_xbar: %0d of %0d checks failed", errors, checks);
         $finish;

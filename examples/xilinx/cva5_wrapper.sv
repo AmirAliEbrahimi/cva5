@@ -100,6 +100,30 @@ module cva5_wrapper
         output logic s_axi_ram_rvalid,
         input logic s_axi_ram_rready,
 
+        //CLINT, AXI4-Lite slave. Driven by the crossbar's Lite peripheral
+        //fan-out. 16 address bits is the 64 KB the CLINT decodes, and it is
+        //what tells Vivado the size of this port's address block -- a 32-bit
+        //port would offer a 4 GB aperture that can only sit at zero.
+        input logic [15:0] s_axi_clint_awaddr,
+        input logic [2:0] s_axi_clint_awprot,
+        input logic s_axi_clint_awvalid,
+        output logic s_axi_clint_awready,
+        input logic [31:0] s_axi_clint_wdata,
+        input logic [3:0] s_axi_clint_wstrb,
+        input logic s_axi_clint_wvalid,
+        output logic s_axi_clint_wready,
+        output logic [1:0] s_axi_clint_bresp,
+        output logic s_axi_clint_bvalid,
+        input logic s_axi_clint_bready,
+        input logic [15:0] s_axi_clint_araddr,
+        input logic [2:0] s_axi_clint_arprot,
+        input logic s_axi_clint_arvalid,
+        output logic s_axi_clint_arready,
+        output logic [31:0] s_axi_clint_rdata,
+        output logic [1:0] s_axi_clint_rresp,
+        output logic s_axi_clint_rvalid,
+        input logic s_axi_clint_rready,
+
         //Debug System Bus Access, AXI4-Lite master
         output logic [31:0] m_axi_dbg_awaddr,
         output logic [2:0] m_axi_dbg_awprot,
@@ -408,60 +432,37 @@ module cva5_wrapper
     //The core's AXI master has one transaction in flight and holds its address
     //until the response, and always accepts responses, so the target can be
     //chosen from the current address with no latching.
-    //Three targets now: the Debug Module's data registers, the CLINT, and
-    //everything else, which leaves the chip through m_axi to the crossbar.
-    //The CLINT is split off here rather than given a crossbar port of its own
-    //because this is the pattern already in place for the DM and it costs no
-    //change to the crossbar, the block design or cva5_top's port list. The
-    //consequence is that the debugger cannot reach the CLINT over the system
-    //bus -- only the core can -- which is the same bargain the DM's registers
-    //already make. A crossbar port is the change to make if poking mtime over
-    //JTAG ever matters.
+    //Two targets: the Debug Module's data registers, and everything else,
+    //which leaves the chip through m_axi to the crossbar. The CLINT used to be
+    //a third leg here; it is a crossbar peripheral now, so the debugger can
+    //reach it over the system bus as well as the core.
     logic pb_rd_dm, pb_wr_dm;
-    logic pb_rd_clint, pb_wr_clint;
-    logic pb_rd_ext, pb_wr_ext;
     assign pb_rd_dm = (m_axi.araddr[31:12] == DM_BASE[31:12]);
     assign pb_wr_dm = (m_axi.awaddr[31:12] == DM_BASE[31:12]);
-    assign pb_rd_clint = (m_axi.araddr[31:16] == CLINT_BASE[31:16]);
-    assign pb_wr_clint = (m_axi.awaddr[31:16] == CLINT_BASE[31:16]);
-    assign pb_rd_ext = ~pb_rd_dm & ~pb_rd_clint;
-    assign pb_wr_ext = ~pb_wr_dm & ~pb_wr_clint;
 
     logic dmp_ar_ready, dmp_r_valid, dmp_aw_ready, dmp_w_ready, dmp_b_valid;
     logic [31:0] dmp_r_data;
 
-    logic clint_ar_ready, clint_r_valid, clint_aw_ready, clint_w_ready, clint_b_valid;
-    logic [31:0] clint_r_data;
-
-    //External peripherals (UART); ID widths are mismatched but unused
-    assign m_axi_arvalid = m_axi.arvalid & pb_rd_ext;
+    //External peripherals; ID widths are mismatched but unused
+    assign m_axi_arvalid = m_axi.arvalid & ~pb_rd_dm;
     assign m_axi_araddr = m_axi.araddr;
     assign m_axi_rready = m_axi.rready;
-    assign m_axi_awvalid = m_axi.awvalid & pb_wr_ext;
+    assign m_axi_awvalid = m_axi.awvalid & ~pb_wr_dm;
     assign m_axi_awaddr = m_axi.awaddr;
-    assign m_axi_wvalid = m_axi.wvalid & pb_wr_ext;
+    assign m_axi_wvalid = m_axi.wvalid & ~pb_wr_dm;
     assign m_axi_wdata = m_axi.wdata;
     assign m_axi_wstrb = m_axi.wstrb;
     assign m_axi_bready = m_axi.bready;
 
-    //clint_wrapper's AXI-Lite leaves out bresp and rresp, so those are
-    //supplied here as the DM path's are: nothing in either can fail, and an
-    //address in neither window is the crossbar's problem.
-    assign m_axi.arready = pb_rd_dm ? dmp_ar_ready :
-                           pb_rd_clint ? clint_ar_ready : m_axi_arready;
-    assign m_axi.rvalid = pb_rd_dm ? dmp_r_valid :
-                          pb_rd_clint ? clint_r_valid : m_axi_rvalid;
-    assign m_axi.rdata = pb_rd_dm ? dmp_r_data :
-                         pb_rd_clint ? clint_r_data : m_axi_rdata;
-    assign m_axi.rresp = pb_rd_ext ? m_axi_rresp : 2'b00;
+    assign m_axi.arready = pb_rd_dm ? dmp_ar_ready : m_axi_arready;
+    assign m_axi.rvalid = pb_rd_dm ? dmp_r_valid : m_axi_rvalid;
+    assign m_axi.rdata = pb_rd_dm ? dmp_r_data : m_axi_rdata;
+    assign m_axi.rresp = pb_rd_dm ? 2'b00 : m_axi_rresp;
     assign m_axi.rid = 6'b0;
-    assign m_axi.awready = pb_wr_dm ? dmp_aw_ready :
-                           pb_wr_clint ? clint_aw_ready : m_axi_awready;
-    assign m_axi.wready = pb_wr_dm ? dmp_w_ready :
-                          pb_wr_clint ? clint_w_ready : m_axi_wready;
-    assign m_axi.bvalid = pb_wr_dm ? dmp_b_valid :
-                          pb_wr_clint ? clint_b_valid : m_axi_bvalid;
-    assign m_axi.bresp = pb_wr_ext ? m_axi_bresp : 2'b00;
+    assign m_axi.awready = pb_wr_dm ? dmp_aw_ready : m_axi_awready;
+    assign m_axi.wready = pb_wr_dm ? dmp_w_ready : m_axi_wready;
+    assign m_axi.bvalid = pb_wr_dm ? dmp_b_valid : m_axi_bvalid;
+    assign m_axi.bresp = pb_wr_dm ? 2'b00 : m_axi_bresp;
     assign m_axi.bid = 6'b0;
 
     ////////////////////////////////////////////////////
@@ -475,6 +476,16 @@ module cva5_wrapper
     //clint_wrapper ignores write strobes, so a sub-word write to one of its
     //registers writes the whole word. Software writes mtime and mtimecmp a
     //word at a time, which is what the layout is designed for.
+    //
+    //Reset by rstn alone, never by ndmreset -- the same rule the Debug Module
+    //and the RAM port follow, and for the same reason. cpu_hold asserts
+    //ndmreset and THEN talks to the system bus, so a peripheral the debugger
+    //can reach must not be held in reset by it: the access would never
+    //complete. The CLINT became reachable the moment it moved onto the
+    //crossbar, which is what makes this load bearing rather than tidy.
+    logic clint_rst = 1'b1; //Held in reset at configuration
+    always_ff @(posedge clk) clint_rst <= ~rstn;
+
     logic [63:0] clint_mtime;
     logic clint_msip, clint_mtip;
 
@@ -484,7 +495,7 @@ module cva5_wrapper
         .TICKS_PER_USEC (CLOCK_MHZ)
     ) clint_inst (
         .clk (clk),
-        .rst (rst),
+        .rst (clint_rst),
         .mtime (clint_mtime),
         .msip (clint_msip),
         .mtip (clint_mtip),
@@ -498,21 +509,28 @@ module cva5_wrapper
         .wb_dat_o (),
         .wb_ack (),
 
-        .s_axi_awvalid (m_axi.awvalid & pb_wr_clint),
-        .s_axi_awaddr (m_axi.awaddr),
-        .s_axi_awready (clint_aw_ready),
-        .s_axi_wvalid (m_axi.wvalid & pb_wr_clint),
-        .s_axi_wdata (m_axi.wdata),
-        .s_axi_wready (clint_w_ready),
-        .s_axi_bvalid (clint_b_valid),
-        .s_axi_bready (m_axi.bready),
-        .s_axi_arvalid (m_axi.arvalid & pb_rd_clint),
-        .s_axi_araddr (m_axi.araddr),
-        .s_axi_arready (clint_ar_ready),
-        .s_axi_rvalid (clint_r_valid),
-        .s_axi_rdata (clint_r_data),
-        .s_axi_rready (m_axi.rready)
+        //The crossbar's AXI4-Lite CLINT port. awprot/arprot and the write
+        //strobes arrive and are dropped: clint_wrapper has no ports for them.
+        .s_axi_awvalid (s_axi_clint_awvalid),
+        .s_axi_awaddr (32'(s_axi_clint_awaddr)),
+        .s_axi_awready (s_axi_clint_awready),
+        .s_axi_wvalid (s_axi_clint_wvalid),
+        .s_axi_wdata (s_axi_clint_wdata),
+        .s_axi_wready (s_axi_clint_wready),
+        .s_axi_bvalid (s_axi_clint_bvalid),
+        .s_axi_bready (s_axi_clint_bready),
+        .s_axi_arvalid (s_axi_clint_arvalid),
+        .s_axi_araddr (32'(s_axi_clint_araddr)),
+        .s_axi_arready (s_axi_clint_arready),
+        .s_axi_rvalid (s_axi_clint_rvalid),
+        .s_axi_rdata (s_axi_clint_rdata),
+        .s_axi_rready (s_axi_clint_rready)
     );
+
+    //Nothing in the CLINT can fail, and the crossbar has already decided the
+    //address is in its window.
+    assign s_axi_clint_bresp = 2'b00;
+    assign s_axi_clint_rresp = 2'b00;
 
     ////////////////////////////////////////////////////
     //Instruction bus split: the Debug Module's memory and the boot ROM

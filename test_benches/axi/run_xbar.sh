@@ -51,21 +51,21 @@ THIRD_PARTY_NOISE="-Wno-UNOPTFLAT -Wno-UNSIGNED -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC
 echo "== lint (our wrapper is held to -Wall) =="
 verilator --lint-only -Wall $THIRD_PARTY_NOISE --top-module cva5_axi_xbar $DESIGN
 
-# Two configurations: the one the block design deploys (full 32-bit master
-# ports, each slave taking the low bits at the interface net) and a narrowed
-# pair, so the M_*_ADDR_WIDTH path does not rot untested.
+# Three configurations: the widths the block design deploys, full 32-bit
+# ports, and a narrow pair -- so the M_*_ADDR_WIDTH truncation path does not
+# rot untested at either extreme.
 rm -rf "$BUILD"
 status=0
-for cfg in "32 32" "17 4"; do
+for cfg in "17 12 16" "32 32 32" "17 4 6"; do
     set -- $cfg
-    ram_aw=$1; periph_aw=$2
-    dir="$BUILD/aw${ram_aw}_${periph_aw}"
-    echo "== build (RAM_AW=$ram_aw PERIPH_AW=$periph_aw) =="
+    ram_aw=$1; uart_aw=$2; clint_aw=$3
+    dir="$BUILD/aw${ram_aw}_${uart_aw}_${clint_aw}"
+    echo "== build (RAM_AW=$ram_aw UART_AW=$uart_aw CLINT_AW=$clint_aw) =="
     mkdir -p "$dir"
     verilator --binary -j 0 --timing \
         $THIRD_PARTY_NOISE -Wno-BLKSEQ -Wno-INITIALDLY \
         --top-module tb_axi_xbar \
-        -GRAM_AW=$ram_aw -GPERIPH_AW=$periph_aw \
+        -GRAM_AW=$ram_aw -GUART_AW=$uart_aw -GCLINT_AW=$clint_aw \
         -Mdir "$dir" -o tb_axi_xbar \
         $DESIGN test_benches/axi/tb_axi_xbar.sv
     echo "== run =="

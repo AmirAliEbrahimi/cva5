@@ -50,6 +50,9 @@ SOURCES = [
     "third_party/axi/src/axi_mux.sv",
     "third_party/axi/src/axi_lite_to_axi.sv",
     "third_party/axi/src/axi_multicut.sv",
+    "third_party/axi/src/axi_lite_demux.sv",
+    "third_party/axi/src/axi_lite_mux.sv",
+    "third_party/axi/src/axi_lite_xbar.sv",
 ]
 
 INCLUDE_RE = re.compile(r'^\s*`include\s+"([^"]+)"')

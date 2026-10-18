@@ -408,17 +408,55 @@ alone: a width mismatch in the multicore `mtimecmp` indexing, and a latch
 inferred for `next_state` because its `unique case` has no `default`. All five
 states are covered, so synthesis treats the case as full.
 
-**The CLINT hangs off the core's peripheral bus, split by address inside
-`cva5_wrapper`**, the same way the Debug Module's data registers already are —
-not off a crossbar port of its own. That costs no change to the crossbar, the
-block design or `cva5_top`'s port list, and the consequence is that **the
-debugger cannot reach the CLINT over the system bus**; only the core can. It is
-the same bargain the DM's registers already make. Giving it a crossbar port is
-the change to make if poking `mtime` over JTAG ever matters.
+**The CLINT is a crossbar peripheral**, reached through the AXI4-Lite fan-out
+below, so the debugger sees it as well as the core — `p1_diag` reads `mtime`
+twice over SBA and reports the microseconds between them. It first shipped
+split off the core's peripheral bus inside `cva5_wrapper`, the way the Debug
+Module's registers are, which cost nothing but left it invisible to the
+debugger.
+
+Only the bus side leaves `cva5_top`. The CLINT itself stays inside, because
+`mtime`, `mtip` and `msip` have to reach the core and that is 66 signals that
+would otherwise cross the block design.
+
+**Its reset is `rstn` alone, never `ndmreset`** — the rule the Debug Module and
+the RAM port already follow, and for the same reason: `cpu_hold` asserts
+`ndmreset` and *then* talks to the system bus, so a peripheral the debugger can
+reach must not be held in reset by it, or the access never completes. That
+became load bearing the moment the CLINT moved onto the bus; while it was
+behind the wrapper's split it was merely tidy.
 
 `clint_wrapper` ignores write strobes, so a sub-word write to one of its
 registers writes the whole word. Software writes these a word at a time, which
 is what the layout is for.
+
+### The peripheral bus is an AXI4-Lite fan-out
+
+The crossbar has two AXI4 master ports: main RAM, and a peripheral window
+covering everything below `0x8000_0000`. That window is converted to AXI4-Lite
+once, by ZipCPU's `axi2axilite`, and then a **pulp `axi_lite_xbar` decodes it
+to one port per peripheral** — `m_axi_uart` and `m_axi_clint` today.
+
+The alternative was a master port on the main crossbar per peripheral. That
+means one `axi2axilite` each and a wider `axi_demux` arbitration, in a block the
+timing section already blames for congestion on the fetch path. With the timer,
+the SPI and the PLIC still to come, that is five converters against one, and
+each new peripheral would be a crossbar edit and a bench rewrite rather than a
+rule and a mux leg.
+
+`axi_lite_demux`, `axi_lite_mux` and `axi_lite_xbar` are vendored by
+`tools/vendor-pulp-sv.py` like the rest of the pulp sources, and need only
+`spill_register`, `fifo_v3` and `rr_arb_tree` — all already in this IP. Putting
+the Lite stage **inside `cva5_axi_xbar`** rather than in an IP of its own is
+deliberate: `axi_pkg` is a package, and the note in `package_openhw_ips.tcl`
+explains why only one packaged IP in a block design may carry it.
+
+With one slave port the per-port arbitration inside the Lite crossbar collapses,
+so what survives synthesis is an address decode, a demultiplexer and an error
+slave. An address inside the main crossbar's peripheral rule that no Lite rule
+claims gets a DECERR from that error slave rather than hanging —
+`run_xbar.sh` checks exactly that, at three different port-width
+configurations.
 
 ### The JTAG domain is constrained
 
@@ -538,7 +576,7 @@ something.
 
 | check | command | covers |
 |-------|---------|--------|
-| crossbar | `sh test_benches/axi/run_xbar.sh` | 131 checks, decode and DECERR |
+| crossbar | `test_benches/axi/run_xbar.sh` | 144 checks × 3 port-width configurations: decode, the Lite fan-out, DECERR from both error slaves |
 | register cut | `sh test_benches/axi/run_cut.sh` | 216 checks |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |

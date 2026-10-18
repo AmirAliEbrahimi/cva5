@@ -11,11 +11,14 @@
  *   S2  s_axi_dbg      debugger (SBA)         AXI4-Lite  -> both
  *
  *   M0  m_axi_ram      main RAM at RAM_BASE        AXI4, 8-bit IDs
- *   M1  m_axi_periph   peripheral window           AXI4-Lite
+ *   M1  everything below RAM, converted once to AXI4-Lite and then fanned
+ *       out by an internal Lite crossbar:
+ *         m_axi_uart   UART at PERIPH_BASE         AXI4-Lite
+ *         m_axi_clint  CLINT at CLINT_BASE         AXI4-Lite
  *
  * The address map is a parameter here rather than something the Vivado address
  * editor decides, so examples/sw/soc.h is the single source of truth for the
- * decode. Anything outside the two windows, or a master reaching for a slave
+ * decode. Anything outside the windows, or a master reaching for a slave
  * it is not connected to, comes back as a DECERR rather than being silently
  * misrouted: axi_xbar instantiates an axi_err_slv on every unconnected pair.
  *
@@ -45,7 +48,17 @@ module cva5_axi_xbar #(
     parameter logic [31:0] RAM_BASE    = 32'h8000_0000,
     parameter logic [31:0] RAM_SIZE    = 32'h0002_0000,  // 128 KB
     parameter logic [31:0] PERIPH_BASE = 32'h1000_0000,
-    parameter logic [31:0] PERIPH_SIZE = 32'h0001_0000,  // 64 KB
+    parameter logic [31:0] PERIPH_SIZE = 32'h0001_0000,  // 64 KB, the UART
+    parameter logic [31:0] CLINT_BASE  = 32'h0200_0000,
+    parameter logic [31:0] CLINT_SIZE  = 32'h0001_0000,  // 64 KB
+
+    // Width of each AXI4-Lite peripheral port's address bus. Vivado infers a
+    // packaged IP's address block from the width of its AXI address port, so
+    // these decide the apertures the block design offers: 12 bits is the
+    // UART's 4 KB, 16 bits the CLINT's 64 KB. A 32-bit port would produce a
+    // 4 GB aperture, which can only be placed at zero.
+    parameter int unsigned M_UART_ADDR_WIDTH  = 12,
+    parameter int unsigned M_CLINT_ADDR_WIDTH = 16,
 
     // Width of each master port's address bus. Leave at 32 unless a slave
     // genuinely needs a narrow port: Vivado truncates a wide master into a
@@ -214,27 +227,59 @@ module cva5_axi_xbar #(
         input logic [MST_ID_WIDTH-1:0] m_axi_ram_bid,
 
         //----------------------------------------------------------------
-        // M1: peripheral window (AXI4-Lite)
+        // M1: the peripheral window, fanned out by an AXI4-Lite crossbar
+        //
+        // One AXI4-to-Lite conversion feeds a Lite crossbar that decodes to
+        // these ports. Giving each peripheral its own AXI4 master port on the
+        // main crossbar would mean one axi2axilite per peripheral and a wider
+        // axi_demux arbitration; the Lite stage costs one decode and a mux leg
+        // per peripheral instead, which is what makes room for the timer, the
+        // SPI and the PLIC without touching this crossbar again.
         //----------------------------------------------------------------
-        output logic [M_PERIPH_ADDR_WIDTH-1:0] m_axi_periph_awaddr,
-        output logic [2:0] m_axi_periph_awprot,
-        output logic m_axi_periph_awvalid,
-        input logic m_axi_periph_awready,
-        output logic [31:0] m_axi_periph_wdata,
-        output logic [3:0] m_axi_periph_wstrb,
-        output logic m_axi_periph_wvalid,
-        input logic m_axi_periph_wready,
-        input logic [1:0] m_axi_periph_bresp,
-        input logic m_axi_periph_bvalid,
-        output logic m_axi_periph_bready,
-        output logic [M_PERIPH_ADDR_WIDTH-1:0] m_axi_periph_araddr,
-        output logic [2:0] m_axi_periph_arprot,
-        output logic m_axi_periph_arvalid,
-        input logic m_axi_periph_arready,
-        input logic [31:0] m_axi_periph_rdata,
-        input logic [1:0] m_axi_periph_rresp,
-        input logic m_axi_periph_rvalid,
-        output logic m_axi_periph_rready
+        // M1.0: UART (AXI4-Lite)
+        //----------------------------------------------------------------
+        output logic [M_UART_ADDR_WIDTH-1:0] m_axi_uart_awaddr,
+        output logic [2:0] m_axi_uart_awprot,
+        output logic m_axi_uart_awvalid,
+        input logic m_axi_uart_awready,
+        output logic [31:0] m_axi_uart_wdata,
+        output logic [3:0] m_axi_uart_wstrb,
+        output logic m_axi_uart_wvalid,
+        input logic m_axi_uart_wready,
+        input logic [1:0] m_axi_uart_bresp,
+        input logic m_axi_uart_bvalid,
+        output logic m_axi_uart_bready,
+        output logic [M_UART_ADDR_WIDTH-1:0] m_axi_uart_araddr,
+        output logic [2:0] m_axi_uart_arprot,
+        output logic m_axi_uart_arvalid,
+        input logic m_axi_uart_arready,
+        input logic [31:0] m_axi_uart_rdata,
+        input logic [1:0] m_axi_uart_rresp,
+        input logic m_axi_uart_rvalid,
+        output logic m_axi_uart_rready,
+
+        //----------------------------------------------------------------
+        // M1.1: CLINT (AXI4-Lite)
+        //----------------------------------------------------------------
+        output logic [M_CLINT_ADDR_WIDTH-1:0] m_axi_clint_awaddr,
+        output logic [2:0] m_axi_clint_awprot,
+        output logic m_axi_clint_awvalid,
+        input logic m_axi_clint_awready,
+        output logic [31:0] m_axi_clint_wdata,
+        output logic [3:0] m_axi_clint_wstrb,
+        output logic m_axi_clint_wvalid,
+        input logic m_axi_clint_wready,
+        input logic [1:0] m_axi_clint_bresp,
+        input logic m_axi_clint_bvalid,
+        output logic m_axi_clint_bready,
+        output logic [M_CLINT_ADDR_WIDTH-1:0] m_axi_clint_araddr,
+        output logic [2:0] m_axi_clint_arprot,
+        output logic m_axi_clint_arvalid,
+        input logic m_axi_clint_arready,
+        input logic [31:0] m_axi_clint_rdata,
+        input logic [1:0] m_axi_clint_rresp,
+        input logic m_axi_clint_rvalid,
+        output logic m_axi_clint_rready
     );
 
     localparam int unsigned NUM_SLV = 32'd3;
@@ -478,9 +523,12 @@ module cva5_axi_xbar #(
         addr_map[0] = '{idx: 32'd0,
                         start_addr: RAM_BASE,
                         end_addr:   RAM_BASE + RAM_SIZE};
+        //Everything below RAM reaches the Lite stage, which does the fine
+        //decode and answers an unclaimed address with a DECERR of its own.
+        //A narrow rule here would need widening for every peripheral added.
         addr_map[1] = '{idx: 32'd1,
-                        start_addr: PERIPH_BASE,
-                        end_addr:   PERIPH_BASE + PERIPH_SIZE};
+                        start_addr: 32'h0000_0000,
+                        end_addr:   RAM_BASE};
     end
 
     slv_req_t  [NUM_SLV-1:0] slv_req;
@@ -806,25 +854,152 @@ module cva5_axi_xbar #(
         .S_AXI_RRESP   (p2l_rresp),
         .S_AXI_RLAST   (p2l_rlast),
 
-        .M_AXI_AWADDR  (m_axi_periph_awaddr),
-        .M_AXI_AWPROT  (m_axi_periph_awprot),
-        .M_AXI_AWVALID (m_axi_periph_awvalid),
-        .M_AXI_AWREADY (m_axi_periph_awready),
-        .M_AXI_WDATA   (m_axi_periph_wdata),
-        .M_AXI_WSTRB   (m_axi_periph_wstrb),
-        .M_AXI_WVALID  (m_axi_periph_wvalid),
-        .M_AXI_WREADY  (m_axi_periph_wready),
-        .M_AXI_BRESP   (m_axi_periph_bresp),
-        .M_AXI_BVALID  (m_axi_periph_bvalid),
-        .M_AXI_BREADY  (m_axi_periph_bready),
-        .M_AXI_ARADDR  (m_axi_periph_araddr),
-        .M_AXI_ARPROT  (m_axi_periph_arprot),
-        .M_AXI_ARVALID (m_axi_periph_arvalid),
-        .M_AXI_ARREADY (m_axi_periph_arready),
-        .M_AXI_RDATA   (m_axi_periph_rdata),
-        .M_AXI_RRESP   (m_axi_periph_rresp),
-        .M_AXI_RVALID  (m_axi_periph_rvalid),
-        .M_AXI_RREADY  (m_axi_periph_rready)
+        .M_AXI_AWADDR  (l2x_req.aw.addr),
+        .M_AXI_AWPROT  (l2x_req.aw.prot),
+        .M_AXI_AWVALID (l2x_req.aw_valid),
+        .M_AXI_AWREADY (l2x_resp.aw_ready),
+        .M_AXI_WDATA   (l2x_req.w.data),
+        .M_AXI_WSTRB   (l2x_req.w.strb),
+        .M_AXI_WVALID  (l2x_req.w_valid),
+        .M_AXI_WREADY  (l2x_resp.w_ready),
+        .M_AXI_BRESP   (l2x_resp.b.resp),
+        .M_AXI_BVALID  (l2x_resp.b_valid),
+        .M_AXI_BREADY  (l2x_req.b_ready),
+        .M_AXI_ARADDR  (l2x_req.ar.addr),
+        .M_AXI_ARPROT  (l2x_req.ar.prot),
+        .M_AXI_ARVALID (l2x_req.ar_valid),
+        .M_AXI_ARREADY (l2x_resp.ar_ready),
+        .M_AXI_RDATA   (l2x_resp.r.data),
+        .M_AXI_RRESP   (l2x_resp.r.resp),
+        .M_AXI_RVALID  (l2x_resp.r_valid),
+        .M_AXI_RREADY  (l2x_req.r_ready)
     );
+
+    //------------------------------------------------------------------
+    // The AXI4-Lite fan-out
+    //
+    // One slave port, one per peripheral out. With a single slave port the
+    // per-port arbitration inside collapses, so what is left is an address
+    // decode, a demultiplexer and an error slave for an address no rule
+    // claims. Adding a peripheral is a rule and a port, not another
+    // axi2axilite and another leg of the main crossbar's arbitration.
+    //------------------------------------------------------------------
+    localparam int unsigned NUM_LITE_MST = 32'd2;
+
+    lite_req_t  [0:0] l2x_req_a;
+    lite_resp_t [0:0] l2x_resp_a;
+    lite_req_t  l2x_req;
+    lite_resp_t l2x_resp;
+
+    assign l2x_req_a[0] = l2x_req;
+    assign l2x_resp = l2x_resp_a[0];
+
+    lite_req_t  [NUM_LITE_MST-1:0] lite_mst_req;
+    lite_resp_t [NUM_LITE_MST-1:0] lite_mst_resp;
+
+    // AXI4-Lite carries no IDs, so the ID widths here are the minimum the
+    // configuration struct will accept rather than anything meaningful.
+    localparam axi_pkg::xbar_cfg_t LiteCfg = '{
+        NoSlvPorts:         32'd1,
+        NoMstPorts:         32'(NUM_LITE_MST),
+        MaxMstTrans:        32'(MAX_TRANS),
+        MaxSlvTrans:        32'(MAX_TRANS),
+        FallThrough:        1'b0,
+        LatencyMode:        axi_pkg::CUT_SLV_AX,
+        PipelineStages:     32'd0,
+        AxiIdWidthSlvPorts: 32'd1,
+        AxiIdUsedSlvPorts:  32'd1,
+        UniqueIds:          1'b0,
+        AxiAddrWidth:       32'd32,
+        AxiDataWidth:       32'd32,
+        NoAddrRules:        32'(NUM_LITE_MST)
+    };
+
+    axi_pkg::xbar_rule_32_t [NUM_LITE_MST-1:0] lite_addr_map;
+    always_comb begin
+        lite_addr_map[0] = '{idx: 32'd0,
+                             start_addr: PERIPH_BASE,
+                             end_addr:   PERIPH_BASE + PERIPH_SIZE};
+        lite_addr_map[1] = '{idx: 32'd1,
+                             start_addr: CLINT_BASE,
+                             end_addr:   CLINT_BASE + CLINT_SIZE};
+    end
+
+    axi_lite_xbar #(
+        .Cfg (LiteCfg),
+        .aw_chan_t (lite_aw_chan_t),
+        .w_chan_t (lite_w_chan_t),
+        .b_chan_t (lite_b_chan_t),
+        .ar_chan_t (lite_ar_chan_t),
+        .r_chan_t (lite_r_chan_t),
+        .axi_req_t (lite_req_t),
+        .axi_resp_t (lite_resp_t),
+        .rule_t (axi_pkg::xbar_rule_32_t)
+    ) lite_xbar (
+        .clk_i (clk),
+        .rst_ni (rstn),
+        .test_i (1'b0),
+        .slv_ports_req_i (l2x_req_a),
+        .slv_ports_resp_o (l2x_resp_a),
+        .mst_ports_req_o (lite_mst_req),
+        .mst_ports_resp_i (lite_mst_resp),
+        .addr_map_i (lite_addr_map),
+        .en_default_mst_port_i ('0),
+        .default_mst_port_i ('0)
+    );
+
+    //------------------------------------------------------------------
+    // M1.0: UART
+    //------------------------------------------------------------------
+    assign m_axi_uart_awaddr  = lite_mst_req[0].aw.addr[M_UART_ADDR_WIDTH-1:0];
+    assign m_axi_uart_awprot  = lite_mst_req[0].aw.prot;
+    assign m_axi_uart_awvalid = lite_mst_req[0].aw_valid;
+    assign m_axi_uart_wdata   = lite_mst_req[0].w.data;
+    assign m_axi_uart_wstrb   = lite_mst_req[0].w.strb;
+    assign m_axi_uart_wvalid  = lite_mst_req[0].w_valid;
+    assign m_axi_uart_bready  = lite_mst_req[0].b_ready;
+    assign m_axi_uart_araddr  = lite_mst_req[0].ar.addr[M_UART_ADDR_WIDTH-1:0];
+    assign m_axi_uart_arprot  = lite_mst_req[0].ar.prot;
+    assign m_axi_uart_arvalid = lite_mst_req[0].ar_valid;
+    assign m_axi_uart_rready  = lite_mst_req[0].r_ready;
+
+    always_comb begin
+        lite_mst_resp[0] = '0;
+        lite_mst_resp[0].aw_ready = m_axi_uart_awready;
+        lite_mst_resp[0].w_ready  = m_axi_uart_wready;
+        lite_mst_resp[0].b.resp   = m_axi_uart_bresp;
+        lite_mst_resp[0].b_valid  = m_axi_uart_bvalid;
+        lite_mst_resp[0].ar_ready = m_axi_uart_arready;
+        lite_mst_resp[0].r.data   = m_axi_uart_rdata;
+        lite_mst_resp[0].r.resp   = m_axi_uart_rresp;
+        lite_mst_resp[0].r_valid  = m_axi_uart_rvalid;
+    end
+
+    //------------------------------------------------------------------
+    // M1.1: CLINT
+    //------------------------------------------------------------------
+    assign m_axi_clint_awaddr  = lite_mst_req[1].aw.addr[M_CLINT_ADDR_WIDTH-1:0];
+    assign m_axi_clint_awprot  = lite_mst_req[1].aw.prot;
+    assign m_axi_clint_awvalid = lite_mst_req[1].aw_valid;
+    assign m_axi_clint_wdata   = lite_mst_req[1].w.data;
+    assign m_axi_clint_wstrb   = lite_mst_req[1].w.strb;
+    assign m_axi_clint_wvalid  = lite_mst_req[1].w_valid;
+    assign m_axi_clint_bready  = lite_mst_req[1].b_ready;
+    assign m_axi_clint_araddr  = lite_mst_req[1].ar.addr[M_CLINT_ADDR_WIDTH-1:0];
+    assign m_axi_clint_arprot  = lite_mst_req[1].ar.prot;
+    assign m_axi_clint_arvalid = lite_mst_req[1].ar_valid;
+    assign m_axi_clint_rready  = lite_mst_req[1].r_ready;
+
+    always_comb begin
+        lite_mst_resp[1] = '0;
+        lite_mst_resp[1].aw_ready = m_axi_clint_awready;
+        lite_mst_resp[1].w_ready  = m_axi_clint_wready;
+        lite_mst_resp[1].b.resp   = m_axi_clint_bresp;
+        lite_mst_resp[1].b_valid  = m_axi_clint_bvalid;
+        lite_mst_resp[1].ar_ready = m_axi_clint_arready;
+        lite_mst_resp[1].r.data   = m_axi_clint_rdata;
+        lite_mst_resp[1].r.resp   = m_axi_clint_rresp;
+        lite_mst_resp[1].r_valid  = m_axi_clint_rvalid;
+    end
 
 endmodule

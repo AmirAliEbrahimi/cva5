@@ -107,6 +107,12 @@ connect_bd_net $sys_rstn [get_bd_pins cva5_uart_0/rstn]
 #   m_axi      -> s_axi_cpu    peripherals only
 #   m_axi_dbg  -> s_axi_dbg    RAM and peripherals
 #
+# On the master side the peripheral window is one AXI4 port inside the IP,
+# converted once to AXI4-Lite and then fanned out by a Lite crossbar to one
+# port per peripheral. So m_axi_uart and m_axi_clint are two legs of one
+# conversion rather than two ports on the main crossbar, and the next
+# peripheral is a rule and a leg rather than another converter.
+#
 # s_axi_mem was the cached master's port and nothing drives it now; see below.
 create_bd_cell -type ip -vlnv xilinx.com:user:cva5_axi_xbar:1.0 axi_xbar_0
 connect_bd_net $sys_clk  [get_bd_pins axi_xbar_0/clk]
@@ -120,7 +126,8 @@ connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg] [get_bd_intf_pins ax
 # this one so the memory rework is measured on its own.
 
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_ram]    [get_bd_intf_pins cva5_top_0/s_axi_ram]
-connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_periph] [get_bd_intf_pins cva5_uart_0/s_axi]
+connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_uart]  [get_bd_intf_pins cva5_uart_0/s_axi]
+connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_clint] [get_bd_intf_pins cva5_top_0/s_axi_clint]
 
 # ---- Address map ----------------------------------------------------------
 # Every link here is point to point, so nothing in the block design decodes
@@ -144,9 +151,9 @@ if {$ram_seg eq ""} { error "the crossbar's RAM port has no address segment" }
 set_property offset 0x80000000 $ram_seg
 set_property range  128K       $ram_seg
 
-set uart_seg [cva5_seg {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_reg0} \
-                       {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_Reg} \
-                       {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_s_axi}]
+set uart_seg [cva5_seg {axi_xbar_0/m_axi_uart/SEG_cva5_uart_0_reg0} \
+                       {axi_xbar_0/m_axi_uart/SEG_cva5_uart_0_Reg} \
+                       {axi_xbar_0/m_axi_uart/SEG_cva5_uart_0_s_axi}]
 if {$uart_seg eq ""} { error "the crossbar's peripheral port has no address segment" }
 # 4K, which is the aperture cva5_uart's 12-bit address port gives it. A wider
 # range here is refused: the segment cannot be larger than the IP's address
@@ -154,6 +161,16 @@ if {$uart_seg eq ""} { error "the crossbar's peripheral port has no address segm
 # within it, exactly as axi_uartlite's four registers did.
 set_property offset 0x10000000 $uart_seg
 set_property range  4K         $uart_seg
+
+# The CLINT lives inside cva5_top, because mtime, mtip and msip have to reach
+# the core -- 66 signals that would otherwise cross the block design. Only the
+# bus side comes back out here. 64K, matching the 16-bit address port.
+set clint_seg [cva5_seg {axi_xbar_0/m_axi_clint/SEG_cva5_top_0_reg0} \
+                        {axi_xbar_0/m_axi_clint/SEG_cva5_top_0_Reg} \
+                        {axi_xbar_0/m_axi_clint/SEG_cva5_top_0_s_axi_clint}]
+if {$clint_seg eq ""} { error "the crossbar's CLINT port has no address segment" }
+set_property offset 0x02000000 $clint_seg
+set_property range  64K        $clint_seg
 
 # ---- Finalise -------------------------------------------------------------
 regenerate_bd_layout
