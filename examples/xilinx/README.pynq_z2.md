@@ -11,7 +11,7 @@ block RAM inside the core, with an AXI UART Lite for console output. A single sl
 | `package_as_ip_pynq_z2.tcl`   | packages the CVA5 core as a Vivado IP into `./vivado/ip_repo`            |
 | `pynq_z2_sys.tcl`             | builds the SoC block design (clock, reset, CVA5, AXI UART Lite) + XDC    |
 | `pynq_z2_cva5.xdc`            | pins only — reset switch and PMOD UART                                  |
-| `vendor/boot_rom.sv`          | riscv-dbg's boot ROM, hand-vendored (see Memory map)                    |
+| `vendor/boot_rom.sv`          | riscv-dbg's boot ROM, hand-vendored (see Boot ROM)                      |
 | `pynq_z2_jtag.xdc`            | JTAG clock, its CDC constraints, TIMING-9 waiver (implementation only)  |
 
 ## Open-hardware AXI blocks
@@ -37,7 +37,7 @@ for it.
 | region | base | size | state |
 |---|---|---|---|
 | Debug Module | `0x0000_0000` | 4 KB | present |
-| boot ROM | `0x0001_0000` | 64 KB | reserved |
+| boot ROM | `0x0001_0000` | 64 KB | present (2 instructions; reset vector) |
 | CLINT | `0x0200_0000` | 768 KB | reserved |
 | PLIC | `0x0C00_0000` | 64 MB | reserved |
 | UART | `0x1000_0000` | 4 KB | present |
@@ -64,7 +64,7 @@ sits 0x40 above it:
 
 ```
 0x8000_0000   trap_entry    reads mcause/mepc/mtval into t0/t1/t2 and parks
-0x8000_0040   _start        RESET_VEC points here
+0x8000_0040   _start        the boot ROM jumps here
 ```
 
 `fpga_link.ld` asserts both addresses, so the hardware parameters and the image
@@ -76,10 +76,52 @@ deliberately does not print: a trap can arrive with a broken stack or before
 the UART is usable, and a handler that faults while reporting a fault tells you
 nothing. `make load`'s OpenOCD can read those three registers.
 
-CVA6 has a boot ROM at `0x0001_0000` because its main memory is external DDR,
-which comes up empty — something has to exist at reset to fill it. Ours is
-on-chip block RAM that `$readmemh` initialises from `ram.mif` at FPGA
-configuration, so the bitstream does that job and the window is only reserved.
+### Boot ROM
+
+`RESET_VEC` is `0x0001_0000`, CVA6's boot ROM address, and the ROM there is two
+instructions:
+
+```
+0x0001_0000   lui  x1, %hi(0x8000_0040)
+0x0001_0004   jalr x0, %lo(0x8000_0040)(x1)
+```
+
+CVA6 needs a ROM because its main memory is external DDR, which comes up empty.
+Ours is on-chip block RAM that `$readmemh` initialises from `ram.mif` at FPGA
+configuration, so the bitstream could put the reset vector straight into RAM —
+and did, until this change. The ROM is there for a different reason: RAM is
+writable and `make load` writes it, so a reset vector in RAM means the first
+instruction after reset is whatever the last load left behind, which during
+bring-up is exactly the thing under test. Two instructions in LUTs cannot be
+corrupted by software or by the debugger.
+
+`vendor/boot_rom.sv` is hand-vendored from `third_party/riscv-dbg/tb/boot_rom.sv`
+(Solderpad 0.51), which is in riscv-dbg's testbench directory and so outside the
+vendored source set. `ENTRY_ADDR` is a parameter, passed `APP_ENTRY` by the
+wrapper, so the ROM and `fpga_link.ld` cannot disagree about where the program
+starts. The lui/jalr pair is built as a real `%hi`/`%lo` pair: upstream splits
+the address as `{addr[31:12], addr[11:0]}`, which is wrong whenever bit 11 is
+set, because `jalr` sign-extends its immediate and a low half of `0x800`–`0xFFF`
+then subtracts. `test_benches/debug/run_boot_rom.sh` decodes what the ROM
+returns and recomputes the target for six entry addresses, including that case.
+
+The core has one instruction bus, so `IBUS_ADDR` has to span both the Debug
+Module and the ROM, and `cva5_wrapper` splits it by address. Its top is
+`0x0001_FFFF` rather than `ROM_BASE + 0xFFF` to keep the window a power of two:
+fetch range-checks every PC against it, and `pc <= 0x0001_FFFF` is `~|pc[31:17]`
+where `pc <= 0x0001_0FFF` is a magnitude comparator — and fetch is this design's
+critical path. It also keeps `BUS_RANGE` equal to `SCRATCH_RANGE`, so
+`branch_predictor.sv`'s `get_memory_width()` still takes the scratch branch and
+`BTAG_W` stays 6.
+
+Addresses on the instruction bus that are in neither window read as zero, which
+decodes as an illegal instruction and traps. Withholding the acknowledge instead
+would hang fetch with nothing to show why.
+
+**Under QEMU the reset vector is still `0x8000_0040`**, not the ROM: the machine
+model has no ROM and sets `resetvec` directly. It also does not set `mtvec`, so
+a trap under QEMU jumps to zero rather than to `trap_entry`. Neither matters for
+running a program, but QEMU is not the place to test the ROM or the handler.
 
 ### Memory
 
@@ -97,8 +139,7 @@ comparator's carry chain, into the store queue's attribute RAM *address*. The
 register slice on the cached path, itself load bearing at 0.321 ns, existed
 only to cut the burst path the instruction cache created. All of it is gone.
 
-The reset vector is the bottom of RAM, so there is no separate boot ROM
-either. `make ram` builds the preload image the bitstream bakes in. It is a park loop
+`make ram` builds the preload image the bitstream bakes in. It is a park loop
 that prints nothing, so a freshly programmed board is silent and the UART
 carries only what you load over JTAG.
 
@@ -354,6 +395,7 @@ something.
 | crossbar | `sh test_benches/axi/run_xbar.sh` | 131 checks, decode and DECERR |
 | register cut | `sh test_benches/axi/run_cut.sh` | 216 checks |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
+| boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |
 | silent boot | program the board | the preload prints nothing |
 | debugger load | `make -C examples/sw load` | SBA block write, verify, release |

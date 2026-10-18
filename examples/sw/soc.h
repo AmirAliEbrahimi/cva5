@@ -6,7 +6,7 @@
  * else's convention rather than ours:
  *
  *   0x0000_0000   4 KB    Debug Module (riscv-dbg: ROM, program buffer, data)
- *   0x0001_0000  64 KB    boot ROM                              [reserved]
+ *   0x0001_0000  64 KB    boot ROM -- the reset vector
  *   0x0200_0000 768 KB    CLINT -- mtime/mtimecmp, software IRQ [reserved]
  *   0x0C00_0000  64 MB    PLIC                                  [reserved]
  *   0x1000_0000   4 KB    UART
@@ -23,9 +23,18 @@
  * CVA6 has a boot ROM at 0x0001_0000 because its main memory is external DDR,
  * which comes up empty -- something has to exist at reset to fill it. Ours is
  * on-chip block RAM that $readmemh initialises from examples/sw/ram.mif at
- * FPGA configuration, so the bitstream does that job. The window is reserved
- * anyway, because a ROM is the natural home for a trap handler that survives
- * `make load` overwriting RAM.
+ * FPGA configuration, so the bitstream could do that job on its own. There is
+ * a ROM anyway, and the reset vector points at it rather than at RAM:
+ *
+ *   - RAM is writable, and `make load` writes it. A reset vector in RAM means
+ *     the first instruction after reset is whatever the last load left there,
+ *     which during bring-up is the thing being debugged.
+ *   - It is two instructions in LUTs -- lui/jalr to APP_ENTRY -- so it costs
+ *     essentially nothing and cannot be corrupted by software or by the
+ *     debugger.
+ *
+ * Software does not need ROM_BASE: nothing is callable there and the ROM's
+ * only job is the jump. It is here because the map is here.
  *
  * SPDX-License-Identifier: Apache-2.0
  */

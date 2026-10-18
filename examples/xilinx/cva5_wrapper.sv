@@ -178,6 +178,11 @@ module cva5_wrapper
     //DM over DMI, not the system bus -- but it does mean a trap can no longer
     //be left to go to address zero, which is what TRAP_VEC below is for.
     localparam logic [31:0] DM_BASE = 32'h0000_0000;
+    //Boot ROM, at CVA6's address. Two instructions: the reset vector points
+    //here and the ROM jumps to APP_ENTRY, so the core comes out of reset into
+    //a genuinely read-only location rather than into writable RAM that the
+    //debugger may not have loaded yet.
+    localparam logic [31:0] ROM_BASE = 32'h0001_0000;
     localparam logic [31:0] RAM_BASE = 32'h8000_0000;
 
     //Where a trap goes, and where execution starts. Nothing in examples/sw
@@ -209,7 +214,7 @@ module cva5_wrapper
         CSRS : '{
             MACHINE_IMPLEMENTATION_ID : 0,
             CPU_ID : 0,
-            RESET_VEC : APP_ENTRY,
+            RESET_VEC : ROM_BASE,
             RESET_TVEC : TRAP_VEC,
             MCONFIGPTR : '0,
             INCLUDE_ZICNTR : 1,
@@ -277,11 +282,28 @@ module cva5_wrapper
             L : RAM_BASE,
             H : RAM_BASE + 32'(WORDS*4 - 1)
         },
-        //Instruction bus: fetches of the Debug Module's ROM and program buffer
+        //Instruction bus: fetches of the Debug Module's ROM and program
+        //buffer, and of the boot ROM. One window has to span both, since the
+        //core has a single instruction bus, and this wrapper splits it by
+        //address below.
+        //
+        //The top is 0x0001_FFFF rather than ROM_BASE + 0xFFF so that the
+        //window is a power of two: fetch range-checks every PC against it, and
+        //"pc <= 0x0001_FFFF" is ~|pc[31:17] where "pc <= 0x0001_0FFF" is a
+        //magnitude comparator. The fetch path is this design's critical path,
+        //so the cheaper form is worth the window being larger than the two
+        //things in it. Addresses in the gaps read as zero, which decodes as an
+        //illegal instruction and traps.
+        //
+        //It also keeps the branch predictor's geometry unchanged: BUS_RANGE
+        //becomes 0x20000, equal to SCRATCH_RANGE, and branch_predictor.sv's
+        //get_memory_width() takes the SCRATCH branch unless BUS_RANGE is
+        //strictly greater -- so BTAG_W stays 6 and the tag banks keep their
+        //shape.
         INCLUDE_IBUS : 1,
         IBUS_ADDR : '{
             L : DM_BASE,
-            H : DM_BASE + 32'hFFF
+            H : 32'h0001_FFFF
         },
         //Peripheral bus: the UART, plus the Debug Module's data registers
         //(split off by address in this wrapper)
@@ -402,15 +424,59 @@ module cva5_wrapper
     assign m_axi.bresp = pb_wr_dm ? 2'b00 : m_axi_bresp;
     assign m_axi.bid = 6'b0;
 
+    ////////////////////////////////////////////////////
+    //Instruction bus split: the Debug Module's memory and the boot ROM
+    //
+    //iwishbone.adr is a word address, as the interface declares, so a 4 KB
+    //window compares adr[29:10] where a byte address would compare [31:12].
+    //dm_mem_port applies the same shift the other way when it drives the DM.
+    logic ib_dm_sel, ib_rom_sel;
+    assign ib_dm_sel = (iwishbone.adr[29:10] == DM_BASE[31:12]);
+    assign ib_rom_sel = (iwishbone.adr[29:10] == ROM_BASE[31:12]);
+
+    logic ib_dm_ack;
+    logic [31:0] ib_dm_dat_r, ib_rom_dat_r;
+
+    boot_rom #(.ENTRY_ADDR(APP_ENTRY)) boot_rom_inst (
+        .clk_i (clk),
+        .req_i (iwishbone.cyc & iwishbone.stb & ib_rom_sel),
+        .addr_i ({iwishbone.adr, 2'b00}),
+        .rdata_o (ib_rom_dat_r)
+    );
+
+    //Anything on the instruction bus that is not the Debug Module is answered
+    //from here in one cycle: the ROM inside its window, zero everywhere else.
+    //Zero matters -- it decodes as an illegal instruction and traps, where
+    //withholding the acknowledge would hang fetch with no indication of why.
+    //
+    //The acknowledge is a single cycle (hence the ~ib_other_ack term) and
+    //ib_rom_sel is registered alongside it, so the data mux selects the ROM in
+    //the same cycle the ROM presents its word.
+    logic ib_other_ack, ib_rom_sel_q;
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            ib_other_ack <= 1'b0;
+            ib_rom_sel_q <= 1'b0;
+        end
+        else begin
+            ib_other_ack <= iwishbone.cyc & iwishbone.stb & ~ib_dm_sel & ~ib_other_ack;
+            ib_rom_sel_q <= ib_rom_sel;
+        end
+    end
+
+    assign iwishbone.ack = ib_dm_sel ? ib_dm_ack : ib_other_ack;
+    assign iwishbone.dat_r = ib_dm_sel ? ib_dm_dat_r :
+                             ib_rom_sel_q ? ib_rom_dat_r : 32'h0;
+
     //Debug Module memory: instruction fetch and load/store share its one port
     dm_mem_port dm_port (
         .clk (clk),
         .rst (rst),
         .if_adr (iwishbone.adr),
-        .if_cyc (iwishbone.cyc),
+        .if_cyc (iwishbone.cyc & ib_dm_sel),
         .if_stb (iwishbone.stb),
-        .if_ack (iwishbone.ack),
-        .if_dat_r (iwishbone.dat_r),
+        .if_ack (ib_dm_ack),
+        .if_dat_r (ib_dm_dat_r),
         .ar_valid (m_axi.arvalid & pb_rd_dm),
         .ar_addr (m_axi.araddr),
         .ar_ready (dmp_ar_ready),

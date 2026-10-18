@@ -152,6 +152,7 @@ clean:
 	      app.elf app.elf.bin load.tcl idle.elf ram.sim \
 	      memtest.elf memtest.tcl \
 	      main.elf.rawbinary main.elf.dissasembled \
+	      idle.elf.rawbinary idle.elf.dissasembled \
 		  trace.fst.hier \
 	      $(LOG) $(SIG) $(TRACE)
 # Note: ram.mif is NOT removed here — the bitstream is built from it, so
