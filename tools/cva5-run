@@ -11,9 +11,10 @@
 # JTAG, so the bitstream is never rebuilt. The board must already be running a
 # bitstream with the Debug Module (see the README).
 #
-# By default the runtime (crt0.S, puts.c) from examples/sw is linked in, so a
-# program can be a bare main() that calls puts(). Use --no-runtime to supply
-# your own _start.
+# By default the runtime (crt0.S, trap.S, puts.c) from examples/sw is linked
+# in, so a program can be a bare main() that calls puts(). --no-runtime leaves
+# all three out, and the sources given then have to provide both _start and a
+# .trap section holding trap_entry: fpga_link.ld asserts where each one lands.
 #==============================================================================
 set -e
 
@@ -24,7 +25,7 @@ usage() {
 Options:
   -g, --gdb            start GDB attached to the running program afterwards
   -n, --no-load        build only; leave the board alone
-      --no-runtime     do not link crt0.S and puts.c from examples/sw
+      --no-runtime     do not link crt0.S, trap.S and puts.c from examples/sw
   -o, --out DIR        build directory (default: build/run)
   -O, --opt LEVEL      optimisation level: 0 1 2 3 s g (default: s)
       --arch ARCH      -march value (default: rv32im)
@@ -84,7 +85,11 @@ TCL=$OUT/load.tcl
 
 RUNTIME=""
 if [ "$WITH_RUNTIME" = 1 ]; then
-    RUNTIME="$SW_DIR/crt0.S $SW_DIR/puts.c"
+    # trap.S is not optional: fpga_link.ld places .trap at the base of RAM,
+    # because the core's RESET_TVEC points there and nothing in these examples
+    # writes mtvec, and it asserts that trap_entry is at that address. Leaving
+    # it out does not produce an image without a handler, it fails the link.
+    RUNTIME="$SW_DIR/crt0.S $SW_DIR/trap.S $SW_DIR/puts.c"
 fi
 
 echo "==> compiling$SOURCES"
