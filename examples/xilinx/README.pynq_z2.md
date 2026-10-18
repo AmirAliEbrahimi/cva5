@@ -339,6 +339,21 @@ read data one cycle later, no way to stall — so `cva5_uart` is a protocol
 adapter rather than a register file. One transaction at a time, writes granted
 ahead of reads so a program spinning on `STAT` cannot starve its own output.
 
+Its AXI address port is **12 bits wide, and that is load bearing**. Vivado
+infers a packaged IP's address block from the width of its AXI address port, so
+a 32-bit port produces a 4 GB aperture — and a 4 GB aperture can only be placed
+at zero, after which the address editor refuses the real offset:
+
+```
+ERROR: [BD 41-70] The proposed address '0x0_1000_0000 [ 4G ]' must fit an
+available aperture ... Valid apertures are {<0x0_0000_0000 [ 4G ]>}
+```
+
+`cva5_top`'s `s_axi_ram` gets its 128 KB block the same way, from its
+`RAM_ADDR_W`-wide port. The segment's range in `pynq_z2_sys.tcl` has to match
+the block, so it is 4K rather than the 64K the crossbar decodes to that port;
+the UART aliases within the window, as `axi_uartlite`'s four registers did.
+
 `run_uart.sh` ties `tx` back to `rx`, so one run covers the adapter, both FIFOs
 and both serial state machines. It decodes the line independently of the
 receiver, so a byte that round-trips through a malformed frame cannot pass, and

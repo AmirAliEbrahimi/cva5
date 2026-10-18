@@ -144,12 +144,16 @@ if {$ram_seg eq ""} { error "the crossbar's RAM port has no address segment" }
 set_property offset 0x80000000 $ram_seg
 set_property range  128K       $ram_seg
 
-set uart_seg [cva5_seg {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_s_axi} \
+set uart_seg [cva5_seg {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_reg0} \
                        {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_Reg} \
-                       {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_reg0}]
+                       {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_s_axi}]
 if {$uart_seg eq ""} { error "the crossbar's peripheral port has no address segment" }
+# 4K, which is the aperture cva5_uart's 12-bit address port gives it. A wider
+# range here is refused: the segment cannot be larger than the IP's address
+# block. The crossbar decodes a 64 KB window to this port and the UART aliases
+# within it, exactly as axi_uartlite's four registers did.
 set_property offset 0x10000000 $uart_seg
-set_property range  64K        $uart_seg
+set_property range  4K         $uart_seg
 
 # ---- Finalise -------------------------------------------------------------
 regenerate_bd_layout

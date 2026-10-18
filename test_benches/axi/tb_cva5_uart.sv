@@ -26,9 +26,9 @@ module tb_cva5_uart;
     localparam int unsigned DEPTH  = 4;
 
     //Register offsets -- axi_uartlite's, which is the point of the divergence
-    localparam logic [31:0] RX_OFF   = 32'h0;
-    localparam logic [31:0] TX_OFF   = 32'h4;
-    localparam logic [31:0] STAT_OFF = 32'h8;
+    localparam logic [11:0] RX_OFF   = 12'h0;
+    localparam logic [11:0] TX_OFF   = 12'h4;
+    localparam logic [11:0] STAT_OFF = 12'h8;
 
     localparam int STAT_RX_DATA  = 0;
     localparam int STAT_RX_FULL  = 1;
@@ -56,7 +56,11 @@ module tb_cva5_uart;
     //------------------------------------------------------------------
     //DUT, in loopback
     //------------------------------------------------------------------
-    logic [31:0] awaddr, wdata, araddr, rdata;
+    //The address ports are as narrow as the IP's, so the testbench drives the
+    //same widths synthesis sees.
+    localparam int unsigned AW = 12;
+    logic [AW-1:0] awaddr, araddr;
+    logic [31:0] wdata, rdata;
     logic [3:0]  wstrb;
     logic awvalid, awready, wvalid, wready, bvalid, bready;
     logic arvalid, arready, rvalid, rready;
@@ -98,7 +102,7 @@ module tb_cva5_uart;
     //------------------------------------------------------------------
     //AXI4-Lite master
     //------------------------------------------------------------------
-    task automatic axi_write(input logic [31:0] addr, input logic [31:0] data,
+    task automatic axi_write(input logic [11:0] addr, input logic [31:0] data,
                              input logic [3:0] strb = 4'hF);
         @(negedge clk);
         awaddr = addr; wdata = data; wstrb = strb;
@@ -120,7 +124,7 @@ module tb_cva5_uart;
         bready = 1'b0;
     endtask
 
-    task automatic axi_read(input logic [31:0] addr, output logic [31:0] data);
+    task automatic axi_read(input logic [11:0] addr, output logic [31:0] data);
         @(negedge clk);
         araddr = addr; arvalid = 1'b1; rready = 1'b1;
         #1;
@@ -325,9 +329,9 @@ module tb_cva5_uart;
         end
 
         //--- offsets the UART does not decode read as zero, and do not error
-        axi_read(32'h0C, v);
+        axi_read(12'h0C, v);
         chk(v === 32'h0, $sformatf("undecoded offset 0x0C read 0x%08x", v));
-        axi_read(32'h10, v);
+        axi_read(12'h10, v);
         chk(v === 32'h0, $sformatf("undecoded offset 0x10 read 0x%08x", v));
         $display("  undecoded offsets       ok");
 

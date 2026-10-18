@@ -31,13 +31,24 @@ module cva5_uart #(
     parameter int unsigned CLOCK_FREQUENCY = 100_000_000,
     parameter int unsigned BAUD_RATE       = 9_600,
     parameter int unsigned RX_FIFO_DEPTH   = 32,
-    parameter int unsigned TX_FIFO_DEPTH   = 32
+    parameter int unsigned TX_FIFO_DEPTH   = 32,
+
+    //Width of the slave's address bus, and so the size of the window the
+    //block design gives it: 12 bits is the 4 KB this UART decodes.
+    //
+    //This is not cosmetic. Vivado infers a packaged IP's address block from
+    //the width of its AXI address port, so a 32-bit port here produces a 4 GB
+    //aperture, and a 4 GB aperture can only be placed at zero -- the address
+    //editor then refuses the offset with BD 41-70 ("must fit an available
+    //aperture"). cva5_top's s_axi_ram gets a 128 KB block the same way, from
+    //its RAM_ADDR_W-wide port.
+    parameter int unsigned ADDR_WIDTH      = 12
 ) (
     input logic clk,
     input logic rstn,
 
     //AXI4-Lite slave. Vivado infers the interface from these names.
-    input  logic [31:0] s_axi_awaddr,
+    input  logic [ADDR_WIDTH-1:0] s_axi_awaddr,
     input  logic [2:0]  s_axi_awprot,
     input  logic        s_axi_awvalid,
     output logic        s_axi_awready,
@@ -51,7 +62,7 @@ module cva5_uart #(
     output logic        s_axi_bvalid,
     input  logic        s_axi_bready,
 
-    input  logic [31:0] s_axi_araddr,
+    input  logic [ADDR_WIDTH-1:0] s_axi_araddr,
     input  logic [2:0]  s_axi_arprot,
     input  logic        s_axi_arvalid,
     output logic        s_axi_arready,
@@ -97,7 +108,9 @@ module cva5_uart #(
 
     assign dev_req = grant_w | grant_r;
     assign dev_we = grant_w;
-    assign dev_addr = grant_w ? s_axi_awaddr : s_axi_araddr;
+    //Zero-extended to the UART's 32-bit address port; it looks at the low
+    //12 bits and ties the rest off.
+    assign dev_addr = grant_w ? 32'(s_axi_awaddr) : 32'(s_axi_araddr);
     assign dev_wdata = s_axi_wdata;
     //The UART decodes a read only when byte lane 0 is enabled, and a read has
     //no strobes of its own, so they are forced for reads.
