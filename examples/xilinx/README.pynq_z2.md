@@ -1,7 +1,7 @@
 # CVA5 on the PYNQ-Z2
 
 Builds a CVA5 (RV32IM) soft SoC that runs the `examples/sw` demo program from
-block RAM inside the core, with an AXI UART Lite for console output. A single slide switch
+block RAM inside the core, with lowRISC's UART for console output. A single slide switch
 (SW0) drives the system reset. This mirrors the existing Nexys A7 example.
 
 ## Files (in `examples/xilinx/`)
@@ -9,23 +9,27 @@ block RAM inside the core, with an AXI UART Lite for console output. A single sl
 | file                          | purpose                                                                 |
 |-------------------------------|-------------------------------------------------------------------------|
 | `package_as_ip_pynq_z2.tcl`   | packages the CVA5 core as a Vivado IP into `./vivado/ip_repo`            |
-| `pynq_z2_sys.tcl`             | builds the SoC block design (clock, reset, CVA5, AXI UART Lite) + XDC    |
+| `pynq_z2_sys.tcl`             | builds the SoC block design (clock, reset, CVA5, UART) + XDC            |
 | `pynq_z2_cva5.xdc`            | pins only — reset switch and PMOD UART                                  |
 | `vendor/boot_rom.sv`          | riscv-dbg's boot ROM, hand-vendored (see Boot ROM)                      |
+| `vendor/uart.sv`              | lowRISC's UART, hand-vendored (see UART)                                |
+| `axi/cva5_uart.sv`            | that UART behind an AXI4-Lite slave port                                |
 | `pynq_z2_jtag.xdc`            | JTAG clock, its CDC constraints, TIMING-9 waiver (implementation only)  |
 
 ## Open-hardware AXI blocks
 
-Two of the Xilinx AXI IPs are replaced with pulp-platform blocks, both
-measured to cost nothing against the all-Xilinx baseline of **WNS +0.107** at
-100 MHz on the `xc7z020clg400-1`:
+The Xilinx IPs are replaced with open-hardware blocks, measured against the
+all-Xilinx baseline of **WNS +0.107** at 100 MHz on the `xc7z020clg400-1`:
 
-| Xilinx IP | replacement | result |
-|-----------|-------------|--------|
-| `axi_register_slice` | `cva5_axi_cut` (pulp `axi_cut`) | **+0.122** (baseline +0.107) |
-| `axi_interconnect`   | `cva5_axi_xbar` (pulp `axi_xbar`) | same build |
-| `axi_bram_ctrl` + `blk_mem_gen` | *kept* — see below | — |
-| `clk_wiz` | *kept* — the MMCM is a hard block | — |
+| Xilinx IP | replacement | licence | result |
+|-----------|-------------|---------|--------|
+| `axi_register_slice` | `cva5_axi_cut` (pulp `axi_cut`) | Solderpad 0.51 | **+0.122** (baseline +0.107) |
+| `axi_interconnect`   | `cva5_axi_xbar` (pulp `axi_xbar`) | Solderpad 0.51 | same build |
+| `axi_uartlite`       | `cva5_uart` (lowRISC `uart`) | Apache-2.0 | see below |
+| `axi_bram_ctrl` + `blk_mem_gen` | *removed* — main memory is `tdp_ram` inside the core | — | — |
+| `clk_wiz` | *kept* — the MMCM is a hard block | — | — |
+
+`clk_wiz` is the only Xilinx IP left in the block design.
 
 ### Memory map
 
@@ -298,6 +302,49 @@ a number drifting down within that band is the tool satisficing, not the design
 degrading; the only reading that means anything is a negative one, which arrives
 as a reported failure.
 
+### UART
+
+`cva5_uart` is lowRISC's `uart` from ibex-demo-system behind an AXI4-Lite slave
+port, replacing Xilinx's `axi_uartlite`. 8N1, 9600 baud, 32-byte FIFOs each way.
+
+It keeps **axi_uartlite's register map**, which is the point:
+
+```
++0x00  RX    read pops a byte from the receive FIFO
++0x04  TX    write pushes a byte into the transmit FIFO
++0x08  STAT  bit 0 RX has data, 1 RX full, 2 TX empty, 3 TX full
+```
+
+lowRISC's own map reports RX *empty* in bit 0 and TX full in bit 1. Reporting
+axi_uartlite's bits instead costs two lines in the vendored file and means
+`examples/sw`, `soc.h` and the QEMU machine — which models `xilinx_uartlite` —
+all work unchanged, with no per-target `#ifdef`. Software written against
+lowRISC's map would need adjusting; this tree has none.
+
+The other divergence from upstream is the FIFOs: `fifo_v3` from pulp's
+`common_cells`, already vendored and packaged here, rather than OpenTitan's
+`prim_fifo_sync`, which would bring `prim_fifo_sync_cnt`, `prim_util_pkg` and
+`prim_assert.sv` with its four `.svh` macro headers — and those headers need
+include directories that a Vivado packaged IP flattens away. Both are at the
+top of `vendor/uart.sv`.
+
+`fifo_v3` is now carried by two packaged IPs in one block design, this one and
+`cva5_axi_xbar`. That is new, and the note in `package_openhw_ips.tcl` says what
+to do if synthesis objects: the hazard that script warns about is specific to
+*packages*, which are compilation-unit scoped, and two identical copies of a
+module are a different thing.
+
+The UART's own bus is ibex-demo-system's device interface — a request pulse,
+read data one cycle later, no way to stall — so `cva5_uart` is a protocol
+adapter rather than a register file. One transaction at a time, writes granted
+ahead of reads so a program spinning on `STAT` cannot starve its own output.
+
+`run_uart.sh` ties `tx` back to `rx`, so one run covers the adapter, both FIFOs
+and both serial state machines. It decodes the line independently of the
+receiver, so a byte that round-trips through a malformed frame cannot pass, and
+it measures the bit period in clocks — 8 at the testbench's 1 MHz / 125 kbaud,
+which is the same divider that gives 10416 on the board.
+
 ### The JTAG domain is constrained
 
 It was not, for a long time, and the build reported 243 `TIMING-17` critical
@@ -420,6 +467,7 @@ something.
 | register cut | `sh test_benches/axi/run_cut.sh` | 216 checks |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
+| UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |
 | silent boot | program the board | the preload prints nothing |
 | debugger load | `make -C examples/sw load` | SBA block write, verify, release |
@@ -464,9 +512,12 @@ bridge's RX and the FPGA's RX on the bridge's TX. No ground jumper is needed
 either. PMOD JA and J13 share the board's common ground. The same micro-USB
 that programs the board then also carries the serial console.
 
-**Terminal settings:** 9600 baud, 8N1, no flow control (the AXI UART Lite
-default. Raise `C_BAUDRATE` on the IP if you want faster). Open it on the COM
-port the board enumerates as.
+**Terminal settings:** 9600 baud, 8N1, no flow control. That was `axi_uartlite`'s
+default and `cva5_uart` keeps it, so nothing changed when the UART was replaced.
+It is now `BAUD_RATE` on `cva5_uart` rather than `C_BAUDRATE` on an IP, so
+raising it is an edit to `examples/xilinx/axi/cva5_uart.sv` (or an override in
+`pynq_z2_sys.tcl`) and a rebuild. Open it on the COM port the board enumerates
+as.
 
 **Make sure nothing else is driving the bridge** at the same time: no PS UART
 console on those lines, and **close Vivado's Hardware Manager / programmer**

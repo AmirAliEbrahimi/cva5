@@ -69,6 +69,23 @@ dict set openhw_ips cva5_axi_xbar {
     examples/xilinx/axi/cva5_axi_xbar.sv
 }
 
+# lowRISC's UART, replacing Xilinx's axi_uartlite. The register map is
+# axi_uartlite's, so examples/sw and the QEMU machine are unchanged -- see the
+# note at the top of examples/xilinx/vendor/uart.sv for that and the other
+# divergence from upstream.
+#
+# fifo_v3 appears here and in cva5_axi_xbar, and these are the first two
+# packaged IPs in one block design to share a module. The hazard the axi_pkg
+# note above describes is specific to packages, which are compilation-unit
+# scoped; identical copies of a module are not the same problem. If synthesis
+# does complain that fifo_v3 is declared more than once, the fix is a renamed
+# vendored copy for this IP, not a change to the UART.
+dict set openhw_ips cva5_uart {
+    third_party/common_cells/src/fifo_v3.sv
+    examples/xilinx/vendor/uart.sv
+    examples/xilinx/axi/cva5_uart.sv
+}
+
 # SIMULATION ONLY -- not packaged, not in the block design.
 #
 # cva5_axi_ram was an attempt to replace axi_bram_ctrl + blk_mem_gen with
@@ -94,6 +111,7 @@ dict set openhw_ips cva5_axi_ram {
 dict set openhw_busifs cva5_axi_cut {s_axi m_axi}
 dict set openhw_busifs cva5_axi_xbar {s_axi_cpu s_axi_mem s_axi_dbg m_axi_ram m_axi_periph}
 dict set openhw_busifs cva5_axi_ram {s_axi}
+dict set openhw_busifs cva5_uart {s_axi}
 
 # Entries present for the testbenches' file lists but deliberately not
 # packaged. See the note above cva5_axi_ram.

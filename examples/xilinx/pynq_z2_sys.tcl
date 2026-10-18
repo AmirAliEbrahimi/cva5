@@ -22,9 +22,14 @@ create_bd_design "soc"
 # ---- UART -----------------------------------------------------------------
 # PYNQ-Z2's USB-UART bridge is wired to the PS (MIO), not the PL, so the PL
 # UART is brought out as external pins and routed to a PMOD (see XDC).
-create_bd_cell -type ip -vlnv xilinx.com:ip:axi_uartlite:2.0 axi_uartlite_0
-make_bd_pins_external -name uart_tx [get_bd_pins axi_uartlite_0/tx]
-make_bd_pins_external -name uart_rx [get_bd_pins axi_uartlite_0/rx]
+#
+# cva5_uart is lowRISC's UART behind an AXI4-Lite adapter, replacing Xilinx's
+# axi_uartlite. It keeps axi_uartlite's register map, so examples/sw and the
+# QEMU machine need no change; the baud rate is a module parameter rather than
+# an IP setting, defaulting to the 9600 axi_uartlite was configured for.
+create_bd_cell -type ip -vlnv xilinx.com:user:cva5_uart:1.0 cva5_uart_0
+make_bd_pins_external -name uart_tx [get_bd_pins cva5_uart_0/tx]
+make_bd_pins_external -name uart_rx [get_bd_pins cva5_uart_0/rx]
 
 # ---- Reset ----------------------------------------------------------------
 create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_0
@@ -62,11 +67,12 @@ connect_bd_net [get_bd_pins cva5_top_0/rstn] [get_bd_pins proc_sys_reset_0/perip
 set sys_clk  [get_bd_pins clk_wiz_0/clk_out1]
 set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
 
-# No AXI automation: there is no Xilinx interconnect in this design. The UART
-# hangs off cva5_axi_xbar's peripheral port, wired explicitly below, so its
-# clock and reset are connected here rather than by the automation rule.
-connect_bd_net $sys_clk  [get_bd_pins axi_uartlite_0/s_axi_aclk]
-connect_bd_net $sys_rstn [get_bd_pins axi_uartlite_0/s_axi_aresetn]
+# No AXI automation: there is no Xilinx interconnect in this design, and no
+# Xilinx UART either. The UART hangs off cva5_axi_xbar's peripheral port,
+# wired explicitly below, so its clock and reset are connected here rather
+# than by the automation rule.
+connect_bd_net $sys_clk  [get_bd_pins cva5_uart_0/clk]
+connect_bd_net $sys_rstn [get_bd_pins cva5_uart_0/rstn]
 
 # ---- Main RAM ---------------------------------------------------------------
 # There is no memory IP here any more. Main memory is a 128 KB true dual-port
@@ -114,7 +120,7 @@ connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg] [get_bd_intf_pins ax
 # this one so the memory rework is measured on its own.
 
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_ram]    [get_bd_intf_pins cva5_top_0/s_axi_ram]
-connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_periph] [get_bd_intf_pins axi_uartlite_0/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_periph] [get_bd_intf_pins cva5_uart_0/s_axi]
 
 # ---- Address map ----------------------------------------------------------
 # Every link here is point to point, so nothing in the block design decodes
@@ -138,7 +144,9 @@ if {$ram_seg eq ""} { error "the crossbar's RAM port has no address segment" }
 set_property offset 0x80000000 $ram_seg
 set_property range  128K       $ram_seg
 
-set uart_seg [cva5_seg {axi_xbar_0/m_axi_periph/SEG_axi_uartlite_0_Reg}]
+set uart_seg [cva5_seg {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_s_axi} \
+                       {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_Reg} \
+                       {axi_xbar_0/m_axi_periph/SEG_cva5_uart_0_reg0}]
 if {$uart_seg eq ""} { error "the crossbar's peripheral port has no address segment" }
 set_property offset 0x10000000 $uart_seg
 set_property range  64K        $uart_seg
