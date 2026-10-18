@@ -52,13 +52,26 @@ module cva5_axi_xbar #(
     parameter logic [31:0] CLINT_BASE  = 32'h0200_0000,
     parameter logic [31:0] CLINT_SIZE  = 32'h0001_0000,  // 64 KB
 
-    // Width of each AXI4-Lite peripheral port's address bus. Vivado infers a
-    // packaged IP's address block from the width of its AXI address port, so
-    // these decide the apertures the block design offers: 12 bits is the
-    // UART's 4 KB, 16 bits the CLINT's 64 KB. A 32-bit port would produce a
-    // 4 GB aperture, which can only be placed at zero.
-    parameter int unsigned M_UART_ADDR_WIDTH  = 12,
-    parameter int unsigned M_CLINT_ADDR_WIDTH = 16,
+    // Width of each AXI4-Lite peripheral port's address bus.
+    //
+    // Leave these at 32. A MASTER port's address width is the size of the
+    // address space Vivado believes that port can reach, and a port that
+    // cannot emit 0x1000_0000 cannot have a slave placed there -- the address
+    // editor refuses the offset with BD 41-70 and reports the only valid
+    // aperture as <0x0000_0000 [ 4K ]>. M_RAM_ADDR_WIDTH is 32 for the same
+    // reason.
+    //
+    // This is the opposite of the rule for a SLAVE port, where the width sizes
+    // the address BLOCK the slave offers and must be narrow: cva5_uart's own
+    // s_axi is 12 bits so that it offers 4 KB rather than 4 GB, and
+    // cva5_top's s_axi_clint is 16 bits for its 64 KB. Narrow slaves, wide
+    // masters. Connecting a 32-bit master to a narrower slave is what
+    // m_axi_ram already does.
+    //
+    // The parameters exist so run_xbar.sh can sweep the truncation path, not
+    // because the block design should narrow them.
+    parameter int unsigned M_UART_ADDR_WIDTH  = 32,
+    parameter int unsigned M_CLINT_ADDR_WIDTH = 32,
 
     // Width of each master port's address bus. Leave at 32 unless a slave
     // genuinely needs a narrow port: Vivado truncates a wide master into a
