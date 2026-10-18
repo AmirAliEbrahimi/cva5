@@ -118,10 +118,11 @@ Addresses on the instruction bus that are in neither window read as zero, which
 decodes as an illegal instruction and traps. Withholding the acknowledge instead
 would hang fetch with nothing to show why.
 
-**Under QEMU the reset vector is still `0x8000_0040`**, not the ROM: the machine
-model has no ROM and sets `resetvec` directly. It also does not set `mtvec`, so
-a trap under QEMU jumps to zero rather than to `trap_entry`. Neither matters for
-running a program, but QEMU is not the place to test the ROM or the handler.
+QEMU models both: `qemu/0001-cva5-pynq-machine.patch` puts the same two
+instructions at `0x0001_0000`, points `resetvec` there, and restores `mtvec` to
+`RESET_TVEC` in a reset handler, because QEMU has no property for a CPU's reset
+`mtvec` and the CPU's own reset clears it. So a trap under QEMU reaches
+`trap_entry` as it does on the board.
 
 ### Memory
 
@@ -254,25 +255,48 @@ inside 0.6 ns of each other:
 | + buffered bus write | load-store → RAM enable | 9.157 | **+0.063** |
 | + core out of the W handshake | d_tlb → RAM write data | 8.571 | **+0.582** |
 | + JTAG clock constrained | fetch BRAM → branch predictor | 8.889 | **+0.378** |
+| + CDC bus skew + waiver | — | — | **+0.426** |
+| + CVA6 memory map | fetch BRAM → branch predictor | 8.853 | **+0.291** |
+| + boot ROM | register file → divider CLZ | 9.586 | **+0.319** |
 
 Which one reports as WNS is decided by placement, so fixing any one of them
 promotes the next. A change that re-places a few hundred registers re-deals
-the whole hand — the last row moved 0.2 ns on a constraint change that added
+the whole hand — the JTAG row moved 0.2 ns on a constraint change that added
 no logic and touched nothing on the path that reported.
+
+Two rows are worth reading together. The memory map changed no logic on the
+reported path — seven address constants, of which the live ones all reduce to
+equal or cheaper comparisons — and cost 0.135 ns; its data path delay was
+*faster* than the row above it (8.853 against 8.889) and the whole difference
+was clock skew between the two RAM sites (−0.218 against −0.095). Then the
+boot ROM added logic to the instruction fetch path and the number went *up*
+0.028 ns, with the worst path leaving fetch entirely for upstream's divider.
+Neither direction was predictable from the change, which is the point.
 
 **So judge a change here on two things: does the design still close, and does
 the worst path land in the RTL that changed.** Not on which way the number
 moved. A delta under ~0.25 ns is not evidence of anything.
 
-The current limiter is instruction fetch reading local memory, computing the
-next PC, and addressing the branch predictor's tag bank in one cycle. 4.33 ns
-of its 8.889 is spent before any logic runs: 2.454 ns of RAMB36 access plus
-1.879 ns getting out of a 32-block array. It is upstream's fetch path, and it
-exists in this shape because the core runs from local memory with no I$ —
-which is the configuration upstream ships.
+The limiter as of the boot ROM build is upstream's divider input: the register
+file read, four `CARRY4` of signed-divide negation, the count-leading-zeros
+tree, and into the divider's input FIFO — 9.586 ns, 10 logic levels, 68%
+routing. Behind it at +0.339 and +0.393 is a different mechanism again, the
+branch predictor's tag bank into its own address table. Three subsystems
+inside 0.074 ns.
 
-Hold is the one thing a slower clock cannot rescue: **WHS +0.028**, met but
-thin, and worth a glance after any change that moves placement.
+For most of this work the limiter was instruction fetch instead: local memory
+read, next PC, branch-predictor tag bank, in one cycle, with 4.33 ns of its
+8.889 spent before any logic ran — 2.454 ns of RAMB36 access plus 1.879 ns
+getting out of a 32-block array. The boot ROM added logic to that path and it
+stopped being the limiter, which says more about the size of the cluster than
+about either change.
+
+Hold is the one thing a slower clock cannot rescue, because its requirement is
+edge-to-same-edge: **WHS +0.029**. It has read 0.019 to 0.029 across builds and
+has never failed. Vivado's hold fixing stops at met rather than maximising, so
+a number drifting down within that band is the tool satisficing, not the design
+degrading; the only reading that means anything is a negative one, which arrives
+as a reported failure.
 
 ### The JTAG domain is constrained
 

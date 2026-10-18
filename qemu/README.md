@@ -80,6 +80,12 @@ This is QEMU's own gdbstub, so no OpenOCD and no board: `stepi` from the start
 walks the boot ROM before reaching the application. `detach` leaves QEMU
 running; Ctrl-A X stops it.
 
+The reset vector is the boot ROM at `0x0001_0000`, as on the board, and `mtvec`
+comes up at `RESET_TVEC` — so `info registers pc` at reset reads `0x00010000`,
+`stepi` twice lands at `0x80000040`, and a trap reaches `trap_entry`. QEMU has
+no property for a CPU's reset `mtvec`, and the CPU's own reset clears it, so the
+machine restores it in a reset handler registered after `qdev_realize`.
+
 ## What is not modelled
 
 Caches, the Debug Module, timing, and the hls4ml accelerator. QEMU is for

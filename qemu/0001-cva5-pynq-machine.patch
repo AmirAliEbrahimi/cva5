@@ -42,7 +42,7 @@ new file mode 100644
 index 0000000..f5918df
 --- /dev/null
 +++ b/hw/riscv/cva5_pynq.c
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,187 @@
 +/*
 + * QEMU model of the CVA5 PYNQ-Z2 system.
 + *
@@ -75,6 +75,19 @@ index 0000000..f5918df
 +#include "hw/misc/unimp.h"
 +#include "system/address-spaces.h"
 +#include "system/system.h"
++/*
++ * qemu_register_reset moved from sysemu/ to system/ during the tree
++ * reorganisation; accept either so this machine builds against both.
++ */
++#if defined(__has_include)
++#  if __has_include("system/reset.h")
++#    include "system/reset.h"
++#  elif __has_include("sysemu/reset.h")
++#    include "sysemu/reset.h"
++#  endif
++#else
++#  include "system/reset.h"
++#endif
 +
 +/*
 + * Machines in some QEMU versions must declare which of qemu-system-riscv32 and
@@ -97,6 +110,34 @@ index 0000000..f5918df
 +#define CVA5_DM_SIZE    (4 * KiB)
 +#define CVA5_UART_BASE  0x10000000
 +#define CVA5_APP_ENTRY  (CVA5_RAM_BASE + 0x40)
++#define CVA5_ROM_BASE   0x00010000
++#define CVA5_ROM_SIZE   (4 * KiB)
++#define CVA5_TRAP_VEC   CVA5_RAM_BASE
++
++/*
++ * The boot ROM, built the way examples/xilinx/vendor/boot_rom.sv builds
++ * it: lui x1, %hi(entry) then jalr x0, %lo(entry)(x1). The 0x800 is the
++ * carry correction every assembler applies for %hi, because jalr
++ * sign-extends its 12-bit immediate.
++ */
++#define CVA5_ROM_HI     ((uint32_t)(((CVA5_APP_ENTRY) + 0x800u) >> 12))
++#define CVA5_ROM_LO     ((uint32_t)((CVA5_APP_ENTRY) & 0xfffu))
++
++/*
++ * On the board RESET_TVEC is a hardware parameter -- the reset value of
++ * mtvec -- and nothing in examples/sw writes mtvec, so it is the trap
++ * vector for the life of the program. QEMU has no property for it and the
++ * CPU's own reset clears mtvec, so it is restored afterwards: reset
++ * handlers run in registration order and qemu_devices_reset() is
++ * registered during machine setup, before this one.
++ */
++static void cva5_post_reset(void *opaque)
++{
++    RISCVCPU *cpu = opaque;
++
++    cpu->env.mtvec = CVA5_TRAP_VEC;
++}
++
 +static void cva5_pynq_init(MachineState *machine)
 +{
 +    MemoryRegion *sysmem = get_system_memory();
@@ -121,9 +162,10 @@ index 0000000..f5918df
 +    for (int i = 0; i < ARRAY_SIZE(off); i++) {
 +        object_property_set_bool(OBJECT(cpu), off[i], false, NULL);
 +    }
-+    object_property_set_int(OBJECT(cpu), "resetvec", CVA5_APP_ENTRY,
++    object_property_set_int(OBJECT(cpu), "resetvec", CVA5_ROM_BASE,
 +                            &error_abort);
 +    qdev_realize(DEVICE(cpu), NULL, &error_abort);
++    qemu_register_reset(cva5_post_reset, cpu);
 +
 +    /* Main RAM: the debugger loads programs here on hardware */
 +    memory_region_init_ram(ram, NULL, "cva5.ram", CVA5_RAM_SIZE, &error_fatal);
@@ -143,11 +185,25 @@ index 0000000..f5918df
 +     */
 +    create_unimplemented_device("cva5.dm", CVA5_DM_BASE, CVA5_DM_SIZE);
 +
++    /* Boot ROM: the reset vector, and the two instructions it holds */
++    {
++        MemoryRegion *rom = g_new(MemoryRegion, 1);
++        static const uint32_t boot[2] = {
++            (CVA5_ROM_HI << 12) | (1u << 7) | 0x37u,    /* lui  x1, %hi    */
++            (CVA5_ROM_LO << 20) | (1u << 15) | 0x67u,   /* jalr x0, %lo(x1) */
++        };
++
++        memory_region_init_rom(rom, NULL, "cva5.rom", CVA5_ROM_SIZE,
++                               &error_fatal);
++        memory_region_add_subregion(sysmem, CVA5_ROM_BASE, rom);
++        rom_add_blob_fixed_as("cva5.rom", boot, sizeof(boot), CVA5_ROM_BASE,
++                              &address_space_memory);
++    }
++
 +    /*
-+     * The application. The reset vector is the bottom of main RAM, which on
-+     * hardware is block RAM inside the core preloaded by the bitstream, so
-+     * there is no separate ROM and nothing to jump through: whatever is
-+     * loaded here is what runs.
++     * The application. The reset vector is the boot ROM above, which jumps
++     * here, so a kernel whose entry point is not CVA5_APP_ENTRY would be
++     * loaded and then never reached -- hence the check.
 +     */
 +    if (machine->kernel_filename) {
 +        if (load_elf(machine->kernel_filename, NULL, NULL, NULL, &entry, NULL,
