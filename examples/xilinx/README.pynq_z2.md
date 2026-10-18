@@ -419,6 +419,17 @@ Only the bus side leaves `cva5_top`. The CLINT itself stays inside, because
 `mtime`, `mtip` and `msip` have to reach the core and that is 66 signals that
 would otherwise cross the block design.
 
+**A port added to `cva5_wrapper.sv` has to be added to `cva5_top.v` as well.**
+That file is a plain-Verilog, port-for-port wrapper that exists only because
+Vivado's IP packager cannot analyse a SystemVerilog top — it says so every run:
+`Module 'cva5_top' uses SystemVerilog sources with a Verilog top file`. The
+packager reads `cva5_top.v` and nothing else for the interface list, so a port
+present only in the SystemVerilog is invisible to it: the IP packages without
+complaint, `associate_bus_interfaces` reports
+`ASSOCIATED_BUSIF bus '<name>' does not exist`, and the block design then fails
+with `No interface pins matched`. It is the one file in this example whose
+contents are pure duplication, and the one most easily forgotten.
+
 **Its reset is `rstn` alone, never `ndmreset`** — the rule the Debug Module and
 the RAM port already follow, and for the same reason: `cpu_hold` asserts
 `ndmreset` and *then* talks to the system bus, so a peripheral the debugger can
