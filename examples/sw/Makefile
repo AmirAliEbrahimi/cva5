@@ -49,6 +49,7 @@ ABI       ?= ilp32
 # --- build inputs ----------------------------------------------------------
 SRCS      := crt0.S trap.S main.c puts.c
 MEMTEST_SRCS := crt0.S trap.S memtest.c puts.c
+TIMER_SRCS := crt0.S trap.S timer.c puts.c
 LDSCRIPT  := link.ld
 CFLAGS    := -march=$(ARCH) -mabi=$(ABI) -Os -g -ffreestanding -nostdlib -I. -Wl,--build-id=none
 
@@ -82,7 +83,7 @@ ELF2TCL     := $(CVA5_DIR)/tools/elf-to-load-tcl.py
 OPENOCD     ?= openocd
 OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 
-.PHONY: all program ram app load memtest sim run clean lint lint-full clean-cva5-sim
+.PHONY: all program ram app load memtest timer sim run clean lint lint-full clean-cva5-sim
 all: program
 program: program.hex
 
@@ -134,6 +135,18 @@ memtest: memtest.tcl
 	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
 	           -f memtest.tcl -c "init; load_program; shutdown"
 
+# The CLINT check: mtime's tick rate, mtimecmp -> mtip, and msip. Polled, so it
+# needs no interrupt handler; prints on the serial console like memtest.
+timer.elf: $(TIMER_SRCS) $(APP_LDSCRIPT)
+	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(TIMER_SRCS) -lgcc -o $@
+
+timer.tcl: timer.elf
+	python3 $(ELF2TCL) $(CROSS) $(APP_BASE) $< $@
+
+timer: timer.tcl
+	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
+	           -f timer.tcl -c "init; load_program; shutdown"
+
 # Build the Verilator model. tools/cva5.mak's default target is 'lint', so we
 # must name the binary explicitly; CVA5_DIR is required by that makefile.
 sim: $(SIM_BIN)
@@ -151,6 +164,7 @@ clean:
 	rm -f main.elf program.hex program.sim \
 	      app.elf app.elf.bin load.tcl idle.elf ram.sim \
 	      memtest.elf memtest.tcl \
+	      timer.elf timer.tcl \
 	      main.elf.rawbinary main.elf.dissasembled \
 	      idle.elf.rawbinary idle.elf.dissasembled \
 		  trace.fst.hier \

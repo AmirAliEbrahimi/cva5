@@ -42,7 +42,7 @@ for it.
 |---|---|---|---|
 | Debug Module | `0x0000_0000` | 4 KB | present |
 | boot ROM | `0x0001_0000` | 64 KB | present (2 instructions; reset vector) |
-| CLINT | `0x0200_0000` | 768 KB | reserved |
+| CLINT | `0x0200_0000` | 768 KB | present (64 KB decoded) |
 | PLIC | `0x0C00_0000` | 64 MB | reserved |
 | UART | `0x1000_0000` | 4 KB | present |
 | timer | `0x1800_0000` | 4 KB | reserved |
@@ -262,6 +262,7 @@ inside 0.6 ns of each other:
 | + CDC bus skew + waiver | — | — | **+0.426** |
 | + CVA6 memory map | fetch BRAM → branch predictor | 8.853 | **+0.291** |
 | + boot ROM | register file → divider CLZ | 9.586 | **+0.319** |
+| + lowRISC UART | load queue index → RAM enable | 8.832 | **+0.551** |
 
 Which one reports as WNS is decided by placement, so fixing any one of them
 promotes the next. A change that re-places a few hundred registers re-deals
@@ -281,12 +282,18 @@ Neither direction was predictable from the change, which is the point.
 the worst path land in the RTL that changed.** Not on which way the number
 moved. A delta under ~0.25 ns is not evidence of anything.
 
-The limiter as of the boot ROM build is upstream's divider input: the register
-file read, four `CARRY4` of signed-divide negation, the count-leading-zeros
-tree, and into the divider's input FIFO — 9.586 ns, 10 logic levels, 68%
-routing. Behind it at +0.339 and +0.393 is a different mechanism again, the
-branch predictor's tag bank into its own address table. Three subsystems
-inside 0.074 ns.
+The limiter as of the UART build is the load-store unit's load-queue read
+index into main memory's enable pin — `lfsr_read_index/value_reg[1]` into
+`local_mem/mem_reg_2_0_1/ENARDEN`, 8.832 ns, 8 logic levels, and **79%
+routing**. Paths 2 and 3 are the same source into two other RAMB36 enables at
++0.601 and +0.634. At 79% interconnect there is almost no logic to remove: it
+is one register fanning out to the enables of a 32-block array.
+
+The build before it was limited by upstream's divider input instead — the
+register file read, four `CARRY4` of signed-divide negation, the
+count-leading-zeros tree, into the divider's input FIFO, with the branch
+predictor's tag bank behind it at +0.339. Three different subsystems inside
+0.074 ns in that build, and a fourth taking the lead in the next one.
 
 For most of this work the limiter was instruction fetch instead: local memory
 read, next PC, branch-predictor tag bank, in one cycle, with 4.33 ns of its
@@ -359,6 +366,59 @@ and both serial state machines. It decodes the line independently of the
 receiver, so a byte that round-trips through a malformed frame cannot pass, and
 it measures the bit period in clocks — 8 at the testbench's 1 MHz / 125 kbaud,
 which is the same divider that gives 10416 on the board.
+
+### CLINT
+
+`mtime`, `mtimecmp`, `msip` and the timer and software interrupts, at CVA6's
+`0x0200_0000`. The standard layout, as SiFive, CVA6, OpenTitan and QEMU's
+`virt` all use it:
+
+```
++0x0000  msip      software interrupt pending, bit 0
++0x4000  mtimecmp  64-bit, low word first
++0xBFF8  mtime     64-bit, low word first
+```
+
+Before this the wrapper had a bare `mtime` counter incrementing every clock and
+both interrupt structs tied to zero. Now `m_interrupt.timer` is `mtip`,
+`m_interrupt.software` is `msip`, and the core's `time` CSR and the CLINT's
+`mtime` are the same counter. `external` stays low until the PLIC arrives; the
+UART's `irq` is what will feed it.
+
+**`mtime` ticks once per microsecond, not once per clock.** That is the one
+divergence from `apu/clint/clint.sv`, which increments unconditionally.
+Upstream's behaviour is legal — the privileged spec asks only for a constant
+frequency — but every RISC-V system puts `mtime` at 1 MHz, so software ported
+from any of them carries that in its delay constants, and at 100 MHz the `time`
+CSR would simply duplicate `cycle` rather than measure elapsed time. The
+divider is `CLOCK_MHZ` in `cva5_wrapper.sv`, so a clock change is one edit and
+`soc.h`'s `CLINT_HZ` is the software-side copy of the same number.
+
+The vendored copies are `vendor/cva5_clint.sv` and
+`vendor/cva5_clint_wrapper.sv`, **renamed rather than shadowing upstream**:
+`tools/compile_order` lists `apu/clint/clint.sv` for the Verilator simulation,
+so a vendored copy keeping the name `clint` would put two different modules
+with one name into the same compilation. The wrapper is vendored only to plumb
+`TICKS_PER_USEC` through to the `clint` instance — upstream instantiates it
+with `NUM_CORES` alone, which would pin the prescaler to its default whatever
+the clock was.
+
+Two Verilator warnings on the vendored wrapper are upstream's and are left
+alone: a width mismatch in the multicore `mtimecmp` indexing, and a latch
+inferred for `next_state` because its `unique case` has no `default`. All five
+states are covered, so synthesis treats the case as full.
+
+**The CLINT hangs off the core's peripheral bus, split by address inside
+`cva5_wrapper`**, the same way the Debug Module's data registers already are —
+not off a crossbar port of its own. That costs no change to the crossbar, the
+block design or `cva5_top`'s port list, and the consequence is that **the
+debugger cannot reach the CLINT over the system bus**; only the core can. It is
+the same bargain the DM's registers already make. Giving it a crossbar port is
+the change to make if poking `mtime` over JTAG ever matters.
+
+`clint_wrapper` ignores write strobes, so a sub-word write to one of its
+registers writes the whole word. Software writes these a word at a time, which
+is what the layout is for.
 
 ### The JTAG domain is constrained
 
@@ -483,6 +543,8 @@ something.
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
+| CLINT | `sh test_benches/debug/run_clint.sh` | mtime tick rate, writes, mtimecmp→mtip at the boundary, msip |
+| CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |
 | silent boot | program the board | the preload prints nothing |
 | debugger load | `make -C examples/sw load` | SBA block write, verify, release |

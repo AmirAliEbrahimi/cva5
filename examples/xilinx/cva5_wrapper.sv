@@ -142,9 +142,9 @@ module cva5_wrapper
     wishbone_interface dwishbone(); //Unused
     wishbone_interface iwishbone(); //Debug Module fetches
     mem_interface mem[1]();
-    logic[63:0] mtime;
-    interrupt_t s_interrupt; //Unused
-    interrupt_t m_interrupt; //Unused
+    logic[63:0] mtime;          //from the CLINT, below
+    interrupt_t s_interrupt;    //Unused: no supervisor mode in this config
+    interrupt_t m_interrupt;    //timer and software from the CLINT
 
     ////////////////////////////////////////////////////
     //Implementation
@@ -178,6 +178,15 @@ module cva5_wrapper
     //DM over DMI, not the system bus -- but it does mean a trap can no longer
     //be left to go to address zero, which is what TRAP_VEC below is for.
     localparam logic [31:0] DM_BASE = 32'h0000_0000;
+    //CLINT, at CVA6's address. A 64 KB window: clint_wrapper decodes address
+    //bits 15:2 and the standard layout puts mtime at +0xBFF8.
+    localparam logic [31:0] CLINT_BASE = 32'h0200_0000;
+
+    //Core clock in MHz. The CLINT's prescaler divides by this to get a
+    //one-microsecond mtime tick, so a clock change here is the only edit
+    //needed to keep mtime meaning microseconds. pynq_z2_sys.tcl's clk_wiz
+    //produces 100 MHz; examples/sw/soc.h carries the same number as CLINT_HZ.
+    localparam int unsigned CLOCK_MHZ = 100;
     //Boot ROM, at CVA6's address. Two instructions: the reset vector points
     //here and the ROM jumps to APP_ENTRY, so the core comes out of reset into
     //a genuinely read-only location rather than into writable RAM that the
@@ -380,49 +389,130 @@ module cva5_wrapper
 
     cva5 #(.CONFIG(CPU_CONFIG), .INCLUDE_DEBUG(1), .DM_BASE(DM_BASE)) cpu(.mem(mem[0]), .*);
 
-    always_ff @(posedge clk) begin
-        if (rst)
-            mtime <= '0;
-        else
-            mtime <= mtime + 1;
-    end
+    //mtime used to be a counter here, incrementing every clock. The CLINT owns
+    //it now, so the core's time CSR and the CLINT's mtime are the same
+    //counter, ticking once per microsecond.
+    assign mtime = clint_mtime;
 
     assign s_interrupt = '{default: '0};
-    assign m_interrupt = '{default: '0};
+    //external stays low until the PLIC arrives; the UART's irq is what will
+    //feed it.
+    assign m_interrupt = '{
+        software : clint_msip,
+        timer    : clint_mtip,
+        external : 1'b0
+    };
 
     ////////////////////////////////////////////////////
     //Peripheral bus split
     //The core's AXI master has one transaction in flight and holds its address
     //until the response, and always accepts responses, so the target can be
     //chosen from the current address with no latching.
+    //Three targets now: the Debug Module's data registers, the CLINT, and
+    //everything else, which leaves the chip through m_axi to the crossbar.
+    //The CLINT is split off here rather than given a crossbar port of its own
+    //because this is the pattern already in place for the DM and it costs no
+    //change to the crossbar, the block design or cva5_top's port list. The
+    //consequence is that the debugger cannot reach the CLINT over the system
+    //bus -- only the core can -- which is the same bargain the DM's registers
+    //already make. A crossbar port is the change to make if poking mtime over
+    //JTAG ever matters.
     logic pb_rd_dm, pb_wr_dm;
+    logic pb_rd_clint, pb_wr_clint;
+    logic pb_rd_ext, pb_wr_ext;
     assign pb_rd_dm = (m_axi.araddr[31:12] == DM_BASE[31:12]);
     assign pb_wr_dm = (m_axi.awaddr[31:12] == DM_BASE[31:12]);
+    assign pb_rd_clint = (m_axi.araddr[31:16] == CLINT_BASE[31:16]);
+    assign pb_wr_clint = (m_axi.awaddr[31:16] == CLINT_BASE[31:16]);
+    assign pb_rd_ext = ~pb_rd_dm & ~pb_rd_clint;
+    assign pb_wr_ext = ~pb_wr_dm & ~pb_wr_clint;
 
     logic dmp_ar_ready, dmp_r_valid, dmp_aw_ready, dmp_w_ready, dmp_b_valid;
     logic [31:0] dmp_r_data;
 
+    logic clint_ar_ready, clint_r_valid, clint_aw_ready, clint_w_ready, clint_b_valid;
+    logic [31:0] clint_r_data;
+
     //External peripherals (UART); ID widths are mismatched but unused
-    assign m_axi_arvalid = m_axi.arvalid & ~pb_rd_dm;
+    assign m_axi_arvalid = m_axi.arvalid & pb_rd_ext;
     assign m_axi_araddr = m_axi.araddr;
     assign m_axi_rready = m_axi.rready;
-    assign m_axi_awvalid = m_axi.awvalid & ~pb_wr_dm;
+    assign m_axi_awvalid = m_axi.awvalid & pb_wr_ext;
     assign m_axi_awaddr = m_axi.awaddr;
-    assign m_axi_wvalid = m_axi.wvalid & ~pb_wr_dm;
+    assign m_axi_wvalid = m_axi.wvalid & pb_wr_ext;
     assign m_axi_wdata = m_axi.wdata;
     assign m_axi_wstrb = m_axi.wstrb;
     assign m_axi_bready = m_axi.bready;
 
-    assign m_axi.arready = pb_rd_dm ? dmp_ar_ready : m_axi_arready;
-    assign m_axi.rvalid = pb_rd_dm ? dmp_r_valid : m_axi_rvalid;
-    assign m_axi.rdata = pb_rd_dm ? dmp_r_data : m_axi_rdata;
-    assign m_axi.rresp = pb_rd_dm ? 2'b00 : m_axi_rresp;
+    //clint_wrapper's AXI-Lite leaves out bresp and rresp, so those are
+    //supplied here as the DM path's are: nothing in either can fail, and an
+    //address in neither window is the crossbar's problem.
+    assign m_axi.arready = pb_rd_dm ? dmp_ar_ready :
+                           pb_rd_clint ? clint_ar_ready : m_axi_arready;
+    assign m_axi.rvalid = pb_rd_dm ? dmp_r_valid :
+                          pb_rd_clint ? clint_r_valid : m_axi_rvalid;
+    assign m_axi.rdata = pb_rd_dm ? dmp_r_data :
+                         pb_rd_clint ? clint_r_data : m_axi_rdata;
+    assign m_axi.rresp = pb_rd_ext ? m_axi_rresp : 2'b00;
     assign m_axi.rid = 6'b0;
-    assign m_axi.awready = pb_wr_dm ? dmp_aw_ready : m_axi_awready;
-    assign m_axi.wready = pb_wr_dm ? dmp_w_ready : m_axi_wready;
-    assign m_axi.bvalid = pb_wr_dm ? dmp_b_valid : m_axi_bvalid;
-    assign m_axi.bresp = pb_wr_dm ? 2'b00 : m_axi_bresp;
+    assign m_axi.awready = pb_wr_dm ? dmp_aw_ready :
+                           pb_wr_clint ? clint_aw_ready : m_axi_awready;
+    assign m_axi.wready = pb_wr_dm ? dmp_w_ready :
+                          pb_wr_clint ? clint_w_ready : m_axi_wready;
+    assign m_axi.bvalid = pb_wr_dm ? dmp_b_valid :
+                          pb_wr_clint ? clint_b_valid : m_axi_bvalid;
+    assign m_axi.bresp = pb_wr_ext ? m_axi_bresp : 2'b00;
     assign m_axi.bid = 6'b0;
+
+    ////////////////////////////////////////////////////
+    //CLINT: mtime, mtimecmp, msip, and the timer and software interrupts
+    //
+    //TICKS_PER_USEC makes mtime count microseconds rather than core clocks;
+    //see examples/xilinx/vendor/clint.sv for why that divergence from
+    //apu/clint exists. It is the core clock in MHz, so it comes from
+    //CLOCK_MHZ above rather than being written here twice.
+    //
+    //clint_wrapper ignores write strobes, so a sub-word write to one of its
+    //registers writes the whole word. Software writes mtime and mtimecmp a
+    //word at a time, which is what the layout is designed for.
+    logic [63:0] clint_mtime;
+    logic clint_msip, clint_mtip;
+
+    cva5_clint_wrapper #(
+        .NUM_CORES (1),
+        .AXI (1'b1),
+        .TICKS_PER_USEC (CLOCK_MHZ)
+    ) clint_inst (
+        .clk (clk),
+        .rst (rst),
+        .mtime (clint_mtime),
+        .msip (clint_msip),
+        .mtip (clint_mtip),
+
+        //Wishbone side unused; AXI = 1 selects the AXI-Lite port
+        .wb_cyc (1'b0),
+        .wb_stb (1'b0),
+        .wb_we (1'b0),
+        .wb_adr ('0),
+        .wb_dat_i ('0),
+        .wb_dat_o (),
+        .wb_ack (),
+
+        .s_axi_awvalid (m_axi.awvalid & pb_wr_clint),
+        .s_axi_awaddr (m_axi.awaddr),
+        .s_axi_awready (clint_aw_ready),
+        .s_axi_wvalid (m_axi.wvalid & pb_wr_clint),
+        .s_axi_wdata (m_axi.wdata),
+        .s_axi_wready (clint_w_ready),
+        .s_axi_bvalid (clint_b_valid),
+        .s_axi_bready (m_axi.bready),
+        .s_axi_arvalid (m_axi.arvalid & pb_rd_clint),
+        .s_axi_araddr (m_axi.araddr),
+        .s_axi_arready (clint_ar_ready),
+        .s_axi_rvalid (clint_r_valid),
+        .s_axi_rdata (clint_r_data),
+        .s_axi_rready (m_axi.rready)
+    );
 
     ////////////////////////////////////////////////////
     //Instruction bus split: the Debug Module's memory and the boot ROM

@@ -7,7 +7,7 @@
  *
  *   0x0000_0000   4 KB    Debug Module (riscv-dbg: ROM, program buffer, data)
  *   0x0001_0000  64 KB    boot ROM -- the reset vector
- *   0x0200_0000 768 KB    CLINT -- mtime/mtimecmp, software IRQ [reserved]
+ *   0x0200_0000 768 KB    CLINT -- mtime/mtimecmp, software IRQ
  *   0x0C00_0000  64 MB    PLIC                                  [reserved]
  *   0x1000_0000   4 KB    UART
  *   0x1800_0000   4 KB    timer                                 [reserved]
@@ -44,6 +44,16 @@
 #define DM_BASE     0x00000000u
 #define ROM_BASE    0x00010000u
 #define CLINT_BASE  0x02000000u
+/* Standard CLINT layout, as SiFive, CVA6, OpenTitan and QEMU's virt use it.
+ * mtime and mtimecmp are each two 32-bit registers, low half first. */
+#define CLINT_MSIP_OFF     0x0000u
+#define CLINT_MTIMECMP_OFF 0x4000u
+#define CLINT_MTIME_OFF    0xBFF8u
+/* mtime ticks per second. The hardware prescales the core clock so that one
+ * tick is one microsecond at any core frequency -- see
+ * examples/xilinx/vendor/cva5_clint.sv, and CLOCK_MHZ in cva5_wrapper.sv,
+ * which is the divider. Software should use this rather than the core clock. */
+#define CLINT_HZ    1000000u
 #define PLIC_BASE   0x0C000000u
 #define TIMER_BASE  0x18000000u
 #define SPI_BASE    0x20000000u
