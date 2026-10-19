@@ -50,6 +50,7 @@ ABI       ?= ilp32
 SRCS      := crt0.S trap.S main.c puts.c
 MEMTEST_SRCS := crt0.S trap.S memtest.c puts.c
 TIMER_SRCS := crt0.S trap.S timer.c puts.c
+CSRS_SRCS := crt0.S trap.S csrs.c puts.c
 LDSCRIPT  := link.ld
 CFLAGS    := -march=$(ARCH) -mabi=$(ABI) -Os -g -ffreestanding -nostdlib -I. -Wl,--build-id=none
 
@@ -83,7 +84,7 @@ ELF2TCL     := $(CVA5_DIR)/tools/elf-to-load-tcl.py
 OPENOCD     ?= openocd
 OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 
-.PHONY: all program ram app load memtest timer sim run clean lint lint-full clean-cva5-sim
+.PHONY: all program ram app load memtest timer csrs run-csrs sim run clean lint lint-full clean-cva5-sim
 all: program
 program: program.hex
 
@@ -147,6 +148,35 @@ timer: timer.tcl
 	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
 	           -f timer.tcl -c "init; load_program; shutdown"
 
+# Which of Zicntr's counters this core implements: cycle and instret from the
+# core, time/timeh trapping because the count lives in the CLINT. Brings its
+# own trap handler, since trap.S's parks by design. Prints on the serial
+# console like memtest. Fails under QEMU on purpose -- see csrs.c.
+csrs.elf: $(CSRS_SRCS) $(APP_LDSCRIPT)
+	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(CSRS_SRCS) -lgcc -o $@
+
+csrs.tcl: csrs.elf
+	python3 $(ELF2TCL) $(CROSS) $(APP_BASE) $< $@
+
+csrs: csrs.tcl
+	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
+	           -f csrs.tcl -c "init; load_program; shutdown"
+
+# The same test in the Verilator core sim, which is the only place the core's
+# CSR behaviour can be checked without a bitstream -- and the only place both
+# polarities of INCLUDE_TIME_CSR can be run, since the sim takes upstream's
+# EXAMPLE_CONFIG. With that bit set, "rdtime traps" is expected to FAIL: the
+# sim drives mtime and the CSR is implemented there. Clear it in
+# core/types_and_interfaces/cva5_config.sv and every check passes.
+csrs_sim.elf: $(CSRS_SRCS) $(LDSCRIPT)
+	$(CC) $(CFLAGS) -DCVA5_SIM -T $(LDSCRIPT) $(CSRS_SRCS) -lgcc -o $@
+
+csrs.hex: csrs_sim.elf
+	python3 $(ELF2HW) $(CROSS) $(BASE_ADDR) $(RAM_SIZE) $< csrs.hex csrs.sim
+
+run-csrs: csrs.hex sim
+	$(SIM_BIN) csrs_log.txt csrs_sig.txt csrs.hex csrs_trace.fst
+
 # Build the Verilator model. tools/cva5.mak's default target is 'lint', so we
 # must name the binary explicitly; CVA5_DIR is required by that makefile.
 sim: $(SIM_BIN)
@@ -165,6 +195,7 @@ clean:
 	      app.elf app.elf.bin load.tcl idle.elf ram.sim \
 	      memtest.elf memtest.tcl \
 	      timer.elf timer.tcl \
+	      csrs.elf csrs.tcl csrs_sim.elf csrs.hex csrs.sim csrs_log.txt csrs_sig.txt csrs_trace.fst \
 	      main.elf.rawbinary main.elf.dissasembled \
 	      idle.elf.rawbinary idle.elf.dissasembled \
 		  trace.fst.hier \

@@ -44,6 +44,29 @@ print(f"{len(ports)} wrapper ports; missing from cva5_top.v: {missing or 'none'}
 EOF
 ```
 
+## A field added to a config struct has to be filled in three places
+
+`cpu_config_t` and its nested structs are declared in
+`core/types_and_interfaces/cva5_config.sv`, and SystemVerilog's named
+assignment patterns require **every** field, so adding one breaks each literal
+that builds the struct until it is listed there too. There are three:
+
+```
+core/types_and_interfaces/cva5_config.sv   EXAMPLE_CONFIG (upstream's; the Verilator sim uses it)
+examples/litex/litex_wrapper.sv            the LiteX SoC
+examples/xilinx/cva5_wrapper.sv            this board
+```
+
+Give a new field the value that preserves existing behaviour in the first two
+and the value this board wants in the third, so a fork-local knob changes
+nothing anywhere else. `INCLUDE_TIME_CSR` is the worked example: 1 upstream and
+in LiteX, both of which drive the `mtime` port, and 0 here, where nothing does.
+
+The Verilator core sim takes `EXAMPLE_CONFIG`, which makes it the one place a
+core-level knob can be exercised in **both** positions without a bitstream —
+`make -C examples/sw run-csrs` against the bit set, then cleared, is how the
+`time` CSR change was checked before it ever reached hardware.
+
 ## AXI address port widths: narrow slaves, wide masters
 
 Vivado reads an AXI port's address width as two different things depending on

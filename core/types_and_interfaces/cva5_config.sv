@@ -46,6 +46,14 @@ package cva5_config;
         bit [31:0] RESET_TVEC;
         bit [31:0] MCONFIGPTR;
         bit INCLUDE_ZICNTR;
+        //Whether Zicntr's time/timeh are implemented in hardware, which needs
+        //a 64-bit mtime bus from the platform's timer into the core. With this
+        //clear, cycle and instret still come from the core's own counters and
+        //a read of time/timeh raises an illegal instruction, leaving software
+        //to read the timer where it is memory mapped. That is how CVA6 ships
+        //(no CSR_TIME case at all) and what Ibex documents, and it is what a
+        //machine-mode-only system wants: it drops 64 wires that serve one CSR.
+        bit INCLUDE_TIME_CSR;
         bit INCLUDE_ZIHPM;
         bit INCLUDE_SSTC;
         bit INCLUDE_SMSTATEEN;
@@ -258,6 +266,7 @@ package cva5_config;
             RESET_TVEC : 32'h00000000,
             MCONFIGPTR : '0,
             INCLUDE_ZICNTR : 1,
+            INCLUDE_TIME_CSR : 1, //upstream default: time comes from the mtime port
             INCLUDE_ZIHPM : 1,
             INCLUDE_SSTC : 1,
             INCLUDE_SMSTATEEN : 1

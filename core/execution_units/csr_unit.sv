@@ -984,8 +984,22 @@ generate if (CONFIG.MODES != BARE) begin : gen_csr_exceptions
             SENVCFG : legal_access = CONFIG.MODES == MSU & ((privilege_level == MACHINE_PRIVILEGE) | (privilege_level == SUPERVISOR_PRIVILEGE & (~CONFIG.CSRS.INCLUDE_SMSTATEEN | mstateen0h.envcfg))); //Read write, depends on mstateen0h
             SSTATEEN0 : legal_access = CONFIG.MODES == MSU & CONFIG.CSRS.INCLUDE_SMSTATEEN & ((privilege_level == MACHINE_PRIVILEGE) | (privilege_level == SUPERVISOR_PRIVILEGE & mstateen0h.se0)); //Read write, needs extension and mstateen0h
             [SSTATEEN1:SSTATEEN3] : legal_access = CONFIG.MODES == MSU & CONFIG.CSRS.INCLUDE_SMSTATEEN & privilege_level inside {MACHINE_PRIVILEGE, SUPERVISOR_PRIVILEGE}; //Read write, needs extension
-            CYCLE, TIME, INSTRET, CYCLEH, TIMEH, INSTRETH : begin //Read only, depends on m/scounteren and extension
+            CYCLE, INSTRET, CYCLEH, INSTRETH : begin //Read only, depends on m/scounteren and extension
                 legal_access = CONFIG.CSRS.INCLUDE_ZICNTR & ~csr_inputs.writes;
+                if (privilege_level != MACHINE_PRIVILEGE)
+                    legal_access &= mcounteren[csr_inputs.addr[4:0]];
+                if (CONFIG.MODES == MSU & privilege_level == USER_PRIVILEGE)
+                    legal_access &= scounteren[csr_inputs.addr[4:0]];
+            end
+            //time/timeh are the one part of Zicntr the core cannot produce by
+            //itself: the count belongs to the platform's timer and arrives on
+            //the mtime port. A system that does not drive that port clears
+            //INCLUDE_TIME_CSR, and a read then raises an illegal instruction
+            //rather than returning a tied-off zero -- the same arrangement as
+            //CVA6, which serves cycle and instret under RVZicntr and has no
+            //CSR_TIME case at all.
+            TIME, TIMEH : begin //Read only, depends on m/scounteren and extension
+                legal_access = CONFIG.CSRS.INCLUDE_ZICNTR & CONFIG.CSRS.INCLUDE_TIME_CSR & ~csr_inputs.writes;
                 if (privilege_level != MACHINE_PRIVILEGE)
                     legal_access &= mcounteren[csr_inputs.addr[4:0]];
                 if (CONFIG.MODES == MSU & privilege_level == USER_PRIVILEGE)
@@ -1168,11 +1182,11 @@ endgenerate
 
             //Timers and counters
             CYCLE : selected_csr = CONFIG.CSRS.INCLUDE_ZICNTR ? mcycle[31:0] : '0;
-            TIME : selected_csr = CONFIG.CSRS.INCLUDE_ZICNTR ? mtime[31:0] : '0;
+            TIME : selected_csr = CONFIG.CSRS.INCLUDE_ZICNTR & CONFIG.CSRS.INCLUDE_TIME_CSR ? mtime[31:0] : '0;
             INSTRET : selected_csr = CONFIG.CSRS.INCLUDE_ZICNTR ? minstret[31:0] : '0;
             [HPMCOUNTER3 : HPMCOUNTER31] : selected_csr = '0;
             CYCLEH : selected_csr = CONFIG.CSRS.INCLUDE_ZICNTR ? 32'(mcycle[COUNTER_W-1:32]) : '0;
-            TIMEH : selected_csr = CONFIG.CSRS.INCLUDE_ZICNTR ? mtime[63:32] : '0;
+            TIMEH : selected_csr = CONFIG.CSRS.INCLUDE_ZICNTR & CONFIG.CSRS.INCLUDE_TIME_CSR ? mtime[63:32] : '0;
             INSTRETH : selected_csr = CONFIG.CSRS.INCLUDE_ZICNTR ? 32'(minstret[COUNTER_W-1:32]) : '0;
             [HPMCOUNTER3H : HPMCOUNTER31H] : selected_csr = '0;
 

@@ -75,13 +75,20 @@ connect_bd_net $sys_clk  [get_bd_pins cva5_uart_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins cva5_uart_0/rstn]
 
 # ---- CLINT ------------------------------------------------------------------
-# A peripheral on the bus, not something inside the CPU IP. mtime is 64 bits
-# and it leaves as 64 plain nets, which is the price of the CLINT being where
-# it belongs; cva5_top is the core, its memory and its debug module.
+# A peripheral on the bus, not something inside the CPU IP. Two nets go back to
+# cva5_top and they are interrupts, not data: RISC-V gives the timer and
+# software interrupts their own mip bits (MTIP, cause 7; MSIP, cause 3), so
+# they come from the CLINT directly and never through a PLIC, which aggregates
+# device interrupts into MEIP alone. When the PLIC arrives, external makes
+# three, and three is the whole of it however many peripherals the bus carries.
+#
+# mtime's 64-bit count does not go back. It fed one CSR (time/timeh) and the
+# core now reports that CSR as unimplemented, so software reads the count where
+# this peripheral publishes it, at CLINT_BASE + 0xBFF8. The port stays on the
+# IP, unconnected, for a second hart or a wfi test that wants it.
 create_bd_cell -type ip -vlnv xilinx.com:user:cva5_clint_axi:1.0 cva5_clint_0
 connect_bd_net $sys_clk  [get_bd_pins cva5_clint_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins cva5_clint_0/rstn]
-connect_bd_net [get_bd_pins cva5_clint_0/mtime] [get_bd_pins cva5_top_0/mtime]
 connect_bd_net [get_bd_pins cva5_clint_0/mtip]  [get_bd_pins cva5_top_0/mtip]
 connect_bd_net [get_bd_pins cva5_clint_0/msip]  [get_bd_pins cva5_top_0/msip]
 

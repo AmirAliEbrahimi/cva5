@@ -35,9 +35,8 @@
 // 100 MHz. The privileged spec only asks for a constant frequency, so that is
 // legal, but every RISC-V system puts mtime at 1 MHz -- CVA6, OpenTitan,
 // SiFive, QEMU's virt -- and software ported from any of them carries 1 MHz in
-// its delay constants. CVA5 also feeds this counter to the time CSR when
-// INCLUDE_ZICNTR is set, so at 100 MHz time would simply duplicate cycle
-// instead of measuring elapsed microseconds.
+// its delay constants. A 100 MHz mtime would also make every one of those
+// delays a hundred times too short.
 //
 // TICKS_PER_USEC is the divider, so mtime counts microseconds and one tick is
 // 1 us at any core frequency. It also costs less than upstream: the 64-bit

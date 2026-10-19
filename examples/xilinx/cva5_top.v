@@ -59,9 +59,9 @@ module cva5_top
         input m_axi_bvalid,
         input [1:0] m_axi_bresp,
 
-        //Main memory, AXI4-Lite slave: the debugger's way into the local
-        //From cva5_clint_axi, the CLINT peripheral on the bus
-        input [63:0] mtime,
+        //From cva5_clint_axi: the timer and software interrupts. These two are
+        //all that enters this module from the interrupt controller, and the
+        //PLIC's external will make three -- see cva5_wrapper.sv.
         input mtip,
         input msip,
 
@@ -109,7 +109,6 @@ module cva5_top
         .m_axi_bready(m_axi_bready),
         .m_axi_bvalid(m_axi_bvalid),
         .m_axi_bresp(m_axi_bresp),
-        .mtime(mtime),
         .mtip(mtip),
         .msip(msip),
         .m_axi_dbg_awaddr(m_axi_dbg_awaddr),

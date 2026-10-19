@@ -65,10 +65,13 @@ module cva5_wrapper
         input logic m_axi_bvalid,
         input logic [1:0] m_axi_bresp,
 
-        //From cva5_clint_axi, the CLINT peripheral on the bus. mtime is the
-        //core's time CSR as well as the CLINT's counter, and it ticks once
-        //per microsecond.
-        input logic [63:0] mtime,
+        //From cva5_clint_axi, the CLINT peripheral on the bus: the timer and
+        //software interrupts, which is all that enters this module from the
+        //interrupt controller. RISC-V puts these on their own mip bits (MTIP,
+        //cause 7, and MSIP, cause 3), so they come from the CLINT directly and
+        //never through a PLIC -- a PLIC aggregates device interrupts into MEIP
+        //alone. When the PLIC lands, external makes three, and three is the
+        //whole of it however many peripherals the bus carries.
         input logic mtip,
         input logic msip,
 
@@ -197,7 +200,8 @@ module cva5_wrapper
             RESET_VEC : ROM_BASE,
             RESET_TVEC : TRAP_VEC,
             MCONFIGPTR : '0,
-            INCLUDE_ZICNTR : 1,
+            INCLUDE_ZICNTR : 1,  //cycle and instret, counted inside the core
+            INCLUDE_TIME_CSR : 0, //time/timeh: the CLINT publishes it on the bus
             INCLUDE_ZIHPM : 0,
             INCLUDE_SSTC : 0,
             INCLUDE_SMSTATEEN : 0
@@ -360,10 +364,32 @@ module cva5_wrapper
 
     cva5 #(.CONFIG(CPU_CONFIG), .INCLUDE_DEBUG(1), .DM_BASE(DM_BASE)) cpu(.mem(mem[0]), .*);
 
-    //mtime, mtip and msip arrive from cva5_clint_axi. mtime was a counter in
-    //this file once, incrementing every clock; then the CLINT owned it but sat
+    //mtip and msip arrive from cva5_clint_axi. mtime was a counter in this
+    //file once, incrementing every clock; then the CLINT owned it but sat
     //inside this module. It is a peripheral on the bus now, which is where a
     //timer belongs.
+    //
+    //Its 64-bit count does not come back in. Inside the core mtime feeds only
+    //the time/timeh CSR read mux and the Sstc stip comparison, and Sstc is off
+    //here (MODES : M, INCLUDE_SSTC : 0) -- so those 64 wires served rdtime and
+    //nothing else.
+    //
+    //Zicntr stays on: cycle and instret come from counters inside the core and
+    //cost no wires. INCLUDE_TIME_CSR : 0 takes time/timeh out of it, so a
+    //rdtime raises an illegal instruction rather than reading a tied-off zero.
+    //That is what CVA6 does -- RVZicntr serves CSR_CYCLE and CSR_INSTRET from
+    //its own counters, there is no CSR_TIME case at all, and a read of it
+    //falls through to read_access_exception -- and it is what lowRISC
+    //documents for Ibex, whose time(h) "are not implemented" and where "any
+    //access to these registers will trap".
+    //
+    //Software reads the time where the CLINT publishes it, at CLINT_BASE +
+    //0xBFF8. examples/sw already does; on a system with S-mode it is M-mode
+    //firmware that fills the gap, which is why OpenSBI trap-and-emulates the
+    //TIME CSR for platforms that do not implement it.
+    logic [63:0] mtime;
+    assign mtime = '0;
+
     assign s_interrupt = '{default: '0};
     //external stays low until the PLIC arrives; the UART's irq is what will
     //feed it.

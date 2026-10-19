@@ -2,4 +2,18 @@ test_benches/verilator/build
 vivado/
 qemu-build/
 build/
-examples/sw/ram.mif
+
+# examples/sw build outputs. 'make clean' removes these, but a run leaves them
+# behind and 'git add -A' will otherwise stage them -- trace.fst alone is 369 MB
+# for a short program.
+examples/sw/*.elf
+examples/sw/*.elf.rawbinary
+examples/sw/*.elf.dissasembled
+examples/sw/*.hex
+examples/sw/*.sim
+examples/sw/*.tcl
+examples/sw/*.mif
+examples/sw/*_log.txt
+examples/sw/signature.txt
+examples/sw/*.fst
+examples/sw/*.fst.hier

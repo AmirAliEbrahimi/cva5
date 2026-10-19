@@ -414,17 +414,26 @@ which is the same divider that gives 10416 on the board.
 ```
 
 Before this the wrapper had a bare `mtime` counter incrementing every clock and
-both interrupt structs tied to zero. Now `m_interrupt.timer` is `mtip`,
-`m_interrupt.software` is `msip`, and the core's `time` CSR and the CLINT's
-`mtime` are the same counter. `external` stays low until the PLIC arrives; the
-UART's `irq` is what will feed it.
+both interrupt structs tied to zero. Now `m_interrupt.timer` is `mtip` and
+`m_interrupt.software` is `msip`. `external` stays low until the PLIC arrives;
+the UART's `irq` is what will feed it.
+
+**Two wires enter `cva5_top` from the CLINT, and they are interrupts, not
+data.** RISC-V gives the timer and software interrupts their own `mip` bits —
+MTIP, cause 7, and MSIP, cause 3 — so they come from the CLINT directly and
+never through a PLIC, which aggregates *device* interrupts into MEIP alone.
+That is also why a PLIC is the wrong home for a tick: its claim/complete
+handshake is two memory-mapped accesses in the handler just to learn who
+interrupted, and `mtip`/`msip` are per-hart state where a PLIC is shared. When
+the PLIC lands, `external` makes three, and three is the whole of it however
+many peripherals the bus carries.
 
 **`mtime` ticks once per microsecond, not once per clock.** That is the one
 divergence from `apu/clint/clint.sv`, which increments unconditionally.
 Upstream's behaviour is legal — the privileged spec asks only for a constant
 frequency — but every RISC-V system puts `mtime` at 1 MHz, so software ported
-from any of them carries that in its delay constants, and at 100 MHz the `time`
-CSR would simply duplicate `cycle` rather than measure elapsed time. The
+from any of them carries that in its delay constants, and at 100 MHz every one
+of those delays would be a hundred times too short. The
 divider is `CLOCK_MHZ` in `cva5_wrapper.sv`, so a clock change is one edit and
 `soc.h`'s `CLINT_HZ` is the software-side copy of the same number.
 
@@ -449,11 +458,45 @@ split off the core's peripheral bus inside `cva5_wrapper`, the way the Debug
 Module's registers are, which cost nothing but left it invisible to the
 debugger.
 
-It is its own block-design IP, `cva5_clint_axi`. `mtime`, `mtip` and `msip`
-leave it as 66 plain nets and land on `cva5_top`'s interrupt inputs. It first
-shipped *inside* `cva5_top` to avoid those 66 signals, which was optimising the
-wrong thing: `cva5_top` is the core, its memory and its debug module, and a
-timer is none of those.
+It is its own block-design IP, `cva5_clint_axi`. It first shipped *inside*
+`cva5_top` to avoid the signals that crossing the boundary costs, which was
+optimising the wrong thing: `cva5_top` is the core, its memory and its debug
+module, and a timer is none of those.
+
+#### `time` is not implemented, and that is the normal arrangement
+
+Moving the CLINT out meant `mtip`, `msip` *and* `mtime[63:0]` crossed back into
+`cva5_top` — 66 nets, 64 of which served one CSR. Inside the core `mtime`
+reaches only the `time`/`timeh` read mux and the Sstc `stip` comparison, and
+Sstc is off here (`MODES : M`, `INCLUDE_SSTC : 0`).
+
+So `time` is now reported as unimplemented and those 64 wires are gone.
+`INCLUDE_TIME_CSR` is a new bit in `csr_config_t`, defaulting to 1 so nothing
+else in the tree changes, and `cva5_wrapper.sv` clears it. `INCLUDE_ZICNTR`
+stays **1**: `cycle` and `instret` come from counters inside the core and cost
+no wires, and `mcycle`/`minstret` were never gated by it anyway — they are
+machine CSRs, and this core runs M-mode only.
+
+That split is not an invention. CVA6 serves `CSR_CYCLE` and `CSR_INSTRET` under
+`RVZicntr` from its own counters, has no `CSR_TIME` case at all — a read falls
+through to `read_access_exception` — and its port list has no 64-bit time input
+either, just `irq_i[1:0]`, `ipi_i` and `time_irq_i`. lowRISC documents the same
+for Ibex: the user-mode `time(h)` registers "are not implemented in Ibex" and
+"any access to these registers will trap." Where richer software expects `time`
+to work, M-mode firmware fills the gap rather than hardware — OpenSBI
+trap-and-emulates TIME reads for platforms that do not implement the CSR.
+
+The count is still there, at `CLINT_BASE + 0xBFF8`, which is where `timer.c`
+and `p1_diag` already read it. `make -C examples/sw csrs` proves all three
+behaviours on hardware — `rdcycle`/`rdinstret` advancing, `rdtime` taking an
+illegal-instruction trap, the CLINT's `mtime` advancing over the bus — with its
+own trap handler, since `trap.S`'s parks by design.
+
+**This is the one place the board and QEMU diverge.** QEMU's `virt` implements
+`time`, so `rdtime` succeeds there and `csrs` reports FAIL on that check under
+`tools/cva5-qemu`. A trap is loud and `trap.S` leaves `mcause` where a debugger
+can read it, which is the behaviour worth having; the alternative was a CSR
+that silently reads zero.
 
 **A port added to `cva5_wrapper.sv` has to be added to `cva5_top.v` as well.**
 That file is a plain-Verilog, port-for-port wrapper that exists only because
@@ -640,13 +683,15 @@ something.
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
 | CLINT | `sh test_benches/debug/run_clint.sh` | mtime tick rate, writes, mtimecmp→mtip at the boundary, msip |
 | CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
+| counter CSRs, in the core sim | `make -C examples/sw run-csrs` | `rdcycle`/`rdinstret`/`mcycle` readable and advancing, `rdtime` and `rdtimeh` taking an illegal-instruction trap. The only place both polarities of `INCLUDE_TIME_CSR` can be run: the sim takes upstream's `EXAMPLE_CONFIG`, so with the bit set the three trap checks are *expected* to fail |
+| counter CSRs, on hardware | `make -C examples/sw csrs` | the same checks plus the CLINT's `mtime` advancing over the bus. Prints on the serial console. Fails under QEMU on purpose |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |
 | debugger bus split | `sh test_benches/debug/run_sba_split.sh` | 73 checks: `dm_sba_axil` → `cva5_sba_split` → the real RAM port and `tdp_ram` on one side, a peripheral on the other. Routing, window edges, error propagation, byte strobes, and collisions with the core's port |
 | silent boot | program the board | the preload prints nothing |
 | debugger load | `make -C examples/sw load` | SBA block write, verify, release |
 | DM bring-up | `openocd … -c "init; p1_diag; shutdown"` | DM, SBA, RAM read/write over JTAG |
 | **all of main memory** | `make -C examples/sw memtest` | **the only thing that addresses all 128 KB**, so the only thing that reaches cascade rows above the first. Prints on the serial console, not the terminal |
-| QEMU parity | `tools/cva5-qemu` | same reset vector and map as the board |
+| QEMU parity | `tools/cva5-qemu` | same reset vector and map as the board. `csrs` is the known exception: QEMU implements `time` |
 
 Run the four simulation checks before spending a synthesis run. All of the
 above pass on the current design.
