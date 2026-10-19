@@ -40,8 +40,8 @@ module cva5_uart #(
     //the width of its AXI address port, so a 32-bit port here produces a 4 GB
     //aperture, and a 4 GB aperture can only be placed at zero -- the address
     //editor then refuses the offset with BD 41-70 ("must fit an available
-    //aperture"). cva5_top's s_axi_ram gets a 128 KB block the same way, from
-    //its RAM_ADDR_W-wide port.
+    //aperture"). cva5_clint_axi's 16-bit port gets its 64 KB block the same
+    //way. Master ports obey the opposite rule; see CLAUDE.md.
     parameter int unsigned ADDR_WIDTH      = 12
 ) (
     input logic clk,

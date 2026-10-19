@@ -73,7 +73,8 @@ ERROR: [BD 41-70] The proposed address '0x1000_0000 [ 4K ]' must fit an
        available aperture ... Valid apertures are {<0x0000_0000 [ 4K ]>}.
 ```
 
-`M_RAM_ADDR_WIDTH` is 32 and `s_axi_ram` is 17; a wide master driving a narrow
+`M_UART_ADDR_WIDTH` and `M_CLINT_ADDR_WIDTH` are both 32 while `cva5_uart`'s
+`s_axi` is 12 and `cva5_clint_axi`'s is 16; a wide master driving a narrow
 slave is the working arrangement, and the `M_*_ADDR_WIDTH` parameters on
 `cva5_axi_xbar` exist so `run_xbar.sh` can sweep the truncation path, not
 because the block design should narrow them.
@@ -93,10 +94,18 @@ that both define it collide. That is why the AXI4-Lite peripheral fan-out lives
 ## Peripherals the debugger can reach must not reset on ndmreset
 
 `ndmreset` is the Debug Module's "reset the system but not me" request, and
-OpenOCD's `cpu_hold` asserts it *before* talking to the system bus. A
-peripheral held in reset by it never answers that access. So the Debug Module,
-the RAM port and the CLINT all reset from `rstn` alone; only the core itself
-uses `rst`, which is `~rstn | ndmreset`.
+OpenOCD's `cpu_hold` asserts it *before* talking to the system bus — and
+*holds* it for the whole program load. Anything held in reset by it never
+answers that access. So the Debug Module, the RAM port, `cva5_sba_split` and
+the CLINT all reset from `rstn` alone; only the core itself uses `rst`, which is
+`~rstn | ndmreset`.
+
+This is not only about peripherals answering. State on the debugger's path
+counts too: `cva5_sba_split`'s registered response select, written inline in
+the wrapper, first used `rst`. Held in reset it would have read zero
+throughout the load and routed every response to the side the request did not
+go to, so every `make load` would have hung — in simulation as well, which is
+why it was worth making the split a module with one explicit reset port.
 
 ## Timing numbers are not a per-patch score
 

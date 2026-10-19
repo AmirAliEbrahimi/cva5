@@ -98,11 +98,13 @@ connect_bd_net [get_bd_pins cva5_clint_0/msip]  [get_bd_pins cva5_top_0/msip]
 # runs in LatencyMode CUT_SLV_AX and left R fall-through into the fetch path --
 # but there is no cached path left for it to cut.
 #
-# The debugger still has to reach the RAM to load programs, so cva5_top exposes
-# an AXI4 slave that takes the cycles the core's load-store unit leaves idle.
-# Full AXI4 rather than Lite because the crossbar's RAM port is AXI4 and a block
-# design will not join the two protocols. The crossbar's RAM port drives it,
-# below.
+# The debugger still has to reach the RAM to load programs, and it does so
+# without leaving cva5_top: the Debug Module's system bus is split inside the
+# wrapper, RAM-window accesses going straight to the RAM's second port and
+# everything else out m_axi_dbg to the crossbar. That used to be a loop out of
+# cva5_top into the crossbar and back in through an s_axi_ram slave, which was
+# an AXI4 port, a full crossbar master and a protocol conversion to carry the
+# debugger's single-beat Lite writes to memory one centimetre.
 
 # ---- Crossbar -------------------------------------------------------------
 # cva5_axi_xbar wraps pulp-platform's axi_xbar and replaces Xilinx's AXI
@@ -115,16 +117,18 @@ connect_bd_net [get_bd_pins cva5_clint_0/msip]  [get_bd_pins cva5_top_0/msip]
 # unexpected. The segments assigned below are bookkeeping for point-to-point
 # links, not decoding.
 #
-#   m_axi      -> s_axi_cpu    peripherals only
-#   m_axi_dbg  -> s_axi_dbg    RAM and peripherals
+#   m_axi      -> s_axi_cpu    the core's peripheral bus
+#   m_axi_dbg  -> s_axi_dbg    the debugger, for anything outside the RAM
 #
-# On the master side the peripheral window is one AXI4 port inside the IP,
-# converted once to AXI4-Lite and then fanned out by a Lite crossbar to one
-# port per peripheral. So m_axi_uart and m_axi_clint are two legs of one
-# conversion rather than two ports on the main crossbar, and the next
-# peripheral is a rule and a leg rather than another converter.
+# Every port is AXI4-Lite now, masters and slaves alike, and there is one
+# crossbar rather than an AXI4 crossbar feeding a Lite one through a converter.
+# Nothing left on this bus bursts: main memory is answered inside cva5_top and
+# the peripherals are registers. That dropped eleven source files, the AXI4-to-
+# Lite converter and its skid buffers, and the ID machinery that only a
+# multi-beat, multi-outstanding bus needs.
 #
-# s_axi_mem was the cached master's port and nothing drives it now; see below.
+# The next peripheral -- the SPI controller, a PLIC -- is a rule, a port and a
+# line here.
 create_bd_cell -type ip -vlnv xilinx.com:user:cva5_axi_xbar:1.0 axi_xbar_0
 connect_bd_net $sys_clk  [get_bd_pins axi_xbar_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins axi_xbar_0/rstn]
@@ -132,11 +136,6 @@ connect_bd_net $sys_rstn [get_bd_pins axi_xbar_0/rstn]
 connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi]     [get_bd_intf_pins axi_xbar_0/s_axi_cpu]
 connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg] [get_bd_intf_pins axi_xbar_0/s_axi_dbg]
 
-# The crossbar keeps its third slave port for now; nothing drives it since the
-# cached master is gone. Shrinking it to two is a separate change, kept out of
-# this one so the memory rework is measured on its own.
-
-connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_ram]    [get_bd_intf_pins cva5_top_0/s_axi_ram]
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_uart]  [get_bd_intf_pins cva5_uart_0/s_axi]
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_clint] [get_bd_intf_pins cva5_clint_0/s_axi]
 
@@ -155,12 +154,6 @@ proc cva5_seg {args} {
     }
     return ""
 }
-
-set ram_seg [cva5_seg {axi_xbar_0/m_axi_ram/SEG_cva5_top_0_Reg} \
-                      {axi_xbar_0/m_axi_ram/SEG_cva5_top_0_reg0}]
-if {$ram_seg eq ""} { error "the crossbar's RAM port has no address segment" }
-set_property offset 0x80000000 $ram_seg
-set_property range  128K       $ram_seg
 
 set uart_seg [cva5_seg {axi_xbar_0/m_axi_uart/SEG_cva5_uart_0_reg0} \
                        {axi_xbar_0/m_axi_uart/SEG_cva5_uart_0_Reg} \

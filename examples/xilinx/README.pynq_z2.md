@@ -158,14 +158,34 @@ idle. The core can never be stalled by it; the debugger can always wait, since
 SBA is paced by JTAG. During `make load` the core is in reset and every cycle
 is idle.
 
-`cva5_ram_port` is a full AXI4 slave rather than AXI4-Lite, because the
-crossbar's RAM port is AXI4 and a block design will not join the two
-protocols. SBA only ever issues single beats, but handling bursts costs little
-and is what a future master on that port would want.
+`cva5_ram_port` is a full AXI4 slave rather than AXI4-Lite. SBA only ever
+issues single beats, but handling bursts costs little and is what a future
+master on that port would want — main memory moving back out of `cva5_top`, for
+one.
 
-The crossbar still has its third slave port, unconnected now that the cached
-master is gone. Shrinking it is a separate change, deliberately not folded in
-here so this one can be measured on its own.
+The debugger reaches it without leaving `cva5_top`. `cva5_sba_split` sits
+between `dm_sba_axil` and the rest of the design and routes the system bus by
+address: inside the RAM window to the RAM port, everything else out `m_axi_dbg`
+to the crossbar, which decodes it as before. Nothing outside the RAM window is
+claimed, so an unmapped address still gets its DECERR from the crossbar's error
+slave and OpenOCD still sees `sberror=2`.
+
+That replaced a loop. The system bus used to leave `cva5_top` through
+`m_axi_dbg`, cross the crossbar and come back in through an `s_axi_ram` slave
+to reach a RAM inside the module it started from. The loop existed because the
+crossbar's RAM master was built for the cached master, whose bursts needed a
+full AXI4 path; once the caches were gone the debugger was its only remaining
+client, and it is AXI4-Lite with one outstanding single-beat transaction. The
+loop cost a crossbar master port, a protocol conversion, an IP boundary and 11
+source files to carry single words a few hundred micrometres.
+
+`cva5_sba_split` is its own module rather than glue inside the wrapper so that
+`run_sba_split.sh` can drive the real `dm_sba_axil`, the real `cva5_ram_port`
+and the real `tdp_ram` through it. One detail of it is worth stating because
+getting it wrong hangs every program load: its registered select must reset
+from `rstn` alone, never from `ndmreset`. `cpu_hold` asserts `ndmreset` and
+*holds* it while loading, so a select held in reset through that would route
+every response to the side the request never went to.
 
 Build order from the repository root:
 
@@ -183,11 +203,21 @@ generates the include-free copies in `vendor/`, because the IP packager
 flattens sources and the pulp `` `include `` paths then cannot resolve.
 `tools/vendor-pulp-sv.py --check` fails if they are stale.
 
-The crossbar's peripheral port converts AXI4 to AXI4-Lite with ZipCPU's
-formally verified `axi2axilite`. pulp's `axi_to_axi_lite` was tried first and
-missed 100 MHz by 3.2 ns: its burst splitter, ID queue and atomic filter are
-built for a general AXI port, none of which a window carrying single-beat
-register accesses can reach.
+The crossbar is AXI4-Lite on every port now, masters and slaves alike: one
+`axi_lite_xbar` rather than an AXI4 crossbar feeding a Lite one through a
+converter. Nothing left on this bus bursts — main memory is answered inside
+`cva5_top` and the peripherals are registers — so the AXI4-to-Lite conversion,
+its skid buffers and the ID machinery that only a multi-beat, multi-outstanding
+bus needs all went with the RAM master port. The file left the IP's list with
+them: `axi_demux`, `axi_demux_simple`, `axi_mux`, `axi_multicut`, `axi_xbar`,
+`axi_xbar_unmuxed`, `axi_id_prepend`, `axi2axilite`, `axi_addr`, `sfifo` and
+`skidbuffer`. `cva5_axi_xbar.sv` went from 830 lines to 370.
+
+(For the record, since it may matter again if a bursting master ever returns:
+the AXI4-to-Lite conversion used ZipCPU's formally verified `axi2axilite`.
+pulp's `axi_to_axi_lite` was tried first and missed 100 MHz by 3.2 ns — its
+burst splitter, ID queue and atomic filter are built for a general AXI port,
+none of which a window carrying single-beat register accesses can reach.)
 
 From the crossbar onwards the address decode lives in the RTL, as parameters
 taken from `examples/sw/soc.h`, not in the Vivado address editor. An address
@@ -199,13 +229,13 @@ Validated on hardware, not just in simulation: boot banner over the UART
 over system bus access with zero errors, a deliberate unmapped read returning
 `sberror=2` rather than hanging, a full GDB session (reset, load, breakpoint,
 single step, register and memory access, asynchronous halt), and `make
-memtest` passing -- the last of which is the only test that touches the
-cached path through `cva5_axi_cut`.
+memtest` passing -- the only test that addresses all 128 KB.
 
-Run `./test_benches/axi/run_cut.sh` and `./test_benches/axi/run_xbar.sh`
-before spending a synthesis run — 216 and 131 checks. Both take their file
-lists from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so what is
-simulated is exactly what is synthesised.
+Run `./test_benches/axi/run_cut.sh`, `./test_benches/axi/run_xbar.sh` and
+`sh test_benches/debug/run_sba_split.sh` before spending a synthesis run — 216
+checks, 30 across three port-width configurations, and 73. The first two take
+their file lists from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so
+what is simulated is exactly what is synthesised.
 
 ### Replacing the memory behind AXI: three attempts that failed
 
@@ -358,10 +388,12 @@ ERROR: [BD 41-70] The proposed address '0x0_1000_0000 [ 4G ]' must fit an
 available aperture ... Valid apertures are {<0x0_0000_0000 [ 4G ]>}
 ```
 
-`cva5_top`'s `s_axi_ram` gets its 128 KB block the same way, from its
-`RAM_ADDR_W`-wide port. The segment's range in `pynq_z2_sys.tcl` has to match
-the block, so it is 4K rather than the 64K the crossbar decodes to that port;
-the UART aliases within the window, as `axi_uartlite`'s four registers did.
+`cva5_clint_axi`'s 16-bit slave port gets its 64 KB block the same way. The
+segment's range in `pynq_z2_sys.tcl` has to match the block the port implies,
+so the UART's is 4K rather than the 64K the crossbar decodes to that port; the
+UART aliases within the window, as `axi_uartlite`'s four registers did. The
+*master* ports obey the opposite rule and stay 32 bits wide; `CLAUDE.md` has
+both error messages side by side, because they are the same error text.
 
 `run_uart.sh` ties `tx` back to `rx`, so one run covers the adapter, both FIFOs
 and both serial state machines. It decodes the line independently of the
@@ -444,33 +476,44 @@ the CLINT is outside `cva5_top`, `ndmreset` simply never reaches it.
 registers writes the whole word. Software writes these a word at a time, which
 is what the layout is for.
 
-### The peripheral bus is an AXI4-Lite fan-out
+### The bus is AXI4-Lite end to end
 
-The crossbar has two AXI4 master ports: main RAM, and a peripheral window
-covering everything below `0x8000_0000`. That window is converted to AXI4-Lite
-once, by ZipCPU's `axi2axilite`, and then a **pulp `axi_lite_xbar` decodes it
-to one port per peripheral** — `m_axi_uart` and `m_axi_clint` today.
+Two slave ports and two master ports, one `axi_lite_xbar`, no protocol
+conversion anywhere:
 
-The alternative was a master port on the main crossbar per peripheral. That
-means one `axi2axilite` each and a wider `axi_demux` arbitration, in a block the
-timing section already blames for congestion on the fetch path. With the timer,
-the SPI and the PLIC still to come, that is five converters against one, and
-each new peripheral would be a crossbar edit and a bench rewrite rather than a
-rule and a mux leg.
+```
+cva5_top/m_axi      -> s_axi_cpu    the core's peripheral bus
+cva5_top/m_axi_dbg  -> s_axi_dbg    the debugger, for anything outside the RAM
+
+m_axi_uart  -> cva5_uart/s_axi      0x1000_0000
+m_axi_clint -> cva5_clint_0/s_axi   0x0200_0000
+```
+
+It got there in two steps. First the peripheral window was one AXI4 master port
+converted to Lite once and then fanned out by a Lite crossbar — which was the
+right shape while the cached master still needed AXI4, and which is why the
+alternative (a converter per peripheral, five of them with the timer, the SPI
+and the PLIC to come) was rejected. Then the cached master went, the debugger's
+RAM loop went with it, and there was nothing left on the bus that bursts: one
+Lite crossbar does the whole job, and the next peripheral is a rule, a port and
+a line in `pynq_z2_sys.tcl`.
 
 `axi_lite_demux`, `axi_lite_mux` and `axi_lite_xbar` are vendored by
 `tools/vendor-pulp-sv.py` like the rest of the pulp sources, and need only
-`spill_register`, `fifo_v3` and `rr_arb_tree` — all already in this IP. Putting
-the Lite stage **inside `cva5_axi_xbar`** rather than in an IP of its own is
-deliberate: `axi_pkg` is a package, and the note in `package_openhw_ips.tcl`
-explains why only one packaged IP in a block design may carry it.
+`spill_register`, `fifo_v3`, `rr_arb_tree` and `addr_decode`. The crossbar's
+error path reaches `axi_err_slv` through `axi_lite_to_axi`, which is why that
+pair and `counter`/`delta_counter` are still in the IP's file list.
 
-With one slave port the per-port arbitration inside the Lite crossbar collapses,
-so what survives synthesis is an address decode, a demultiplexer and an error
-slave. An address inside the main crossbar's peripheral rule that no Lite rule
-claims gets a DECERR from that error slave rather than hanging —
-`run_xbar.sh` checks exactly that, at three different port-width
-configurations.
+Keeping it **inside `cva5_axi_xbar`** rather than splitting the Lite stage into
+an IP of its own stays deliberate: `axi_pkg` is a package, and the note in
+`package_openhw_ips.tcl` explains why only one packaged IP in a block design may
+carry it.
+
+An address no rule claims gets a DECERR from the error slave rather than
+hanging, whichever master asked — `run_xbar.sh` checks exactly that, along with
+the decode, both masters reaching both slaves, cross-contamination, the address
+truncation each master port performs, and the window boundaries, at three
+different port-width configurations.
 
 ### The JTAG domain is constrained
 
@@ -590,7 +633,7 @@ something.
 
 | check | command | covers |
 |-------|---------|--------|
-| crossbar | `test_benches/axi/run_xbar.sh` | 144 checks × 3 port-width configurations: decode, the Lite fan-out, DECERR from both error slaves |
+| crossbar | `test_benches/axi/run_xbar.sh` | 30 checks × 3 port-width configurations: decode, both masters to both slaves, cross-contamination, address truncation, window boundaries, DECERR |
 | register cut | `sh test_benches/axi/run_cut.sh` | 216 checks |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
@@ -598,6 +641,7 @@ something.
 | CLINT | `sh test_benches/debug/run_clint.sh` | mtime tick rate, writes, mtimecmp→mtip at the boundary, msip |
 | CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |
+| debugger bus split | `sh test_benches/debug/run_sba_split.sh` | 73 checks: `dm_sba_axil` → `cva5_sba_split` → the real RAM port and `tdp_ram` on one side, a peripheral on the other. Routing, window edges, error propagation, byte strobes, and collisions with the core's port |
 | silent boot | program the board | the preload prints nothing |
 | debugger load | `make -C examples/sw load` | SBA block write, verify, release |
 | DM bring-up | `openocd … -c "init; p1_diag; shutdown"` | DM, SBA, RAM read/write over JTAG |

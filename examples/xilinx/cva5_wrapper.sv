@@ -65,41 +65,6 @@ module cva5_wrapper
         input logic m_axi_bvalid,
         input logic [1:0] m_axi_bresp,
 
-        //Main memory, AXI4-Lite slave. Programs are loaded over the Debug
-        //Module's System Bus Access, and the RAM they land in is inside this
-        //wrapper, so the bus has to be able to reach back in. The debugger
-        //takes the cycles the core's load-store unit leaves idle; see
-        //examples/xilinx/debug/cva5_ram_port.sv.
-        input logic [7:0] s_axi_ram_awid,
-        input logic [RAM_ADDR_W+1:0] s_axi_ram_awaddr,
-        input logic [7:0] s_axi_ram_awlen,
-        input logic [2:0] s_axi_ram_awsize,
-        input logic [1:0] s_axi_ram_awburst,
-        input logic s_axi_ram_awvalid,
-        output logic s_axi_ram_awready,
-        input logic [31:0] s_axi_ram_wdata,
-        input logic [3:0] s_axi_ram_wstrb,
-        input logic s_axi_ram_wlast,
-        input logic s_axi_ram_wvalid,
-        output logic s_axi_ram_wready,
-        output logic [7:0] s_axi_ram_bid,
-        output logic [1:0] s_axi_ram_bresp,
-        output logic s_axi_ram_bvalid,
-        input logic s_axi_ram_bready,
-        input logic [7:0] s_axi_ram_arid,
-        input logic [RAM_ADDR_W+1:0] s_axi_ram_araddr,
-        input logic [7:0] s_axi_ram_arlen,
-        input logic [2:0] s_axi_ram_arsize,
-        input logic [1:0] s_axi_ram_arburst,
-        input logic s_axi_ram_arvalid,
-        output logic s_axi_ram_arready,
-        output logic [7:0] s_axi_ram_rid,
-        output logic [31:0] s_axi_ram_rdata,
-        output logic [1:0] s_axi_ram_rresp,
-        output logic s_axi_ram_rlast,
-        output logic s_axi_ram_rvalid,
-        input logic s_axi_ram_rready,
-
         //From cva5_clint_axi, the CLINT peripheral on the bus. mtime is the
         //core's time CSR as well as the CLINT's counter, and it ticks once
         //per microsecond.
@@ -368,25 +333,25 @@ module cva5_wrapper
         .dm_be (dm_be),
         .dm_wdata (dm_wdata),
         .dm_rdata (dm_rdata),
-        .m_axi_awaddr (m_axi_dbg_awaddr),
-        .m_axi_awprot (m_axi_dbg_awprot),
-        .m_axi_awvalid (m_axi_dbg_awvalid),
-        .m_axi_awready (m_axi_dbg_awready),
-        .m_axi_wdata (m_axi_dbg_wdata),
-        .m_axi_wstrb (m_axi_dbg_wstrb),
-        .m_axi_wvalid (m_axi_dbg_wvalid),
-        .m_axi_wready (m_axi_dbg_wready),
-        .m_axi_bresp (m_axi_dbg_bresp),
-        .m_axi_bvalid (m_axi_dbg_bvalid),
-        .m_axi_bready (m_axi_dbg_bready),
-        .m_axi_araddr (m_axi_dbg_araddr),
-        .m_axi_arprot (m_axi_dbg_arprot),
-        .m_axi_arvalid (m_axi_dbg_arvalid),
-        .m_axi_arready (m_axi_dbg_arready),
-        .m_axi_rdata (m_axi_dbg_rdata),
-        .m_axi_rresp (m_axi_dbg_rresp),
-        .m_axi_rvalid (m_axi_dbg_rvalid),
-        .m_axi_rready (m_axi_dbg_rready)
+        .m_axi_awaddr (sba_awaddr),
+        .m_axi_awprot (sba_awprot),
+        .m_axi_awvalid (sba_awvalid),
+        .m_axi_awready (sba_awready),
+        .m_axi_wdata (sba_wdata),
+        .m_axi_wstrb (sba_wstrb),
+        .m_axi_wvalid (sba_wvalid),
+        .m_axi_wready (sba_wready),
+        .m_axi_bresp (sba_bresp),
+        .m_axi_bvalid (sba_bvalid),
+        .m_axi_bready (sba_bready),
+        .m_axi_araddr (sba_araddr),
+        .m_axi_arprot (sba_arprot),
+        .m_axi_arvalid (sba_arvalid),
+        .m_axi_arready (sba_arready),
+        .m_axi_rdata (sba_rdata),
+        .m_axi_rresp (sba_rresp),
+        .m_axi_rvalid (sba_rvalid),
+        .m_axi_rready (sba_rready)
     );
 
     logic rst = 1'b1; //Held in reset at configuration
@@ -541,6 +506,117 @@ module cva5_wrapper
     logic ram_rstn = 1'b0; //Held in reset at configuration
     always_ff @(posedge clk) ram_rstn <= rstn;
 
+    //The debugger's system bus master, and the RAM port's AXI4 slave, both
+    //internal now.
+    logic [31:0] sba_awaddr, sba_araddr, sba_wdata, sba_rdata;
+    logic [2:0]  sba_awprot, sba_arprot;
+    logic [3:0]  sba_wstrb;
+    logic        sba_awvalid, sba_awready, sba_wvalid, sba_wready;
+    logic        sba_bvalid, sba_bready, sba_arvalid, sba_arready;
+    logic        sba_rvalid, sba_rready;
+    logic [1:0]  sba_bresp, sba_rresp;
+
+    logic [7:0]  rp_awid, rp_arid, rp_bid, rp_rid;  //ram_port defaults ID_WIDTH to 8
+    logic [RAM_ADDR_W+1:0] rp_awaddr, rp_araddr;
+    logic [7:0]  rp_awlen, rp_arlen;
+    logic [2:0]  rp_awsize, rp_arsize;
+    logic [1:0]  rp_awburst, rp_arburst, rp_bresp, rp_rresp;
+    logic        rp_awvalid, rp_awready, rp_wvalid, rp_wready, rp_wlast;
+    logic [31:0] rp_wdata, rp_rdata;
+    logic [3:0]  rp_wstrb;
+    logic        rp_bvalid, rp_bready, rp_arvalid, rp_arready;
+    logic        rp_rvalid, rp_rready, rp_rlast;
+
+    ////////////////////////////////////////////////////
+    //Debugger system bus split
+    //
+    //The Debug Module's system bus master used to leave through m_axi_dbg,
+    //cross the crossbar and come back in through s_axi_ram to reach a RAM in
+    //this same module. RAM accesses are answered here instead; everything else
+    //-- the UART, the CLINT, anything the crossbar decodes -- still leaves
+    //through m_axi_dbg. See the header of cva5_sba_split.sv.
+    //
+    //ram_rstn, not rst: this must not reset on ndmreset, for the same reason
+    //the RAM port must not.
+    cva5_sba_split #(
+        .RAM_BASE (RAM_BASE),
+        .RAM_ADDR_W (RAM_ADDR_W),
+        .ID_WIDTH (8)
+    ) sba_split (
+        .clk (clk),
+        .rstn (ram_rstn),
+
+        .s_axi_awaddr (sba_awaddr),
+        .s_axi_awprot (sba_awprot),
+        .s_axi_awvalid (sba_awvalid),
+        .s_axi_awready (sba_awready),
+        .s_axi_wdata (sba_wdata),
+        .s_axi_wstrb (sba_wstrb),
+        .s_axi_wvalid (sba_wvalid),
+        .s_axi_wready (sba_wready),
+        .s_axi_bresp (sba_bresp),
+        .s_axi_bvalid (sba_bvalid),
+        .s_axi_bready (sba_bready),
+        .s_axi_araddr (sba_araddr),
+        .s_axi_arprot (sba_arprot),
+        .s_axi_arvalid (sba_arvalid),
+        .s_axi_arready (sba_arready),
+        .s_axi_rdata (sba_rdata),
+        .s_axi_rresp (sba_rresp),
+        .s_axi_rvalid (sba_rvalid),
+        .s_axi_rready (sba_rready),
+
+        .m_axi_ram_awid (rp_awid),
+        .m_axi_ram_awaddr (rp_awaddr),
+        .m_axi_ram_awlen (rp_awlen),
+        .m_axi_ram_awsize (rp_awsize),
+        .m_axi_ram_awburst (rp_awburst),
+        .m_axi_ram_awvalid (rp_awvalid),
+        .m_axi_ram_awready (rp_awready),
+        .m_axi_ram_wdata (rp_wdata),
+        .m_axi_ram_wstrb (rp_wstrb),
+        .m_axi_ram_wlast (rp_wlast),
+        .m_axi_ram_wvalid (rp_wvalid),
+        .m_axi_ram_wready (rp_wready),
+        .m_axi_ram_bid (rp_bid),
+        .m_axi_ram_bresp (rp_bresp),
+        .m_axi_ram_bvalid (rp_bvalid),
+        .m_axi_ram_bready (rp_bready),
+        .m_axi_ram_arid (rp_arid),
+        .m_axi_ram_araddr (rp_araddr),
+        .m_axi_ram_arlen (rp_arlen),
+        .m_axi_ram_arsize (rp_arsize),
+        .m_axi_ram_arburst (rp_arburst),
+        .m_axi_ram_arvalid (rp_arvalid),
+        .m_axi_ram_arready (rp_arready),
+        .m_axi_ram_rid (rp_rid),
+        .m_axi_ram_rdata (rp_rdata),
+        .m_axi_ram_rresp (rp_rresp),
+        .m_axi_ram_rlast (rp_rlast),
+        .m_axi_ram_rvalid (rp_rvalid),
+        .m_axi_ram_rready (rp_rready),
+
+        .m_axi_dbg_awaddr (m_axi_dbg_awaddr),
+        .m_axi_dbg_awprot (m_axi_dbg_awprot),
+        .m_axi_dbg_awvalid (m_axi_dbg_awvalid),
+        .m_axi_dbg_awready (m_axi_dbg_awready),
+        .m_axi_dbg_wdata (m_axi_dbg_wdata),
+        .m_axi_dbg_wstrb (m_axi_dbg_wstrb),
+        .m_axi_dbg_wvalid (m_axi_dbg_wvalid),
+        .m_axi_dbg_wready (m_axi_dbg_wready),
+        .m_axi_dbg_bresp (m_axi_dbg_bresp),
+        .m_axi_dbg_bvalid (m_axi_dbg_bvalid),
+        .m_axi_dbg_bready (m_axi_dbg_bready),
+        .m_axi_dbg_araddr (m_axi_dbg_araddr),
+        .m_axi_dbg_arprot (m_axi_dbg_arprot),
+        .m_axi_dbg_arvalid (m_axi_dbg_arvalid),
+        .m_axi_dbg_arready (m_axi_dbg_arready),
+        .m_axi_dbg_rdata (m_axi_dbg_rdata),
+        .m_axi_dbg_rresp (m_axi_dbg_rresp),
+        .m_axi_dbg_rvalid (m_axi_dbg_rvalid),
+        .m_axi_dbg_rready (m_axi_dbg_rready)
+    );
+
     cva5_ram_port #(.ADDR_WIDTH(RAM_ADDR_W)) ram_port (
         .clk (clk),
         .rstn (ram_rstn),
@@ -554,35 +630,35 @@ module cva5_wrapper
         .ram_addr (ram_b_addr),
         .ram_wdata (ram_b_wdata),
         .ram_rdata (ram_b_rdata),
-        .s_axi_awid (s_axi_ram_awid),
-        .s_axi_awaddr (s_axi_ram_awaddr),
-        .s_axi_awlen (s_axi_ram_awlen),
-        .s_axi_awsize (s_axi_ram_awsize),
-        .s_axi_awburst (s_axi_ram_awburst),
-        .s_axi_awvalid (s_axi_ram_awvalid),
-        .s_axi_awready (s_axi_ram_awready),
-        .s_axi_wdata (s_axi_ram_wdata),
-        .s_axi_wstrb (s_axi_ram_wstrb),
-        .s_axi_wlast (s_axi_ram_wlast),
-        .s_axi_wvalid (s_axi_ram_wvalid),
-        .s_axi_wready (s_axi_ram_wready),
-        .s_axi_bid (s_axi_ram_bid),
-        .s_axi_bresp (s_axi_ram_bresp),
-        .s_axi_bvalid (s_axi_ram_bvalid),
-        .s_axi_bready (s_axi_ram_bready),
-        .s_axi_arid (s_axi_ram_arid),
-        .s_axi_araddr (s_axi_ram_araddr),
-        .s_axi_arlen (s_axi_ram_arlen),
-        .s_axi_arsize (s_axi_ram_arsize),
-        .s_axi_arburst (s_axi_ram_arburst),
-        .s_axi_arvalid (s_axi_ram_arvalid),
-        .s_axi_arready (s_axi_ram_arready),
-        .s_axi_rid (s_axi_ram_rid),
-        .s_axi_rdata (s_axi_ram_rdata),
-        .s_axi_rresp (s_axi_ram_rresp),
-        .s_axi_rlast (s_axi_ram_rlast),
-        .s_axi_rvalid (s_axi_ram_rvalid),
-        .s_axi_rready (s_axi_ram_rready)
+        .s_axi_awid (rp_awid),
+        .s_axi_awaddr (rp_awaddr),
+        .s_axi_awlen (rp_awlen),
+        .s_axi_awsize (rp_awsize),
+        .s_axi_awburst (rp_awburst),
+        .s_axi_awvalid (rp_awvalid),
+        .s_axi_awready (rp_awready),
+        .s_axi_wdata (rp_wdata),
+        .s_axi_wstrb (rp_wstrb),
+        .s_axi_wlast (rp_wlast),
+        .s_axi_wvalid (rp_wvalid),
+        .s_axi_wready (rp_wready),
+        .s_axi_bid (rp_bid),
+        .s_axi_bresp (rp_bresp),
+        .s_axi_bvalid (rp_bvalid),
+        .s_axi_bready (rp_bready),
+        .s_axi_arid (rp_arid),
+        .s_axi_araddr (rp_araddr),
+        .s_axi_arlen (rp_arlen),
+        .s_axi_arsize (rp_arsize),
+        .s_axi_arburst (rp_arburst),
+        .s_axi_arvalid (rp_arvalid),
+        .s_axi_arready (rp_arready),
+        .s_axi_rid (rp_rid),
+        .s_axi_rdata (rp_rdata),
+        .s_axi_rresp (rp_rresp),
+        .s_axi_rlast (rp_rlast),
+        .s_axi_rvalid (rp_rvalid),
+        .s_axi_rready (rp_rready)
     );
 
     tdp_ram #(

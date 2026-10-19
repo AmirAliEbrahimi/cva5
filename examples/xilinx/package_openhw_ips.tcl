@@ -47,28 +47,17 @@ dict set openhw_ips cva5_axi_xbar {
     third_party/common_cells/src/lzc.sv
     third_party/common_cells/src/counter.sv
     third_party/common_cells/src/delta_counter.sv
-    third_party/common_cells/src/rr_arb_tree.sv
     third_party/common_cells/src/onehot_to_bin.sv
+    third_party/common_cells/src/rr_arb_tree.sv
     third_party/common_cells/src/addr_decode.sv
     third_party/common_cells/src/fifo_v3.sv
     third_party/common_cells/src/spill_register_flushable.sv
     third_party/common_cells/src/spill_register.sv
     third_party/axi/src/axi_err_slv.sv
-    third_party/axi/src/axi_id_prepend.sv
-    examples/xilinx/vendor/axi_demux_simple.sv
-    examples/xilinx/vendor/axi_demux.sv
-    examples/xilinx/vendor/axi_mux.sv
-    examples/xilinx/vendor/axi_multicut.sv
     examples/xilinx/vendor/axi_lite_to_axi.sv
-    examples/xilinx/vendor/axi_xbar_unmuxed.sv
-    examples/xilinx/vendor/axi_xbar.sv
     examples/xilinx/vendor/axi_lite_demux.sv
     examples/xilinx/vendor/axi_lite_mux.sv
     examples/xilinx/vendor/axi_lite_xbar.sv
-    third_party/wb2axip/rtl/sfifo.v
-    third_party/wb2axip/rtl/skidbuffer.v
-    third_party/wb2axip/rtl/axi_addr.v
-    third_party/wb2axip/rtl/axi2axilite.v
     examples/xilinx/axi/cva5_axi_xbar.sv
 }
 
@@ -83,6 +72,7 @@ dict set openhw_ips cva5_axi_xbar {
 # scoped; identical copies of a module are not the same problem. If synthesis
 # does complain that fifo_v3 is declared more than once, the fix is a renamed
 # vendored copy for this IP, not a change to the UART.
+
 # The CLINT, as a peripheral rather than something inside the CPU IP. mtime,
 # mtip and msip leave as plain nets and land on cva5_top's interrupt inputs.
 dict set openhw_ips cva5_clint_axi {
@@ -107,10 +97,12 @@ dict set openhw_ips cva5_uart {
 # as a tdp_ram driven by the local memory interface, and the block design has
 # no memory IP of any kind. See README.pynq_z2.md for the measurements.
 #
-# The file list stays here so tools/ip-filelist.py can build the crossbar
-# testbench's source list -- tb_axi_xbar uses this as its memory slave, which
-# is a better test than a behavioural model because it is a real AXI4 slave.
-# The loop below skips it, so nothing is packaged and nothing is synthesised.
+# Nothing instantiates it now either: the crossbar is AXI4-Lite on every port,
+# so tb_axi_xbar's slaves are Lite register models and it no longer needs a
+# bursting AXI4 slave. The file list stays because this is the thing to reach
+# for if main memory ever moves back out of cva5_top, and because deleting a
+# measured dead end loses the measurement. The loop below skips it, so nothing
+# is packaged and nothing is synthesised.
 dict set openhw_ips cva5_axi_ram {
     third_party/wb2axip/rtl/skidbuffer.v
     third_party/wb2axip/rtl/axi_addr.v
@@ -120,7 +112,7 @@ dict set openhw_ips cva5_axi_ram {
 
 # AXI interfaces Vivado infers from the port names, to be bound to the clock.
 dict set openhw_busifs cva5_axi_cut {s_axi m_axi}
-dict set openhw_busifs cva5_axi_xbar {s_axi_cpu s_axi_mem s_axi_dbg m_axi_ram m_axi_uart m_axi_clint}
+dict set openhw_busifs cva5_axi_xbar {s_axi_cpu s_axi_dbg m_axi_uart m_axi_clint}
 dict set openhw_busifs cva5_axi_ram {s_axi}
 dict set openhw_busifs cva5_uart {s_axi}
 dict set openhw_busifs cva5_clint_axi {s_axi}
