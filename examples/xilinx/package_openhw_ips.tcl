@@ -76,6 +76,21 @@ dict set openhw_ips cva5_clint_axi {
     examples/xilinx/axi/cva5_clint_axi.sv
 }
 
+# Upstream CVA5's own PLIC, vendored under a new name -- the platform
+# interrupt controller, aggregating device interrupts into the core's single
+# external interrupt. The register map is the standard RISC-V one, so software
+# written against QEMU's virt or a SiFive part works unchanged.
+#
+# Compile order matters here: the gateway and the comparison tree are
+# instantiated by cva5_plic, which cva5_plic_wrapper instantiates in turn.
+dict set openhw_ips cva5_plic_axi {
+    examples/xilinx/vendor/cva5_plic_gateway.sv
+    examples/xilinx/vendor/cva5_plic_cmptree.sv
+    examples/xilinx/vendor/cva5_plic.sv
+    examples/xilinx/vendor/cva5_plic_wrapper.sv
+    examples/xilinx/axi/cva5_plic_axi.sv
+}
+
 dict set openhw_ips cva5_uart {
     third_party/common_cells/src/fifo_v3.sv
     examples/xilinx/vendor/uart.sv
@@ -110,6 +125,7 @@ dict set openhw_busifs cva5_axi_xbar {s_axi_cpu s_axi_dbg m_axi_uart m_axi_clint
 dict set openhw_busifs cva5_axi_ram {s_axi}
 dict set openhw_busifs cva5_uart {s_axi}
 dict set openhw_busifs cva5_clint_axi {s_axi}
+dict set openhw_busifs cva5_plic_axi {s_axi}
 
 # Entries present for the testbenches' file lists but deliberately not
 # packaged. See the note above cva5_axi_ram.

@@ -241,11 +241,11 @@ over system bus access with zero errors, a deliberate unmapped read returning
 single step, register and memory access, asynchronous halt), and `make
 memtest` passing -- the only test that addresses all 128 KB.
 
-Run `./test_benches/axi/run_xbar.sh` and
+Run `./test_benches/axi/run_xbar.sh`, `bash test_benches/axi/run_plic.sh` and
 `sh test_benches/debug/run_sba_split.sh` before spending a synthesis run — 30
-checks across three port-width configurations, and 73. The first takes its file
-list from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so what is
-simulated is exactly what is synthesised.
+checks across three port-width configurations, 98, and 73. The first two take
+their file lists from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so
+what is simulated is exactly what is synthesised.
 
 ### Replacing the memory behind AXI: three attempts that failed
 
@@ -544,6 +544,63 @@ the CLINT is outside `cva5_top`, `ndmreset` simply never reaches it.
 registers writes the whole word. Software writes these a word at a time, which
 is what the layout is for.
 
+### PLIC
+
+Upstream CVA5's own PLIC — `apu/plic/`, Apache-2.0, by the same SFU authors as
+the CLINT — vendored under a new name and wrapped as `cva5_plic_axi`. Xilinx's
+equivalent is `axi_intc`, which this design never used; the CORE-V window at
+`0x0C00_0000` was reserved for this from the memory map onwards.
+
+**It is packaged but not yet in the block design.** Wiring it in needs an
+`external` input on `cva5_top`, which today hardwires `m_interrupt.external`
+to zero inside `cva5_wrapper`, and a fourth master port on the crossbar. Both
+are a separate change; this one is the IP and its testbench.
+
+The register map is the standard RISC-V one, so software written against QEMU's
+`virt` or a SiFive part works unchanged:
+
+| what | byte offset |
+|---|---|
+| source priority | `0x0000 + 4·source` |
+| pending | `0x1000` |
+| enables | `0x2000 + 0x80·context` |
+| threshold | `0x200000 + 0x1000·context` |
+| claim / complete | `0x200004 + 0x1000·context` |
+
+It decodes `addr[25:2]`, so the slave port is 26 bits and offers the 64 MB the
+window reserves — narrow as the device decodes, which is the rule for a slave.
+Source 0 does not exist and its priority and enable bit are hardwired low, as
+the spec requires. Each source can be level-sensitive (active high) or
+edge-sensitive (either edge); `cva5_uart`'s `irq` is `!rx_fifo_empty`, which is
+level and stays up until software drains the FIFO.
+
+Three things are worth knowing before writing a handler:
+
+- **A level source that is still asserted comes straight back when completed**,
+  and if it is the highest-priority pending source it wins the next claim as
+  well. A handler has to quiet the device *before* writing complete. The
+  testbench covers both orders, because getting this wrong looks like a stuck
+  interrupt rather than a bug in the driver.
+- **`eip` needs three things at once**: pending, enabled, and a priority
+  *strictly* above the target's threshold. Priority 0 therefore never
+  interrupts, whatever the threshold, and a threshold of 15 at `PRIORITY_W` 4
+  suppresses everything.
+- **Ties go to the lower source id**, which is what the comparison tree's
+  `left_priority > right_priority` produces and what the spec recommends.
+
+The vendored copies differ from `apu/plic` by exactly one thing — the module
+names — and `run_plic.sh` proves it on every run rather than trusting it: it
+renames upstream the same way and diffs from `module` down, so the licence
+header and the vendoring note are ignored but one changed line of logic is not.
+The rename itself is not cosmetic; `tools/compile_order` lists `apu/plic/*.sv`
+for the core simulation, and two different modules sharing a name in one
+compilation is the trap the CLINT already hit.
+
+One upstream wart found while reading it, left alone because nothing uses it:
+in `plic_cmptree`'s unregistered base case, `highest_valid` is assigned
+`chose_priority` rather than `chose_valid`. `plic.sv` leaves that output
+unconnected, so it cannot matter here — but it would to anyone who wired it up.
+
 ### The bus is AXI4-Lite end to end
 
 Two slave ports and two master ports, one `axi_lite_xbar`, no protocol
@@ -706,6 +763,7 @@ something.
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
 | CLINT | `sh test_benches/debug/run_clint.sh` | mtime tick rate, writes, mtimecmp→mtip at the boundary, msip |
+| PLIC | `bash test_benches/axi/run_plic.sh` | 98 checks: the register map, pending versus eip, claim/complete including an unserviced level source, edge latching, priority order and ties, threshold suppression. Also checks the vendored copies still match `apu/plic` |
 | CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
 | counter CSRs, in the core sim | `make -C examples/sw run-csrs` | `rdcycle`/`rdinstret`/`mcycle` readable and advancing, `rdtime` and `rdtimeh` taking an illegal-instruction trap. The only place both polarities of `INCLUDE_TIME_CSR` can be run: the sim takes upstream's `EXAMPLE_CONFIG`, so with the bit set the three trap checks are *expected* to fail |
 | counter CSRs, on hardware | `make -C examples/sw csrs` | the same checks plus the CLINT's `mtime` advancing over the bus. Prints on the serial console. Fails under QEMU on purpose |

@@ -118,6 +118,41 @@ Identical copies of a *module* across IPs are a different and milder matter —
 `fifo_v3` is in both `cva5_axi_xbar` and `cva5_uart` and synthesises without
 complaint.
 
+## A vendored copy of an `apu/` block has to be renamed
+
+`tools/compile_order` lists the `apu/` sources for the core simulation —
+`apu/clint/clint.sv`, `apu/plic/*.sv` — so a vendored copy that keeps its
+upstream module name puts two *different* modules with one name into the same
+compilation. That is unlike the harmless duplicate-module case above: these
+copies have diverged, so which one wins changes behaviour.
+
+Both vendored blocks are therefore `cva5_*`: `cva5_clint`, `cva5_clint_wrapper`,
+`cva5_plic`, `cva5_plic_gateway`, `cva5_plic_cmptree`, `cva5_plic_wrapper`.
+Rename the instantiations too, including a module's recursive instantiations of
+itself — `plic_cmptree` instantiates two of itself per level.
+
+Where the copy is a pure rename, make the build prove it instead of trusting
+it. `test_benches/axi/run_plic.sh` renames upstream with the same expression
+and diffs from `module` down, so the licence header and the vendoring note are
+ignored and a single changed line of logic is not:
+
+```sh
+RENAME='s/\bmodule (plic|plic_gateway|plic_cmptree|plic_wrapper)\b/module cva5_\1/; ...'
+diff <(sed -E "$RENAME" apu/plic/$f.sv | sed -n '/^module /,$p') \
+     <(sed -n '/^module /,$p' examples/xilinx/vendor/cva5_$f.sv)
+```
+
+Where it is not a pure rename — `cva5_clint` added a prescaler — say so in the
+file's header and list what changed, because nothing can check that for you.
+
+## Comment text that starts a line with "verilator" is a pragma
+
+A vendoring note in `cva5_plic.sv` wrapped so that a line began
+`// Verilator simulation, ...`, and the lint run failed with
+`Unknown verilator comment: 'verilator simulation, so ...'`. Verilator reads
+`// verilator <word>` as a directive wherever it appears, so a comment line
+must not begin with that word. Reword the sentence; do not add a suppression.
+
 ## Peripherals the debugger can reach must not reset on ndmreset
 
 `ndmreset` is the Debug Module's "reset the system but not me" request, and
