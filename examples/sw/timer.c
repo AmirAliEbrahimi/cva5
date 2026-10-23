@@ -102,15 +102,50 @@ int main(void) {
     puts("mtip set, mtime - mtimecmp at that point:");
     put_uint(t1 - t0);
 
-    /* --- and msip, which is a plain register the core sees as an interrupt */
+    /* --- and msip, which is a plain register the core sees as an interrupt.
+     *
+     * This has to poll rather than read mip once. A store to the CLINT is
+     * posted: it retires when the store queue accepts it, not when the write
+     * has crossed the crossbar. CSR instructions issue when they are the
+     * oldest instruction, which the store already is by then, so `csrr mip`
+     * can execute several cycles before the CLINT has the value -- and
+     * csr_unit.sv then needs one more cycle, since mip.MSIP is a registered
+     * copy of the pin (`msip <= m_interrupt.software`). The mtip check above
+     * never saw this because waiting for a timer is a loop by nature.
+     *
+     * When it does fail, which half failed matters, so the register is read
+     * back afterwards. By then the store is long gone from the queue, so the
+     * read is a real bus read rather than a forwarded one:
+     *
+     *   msip reads back 0  ->  the write never reached the CLINT: the bus
+     *   msip reads back 1  ->  the CLINT has it and mip never saw it: the
+     *                          msip net out of cva5_clint_axi, or the latch
+     */
     MSIP = 1u;
+
+    unsigned int spins = 0;
+    while (!(read_mip() & MIP_MSIP) && spins < 10000u)
+        spins++;
+
     if (!(read_mip() & MIP_MSIP)) {
-        puts("FAIL: msip did not reach mip");
+        puts("FAIL: msip did not reach mip; msip reads back:");
+        put_uint(MSIP);
         for (;;) ;
     }
+    if (spins) {
+        puts("msip reached mip after polling, iterations:");
+        put_uint(spins);
+    }
+
     MSIP = 0u;
+
+    spins = 0;
+    while ((read_mip() & MIP_MSIP) && spins < 10000u)
+        spins++;
+
     if (read_mip() & MIP_MSIP) {
-        puts("FAIL: msip did not clear");
+        puts("FAIL: msip did not clear; msip reads back:");
+        put_uint(MSIP);
         for (;;) ;
     }
 
