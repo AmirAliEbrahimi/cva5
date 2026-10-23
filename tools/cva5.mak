@@ -34,12 +34,24 @@ VERILATOR_LINT_IGNORE= -Wno-LITENDIAN -Wno-SYMRSVDWORD
 ##################################################################################
 
 #cva5_sim included as linter requires top-level to have no interfaces
+#
+#VERILATOR_LINT_IGNORE belongs here as much as on the sim build below. Without
+#it these targets fail on upstream code from Verilator 5.032 onwards:
+#
+#  %Warning-SYMRSVDWORD: core/types_and_interfaces/cva5_types.sv:118:15:
+#                        Symbol matches C++ keyword: 'double'
+#  %Error: Exiting due to 3 warning(s)
+#
+#-- three struct fields named `double`, which is a C++ keyword and so a problem
+#only for the identifiers Verilator would generate, not for the RTL. Older
+#Verilator (5.020) does not report it, which is why the omission went unnoticed.
 .PHONY: lint
-lint: 
+lint:
 	verilator -cc $(CVA5_HW_SRCS) \
 	$(VERILATOR_DIR)/cva5_sim.sv \
 	$(VERILATOR_DIR)/sim_stats.sv \
 	--top-module cva5_sim \
+	$(VERILATOR_LINT_IGNORE) \
 	--lint-only
 
 .PHONY: lint-full
@@ -48,6 +60,7 @@ lint-full:
 	$(VERILATOR_DIR)/cva5_sim.sv \
 	$(VERILATOR_DIR)/sim_stats.sv \
 	--top-module cva5_sim \
+	$(VERILATOR_LINT_IGNORE) \
 	--lint-only -Wall
 
 #Build CVA5 Sim
