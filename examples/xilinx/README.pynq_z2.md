@@ -25,8 +25,8 @@ all-Xilinx baseline of **WNS +0.107** at 100 MHz on the `xc7z020clg400-1`:
 
 | Xilinx IP | replacement | licence | result |
 |-----------|-------------|---------|--------|
-| `axi_register_slice` | `cva5_axi_cut` (pulp `axi_cut`) | Solderpad 0.51 | **+0.122** (baseline +0.107) |
-| `axi_interconnect`   | `cva5_axi_xbar` (pulp `axi_xbar`) | Solderpad 0.51 | same build |
+| `axi_register_slice` | *removed* — see below | — | — |
+| `axi_interconnect`   | `cva5_axi_xbar` (pulp `axi_lite_xbar`) | Solderpad 0.51 | same build |
 | `axi_uartlite`       | `cva5_uart` (lowRISC `uart`) | Apache-2.0 | see below |
 | `axi_bram_ctrl` + `blk_mem_gen` | *removed* — main memory is `tdp_ram` inside the core | — | — |
 | `clk_wiz` | *kept* — the MMCM is a hard block | — | — |
@@ -146,6 +146,16 @@ comparator's carry chain, into the store queue's attribute RAM *address*. The
 register slice on the cached path, itself load bearing at 0.321 ns, existed
 only to cut the burst path the instruction cache created. All of it is gone.
 
+That slice was `cva5_axi_cut`, the first Xilinx IP this fork replaced —
+`axi_register_slice` swapped for pulp's `axi_cut`, measured at WNS +0.122
+against the all-Xilinx baseline's +0.107. It outlived the path it was cutting
+by several patches, packaged and benched but absent from the block design, and
+is now deleted along with the vendored AXI4 crossbar sources that the Lite-only
+bus stopped using: `axi_cut`, `axi_xbar`, `axi_xbar_unmuxed`, `axi_demux`,
+`axi_demux_simple`, `axi_mux` and `axi_multicut`. All seven are regenerable
+from the submodule with `tools/vendor-pulp-sv.py` if a bursting master ever
+comes back.
+
 `make ram` builds the preload image the bitstream bakes in. It is a park loop
 that prints nothing, so a freshly programmed board is silent and the UART
 carries only what you load over JTAG.
@@ -231,11 +241,11 @@ over system bus access with zero errors, a deliberate unmapped read returning
 single step, register and memory access, asynchronous halt), and `make
 memtest` passing -- the only test that addresses all 128 KB.
 
-Run `./test_benches/axi/run_cut.sh`, `./test_benches/axi/run_xbar.sh` and
-`sh test_benches/debug/run_sba_split.sh` before spending a synthesis run — 216
-checks, 30 across three port-width configurations, and 73. The first two take
-their file lists from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so
-what is simulated is exactly what is synthesised.
+Run `./test_benches/axi/run_xbar.sh` and
+`sh test_benches/debug/run_sba_split.sh` before spending a synthesis run — 30
+checks across three port-width configurations, and 73. The first takes its file
+list from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so what is
+simulated is exactly what is synthesised.
 
 ### Replacing the memory behind AXI: three attempts that failed
 
@@ -295,11 +305,26 @@ inside 0.6 ns of each other:
 | + CVA6 memory map | fetch BRAM → branch predictor | 8.853 | **+0.291** |
 | + boot ROM | register file → divider CLZ | 9.586 | **+0.319** |
 | + lowRISC UART | load queue index → RAM enable | 8.832 | **+0.551** |
+| + CLINT as a peripheral | — | — | **—** (not built alone) |
+| + SBA split, Lite-only bus, `time` unimplemented | load queue index → RAM address | 8.665 | **+0.414** |
 
 Which one reports as WNS is decided by placement, so fixing any one of them
 promotes the next. A change that re-places a few hundred registers re-deals
 the whole hand — the JTAG row moved 0.2 ns on a constraint change that added
 no logic and touched nothing on the path that reported.
+
+The last row is three patches measured together — the debugger's RAM loop
+replaced by `cva5_sba_split`, the crossbar collapsed to AXI4-Lite throughout,
+and `mtime`'s 64 wires out of `cva5_top` — because each one changes
+`cva5_top`'s port list and so needs its own repackage. It landed with **zero
+failing endpoints, WHS +0.036**, and the worst path in the same structure as
+the row above it: the load queue's FIFO index into the main RAM's address and
+enable pins, 80% routing, 8 levels of logic. Fifteen of the twenty worst setup
+paths are that same source register going to different `local_mem` pins, and
+the twenty span 0.414 to 0.599 ns. Nothing from the rewritten bus appears
+anywhere in them — no crossbar, no split, no UART, no CLINT — which is what a
+bus carrying single-beat register traffic should look like. The whole Lite
+crossbar costs 605 LUTs and 278 flops; the CLINT 193 and 175.
 
 Two rows are worth reading together. The memory map changed no logic on the
 reported path — seven address constants, of which the live ones all reduce to
@@ -677,7 +702,6 @@ something.
 | check | command | covers |
 |-------|---------|--------|
 | crossbar | `test_benches/axi/run_xbar.sh` | 30 checks × 3 port-width configurations: decode, both masters to both slaves, cross-contamination, address truncation, window boundaries, DECERR |
-| register cut | `sh test_benches/axi/run_cut.sh` | 216 checks |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |

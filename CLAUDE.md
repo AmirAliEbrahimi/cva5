@@ -109,10 +109,14 @@ Also: a BD address segment's range cannot exceed the slave's address block, so
 
 `axi_pkg` is a SystemVerilog package, and two packaged IPs in one block design
 that both define it collide. That is why the AXI4-Lite peripheral fan-out lives
-*inside* `cva5_axi_xbar` rather than in an IP of its own, and why
-`cva5_axi_cut` spells its channel structs out by hand. Identical copies of a
-*module* across IPs are a different and milder matter — `fifo_v3` is in both
-`cva5_axi_xbar` and `cva5_uart` and synthesises without complaint.
+*inside* `cva5_axi_xbar` rather than in an IP of its own, and `cva5_axi_xbar`
+is the only IP here that carries the package at all. A second IP that wants
+pulp's AXI types has to spell its channel structs out by hand instead —
+`cva5_axi_cut` did, while it existed.
+
+Identical copies of a *module* across IPs are a different and milder matter —
+`fifo_v3` is in both `cva5_axi_xbar` and `cva5_uart` and synthesises without
+complaint.
 
 ## Peripherals the debugger can reach must not reset on ndmreset
 

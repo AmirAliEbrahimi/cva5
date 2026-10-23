@@ -31,16 +31,11 @@ set openhw_repo ./vivado/ip_repo_openhw
 # pulp-platform sources; see tools/vendor-pulp-sv.py for why they exist.
 #
 # Only one IP here may carry axi_pkg, or two packaged IPs in one block design
-# would both define it. The crossbar needs it (axi_xbar's configuration struct
-# is an axi_pkg type); cva5_axi_cut spells its channel structs out by hand
-# instead so that it does not.
-dict set openhw_ips cva5_axi_cut {
-    third_party/common_cells/src/spill_register_flushable.sv
-    third_party/common_cells/src/spill_register.sv
-    examples/xilinx/vendor/axi_cut.sv
-    examples/xilinx/axi/cva5_axi_cut.sv
-}
-
+# would both define it. The crossbar needs it (axi_lite_xbar's configuration
+# struct is an axi_pkg type), which is why it is the only IP here that does,
+# and why the AXI4-Lite fan-out lives inside it rather than in an IP of its
+# own. A second IP that wants pulp AXI types has to spell its channel structs
+# out by hand, the way cva5_axi_cut did before it was deleted.
 dict set openhw_ips cva5_axi_xbar {
     third_party/axi/src/axi_pkg.sv
     third_party/common_cells/src/cf_math_pkg.sv
@@ -111,7 +106,6 @@ dict set openhw_ips cva5_axi_ram {
 }
 
 # AXI interfaces Vivado infers from the port names, to be bound to the clock.
-dict set openhw_busifs cva5_axi_cut {s_axi m_axi}
 dict set openhw_busifs cva5_axi_xbar {s_axi_cpu s_axi_dbg m_axi_uart m_axi_clint}
 dict set openhw_busifs cva5_axi_ram {s_axi}
 dict set openhw_busifs cva5_uart {s_axi}

@@ -42,14 +42,7 @@ INCLUDE_DIRS = [
 # Sources to vendor, relative to the repository root. Files that need no
 # change are not listed; add them to the IP straight from third_party.
 SOURCES = [
-    "third_party/axi/src/axi_cut.sv",
-    "third_party/axi/src/axi_xbar.sv",
-    "third_party/axi/src/axi_xbar_unmuxed.sv",
-    "third_party/axi/src/axi_demux.sv",
-    "third_party/axi/src/axi_demux_simple.sv",
-    "third_party/axi/src/axi_mux.sv",
     "third_party/axi/src/axi_lite_to_axi.sv",
-    "third_party/axi/src/axi_multicut.sv",
     "third_party/axi/src/axi_lite_demux.sv",
     "third_party/axi/src/axi_lite_mux.sv",
     "third_party/axi/src/axi_lite_xbar.sv",
