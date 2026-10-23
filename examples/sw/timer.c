@@ -39,6 +39,27 @@ static inline unsigned int read_mip(void) {
 #define MIP_MTIP (1u << 7)
 #define MIP_MSIP (1u << 3)
 
+/* Every check below reads mip after storing to the CLINT, and that store is
+ * posted: it retires when the store queue accepts it, not when the write has
+ * crossed the crossbar. CSR instructions issue once they are the oldest
+ * instruction, which the store already is, so `csrr mip` can run several
+ * cycles ahead of the CLINT seeing the value -- and csr_unit.sv needs one
+ * cycle more, because mip's bits are a registered copy of the pins
+ * (csr_unit.sv:518-520). So nothing here reads mip once and concludes; it
+ * polls until mip agrees or a bound runs out.
+ *
+ * Returns the number of polls it took, or -1 if the bound ran out. The count
+ * is worth printing: it is the write latency through the crossbar, and it is
+ * what made the single-read version of this test pass or fail by luck. */
+#define MIP_POLL_LIMIT 100000u
+
+static int mip_wait(unsigned int mask, int want_set) {
+    for (unsigned int i = 0; i < MIP_POLL_LIMIT; i++)
+        if (!!(read_mip() & mask) == !!want_set)
+            return (int)i;
+    return -1;
+}
+
 /* 64-bit mtime read. mtime is two 32-bit registers, so the low half can wrap
  * between the two reads; retry until the high half is stable. */
 static unsigned long long mtime_read(void) {
@@ -66,6 +87,24 @@ int main(void) {
 
     puts("CLINT check");
 
+    /* --- a known state first.
+     *
+     * The CLINT is reset by rstn alone and never by ndmreset, deliberately: a
+     * peripheral the debugger can reach must not be held in reset while the
+     * debugger talks to the system bus. The consequence for software is that
+     * `make timer` does not give you a fresh CLINT. The previous run's
+     * mtimecmp is still armed, by now in the past, so mtip is already set when
+     * this program starts, and its msip may still be set too. Disarm both and
+     * wait for mip to follow before anything else is measured. */
+    MTIMECMP_HI = 0xFFFFFFFFu;
+    MTIMECMP_LO = 0xFFFFFFFFu;
+    MSIP = 0u;
+    if (mip_wait(MIP_MTIP | MIP_MSIP, 0) < 0) {
+        puts("FAIL: mtip/msip still set after disarming the CLINT; mip:");
+        put_uint(read_mip());
+        for (;;) ;
+    }
+
     /* --- is it counting at all? */
     t0 = mtime_read();
     for (unsigned int i = 0; i < 100000u; i++) spin++;
@@ -79,14 +118,14 @@ int main(void) {
     puts("elapsed us for 100000 iterations:");
     put_uint(t1 - t0);
 
-    /* --- does mtimecmp set mtip? Arm it one millisecond out. */
-    MTIMECMP_HI = 0xFFFFFFFFu;          /* park it high while writing the low half */
-    MTIMECMP_LO = 0xFFFFFFFFu;
-    if (read_mip() & MIP_MTIP) {
-        puts("FAIL: mtip set with mtimecmp at its maximum");
-        for (;;) ;
-    }
-
+    /* --- does mtimecmp set mtip? Arm it one millisecond out.
+     *
+     * mtimecmp is disarmed and mtip is clear, both established above. Writing
+     * the high half first keeps it that way throughout: every state the two
+     * stores can be observed in -- 0xFFFFFFFF_FFFFFFFF, then
+     * 0x00000000_FFFFFFFF, then the real value -- is still in the future, so
+     * mtip cannot fire early. That is why the read below can be a single read
+     * where the others cannot. */
     t0 = mtime_read() + 1000u;          /* 1000 ticks = 1 ms */
     MTIMECMP_HI = (unsigned int)(t0 >> 32);
     MTIMECMP_LO = (unsigned int)t0;
@@ -96,58 +135,47 @@ int main(void) {
         for (;;) ;
     }
 
-    while (!(read_mip() & MIP_MTIP)) ;
+    if (mip_wait(MIP_MTIP, 1) < 0) {
+        puts("FAIL: mtip never set after mtimecmp passed; mip:");
+        put_uint(read_mip());
+        for (;;) ;
+    }
     t1 = mtime_read();
 
     puts("mtip set, mtime - mtimecmp at that point:");
     put_uint(t1 - t0);
 
-    /* --- and msip, which is a plain register the core sees as an interrupt.
+    /* --- and msip, a plain register the core sees as an interrupt.
      *
-     * This has to poll rather than read mip once. A store to the CLINT is
-     * posted: it retires when the store queue accepts it, not when the write
-     * has crossed the crossbar. CSR instructions issue when they are the
-     * oldest instruction, which the store already is by then, so `csrr mip`
-     * can execute several cycles before the CLINT has the value -- and
-     * csr_unit.sv then needs one more cycle, since mip.MSIP is a registered
-     * copy of the pin (`msip <= m_interrupt.software`). The mtip check above
-     * never saw this because waiting for a timer is a loop by nature.
-     *
-     * When it does fail, which half failed matters, so the register is read
-     * back afterwards. By then the store is long gone from the queue, so the
-     * read is a real bus read rather than a forwarded one:
+     * On failure, which half failed matters, so the register is read back. By
+     * then the store is long gone from the store queue, so that read is a real
+     * bus read rather than one forwarded out of the queue:
      *
      *   msip reads back 0  ->  the write never reached the CLINT: the bus
      *   msip reads back 1  ->  the CLINT has it and mip never saw it: the
      *                          msip net out of cva5_clint_axi, or the latch
      */
     MSIP = 1u;
-
-    unsigned int spins = 0;
-    while (!(read_mip() & MIP_MSIP) && spins < 10000u)
-        spins++;
-
-    if (!(read_mip() & MIP_MSIP)) {
+    int polls = mip_wait(MIP_MSIP, 1);
+    if (polls < 0) {
         puts("FAIL: msip did not reach mip; msip reads back:");
         put_uint(MSIP);
         for (;;) ;
     }
-    if (spins) {
-        puts("msip reached mip after polling, iterations:");
-        put_uint(spins);
-    }
+    puts("msip reached mip, polls:");
+    put_uint((unsigned int)polls);
 
     MSIP = 0u;
-
-    spins = 0;
-    while ((read_mip() & MIP_MSIP) && spins < 10000u)
-        spins++;
-
-    if (read_mip() & MIP_MSIP) {
+    if (mip_wait(MIP_MSIP, 0) < 0) {
         puts("FAIL: msip did not clear; msip reads back:");
         put_uint(MSIP);
         for (;;) ;
     }
+
+    /* Leave the CLINT disarmed, so the next run starts clean even without the
+     * preamble above -- nothing else resets it. */
+    MTIMECMP_HI = 0xFFFFFFFFu;
+    MTIMECMP_LO = 0xFFFFFFFFu;
 
     puts("PASS clint");
     for (;;) ;
