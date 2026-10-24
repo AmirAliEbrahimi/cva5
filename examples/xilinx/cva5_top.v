@@ -65,6 +65,11 @@ module cva5_top
         input mtip,
         input msip,
 
+        //From cva5_plic_axi: the external interrupt. Three interrupt inputs in
+        //total now, which is the whole of what RISC-V gives a hart -- however
+        //many peripherals the bus grows, they arrive through this one.
+        input external,
+
         //Debug System Bus Access, AXI4-Lite master
         output [31:0] m_axi_dbg_awaddr,
         output [2:0] m_axi_dbg_awprot,
@@ -111,6 +116,7 @@ module cva5_top
         .m_axi_bresp(m_axi_bresp),
         .mtip(mtip),
         .msip(msip),
+        .external(external),
         .m_axi_dbg_awaddr(m_axi_dbg_awaddr),
         .m_axi_dbg_awprot(m_axi_dbg_awprot),
         .m_axi_dbg_awvalid(m_axi_dbg_awvalid),

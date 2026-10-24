@@ -70,13 +70,16 @@ module tb_plic #(
     logic [1:0]  bresp, rresp;
 
     logic [NUM_SOURCES-1:0] irq_srcs = '0;
-    logic [NUM_SOURCES-1:0] edge_sensitive = '0;
     logic                   eip;
 
+    //Source 3 is wired as edge sensitive, every other source as level --
+    //sensitivity is a build-time parameter, so the bench instantiates the
+    //configuration it tests rather than driving a port.
     cva5_plic_axi #(
         .NUM_SOURCES (NUM_SOURCES),
         .PRIORITY_W (PRIORITY_W),
         .REG_STAGE (1),
+        .EDGE_SENSITIVE (32'h4),   //bit 2 is source 3
         .ADDR_WIDTH (26)
     ) dut (
         .clk (clk), .rstn (rstn),
@@ -89,7 +92,7 @@ module tb_plic #(
         .s_axi_arvalid (arvalid), .s_axi_arready (arready),
         .s_axi_rdata (rdata), .s_axi_rresp (rresp),
         .s_axi_rvalid (rvalid), .s_axi_rready (rready),
-        .irq_srcs (irq_srcs), .edge_sensitive (edge_sensitive),
+        .irq_srcs (irq_srcs),
         .eip (eip)
     );
 
@@ -222,26 +225,26 @@ module tb_plic #(
 
         //---- an edge source latches a pulse
         $display("-- edge source");
-        edge_sensitive[1] = 1'b1;        //source 2
-        reg_write(PRIO(2), 32'd3);
-        reg_write(ENABLE, 32'd4);
+        reg_write(PRIO(3), 32'd3);       //source 3 is the edge-sensitive one
+        reg_write(ENABLE, 32'd8);
         settle();
 
-        irq_srcs[1] = 1'b1;
+        irq_srcs[2] = 1'b1;
         @(negedge clk);
-        irq_srcs[1] = 1'b0;              //one cycle, then gone
+        irq_srcs[2] = 1'b0;              //one cycle, then gone
         settle();
 
         reg_read(PENDING, v);
-        expect_eq("the pulse is still pending", v, 32'd4);
+        expect_eq("the pulse is still pending", v, 32'd8);
         expect_eq("and eip is up", 32'(eip), 32'd1);
         reg_read(CLAIM, v);
-        expect_eq("claim returns source 2", v, 32'd2);
-        reg_write(CLAIM, 32'd2);
+        expect_eq("claim returns source 3", v, 32'd3);
+        reg_write(CLAIM, 32'd3);
         settle();
         expect_eq("a completed edge source does not come back",
                   32'(eip), 32'd0);
-        edge_sensitive[1] = 1'b0;
+        reg_read(PENDING, v);
+        expect_eq("and nothing is pending", v, 32'd0);
 
         //---- priority order, and ties
         //

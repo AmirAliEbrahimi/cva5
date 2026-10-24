@@ -43,22 +43,22 @@ echo "== lint (our wrapper is held to -Wall) =="
 verilator --lint-only -Wall $THIRD_PARTY_NOISE --top-module cva5_axi_xbar $DESIGN
 
 # Three configurations: the widths the block design deploys, full 32-bit
-# ports, and a narrow pair -- so the M_*_ADDR_WIDTH truncation path does not
-# rot untested at either extreme. The block design itself keeps both master
+# ports, and a narrow set -- so the M_*_ADDR_WIDTH truncation path does not
+# rot untested at either extreme. The block design itself keeps every master
 # ports at 32 (see CLAUDE.md); these parameters exist so that the truncation
 # the crossbar performs is exercised, not because the hardware narrows them.
 rm -rf "$BUILD"
 status=0
-for cfg in "12 16" "32 32" "4 6"; do
+for cfg in "12 16 26" "32 32 32" "4 6 8"; do
     set -- $cfg
-    uart_aw=$1; clint_aw=$2
-    dir="$BUILD/aw${uart_aw}_${clint_aw}"
-    echo "== build (UART_AW=$uart_aw CLINT_AW=$clint_aw) =="
+    uart_aw=$1; clint_aw=$2; plic_aw=$3
+    dir="$BUILD/aw${uart_aw}_${clint_aw}_${plic_aw}"
+    echo "== build (UART_AW=$uart_aw CLINT_AW=$clint_aw PLIC_AW=$plic_aw) =="
     mkdir -p "$dir"
     verilator --binary -j 0 --timing \
         $THIRD_PARTY_NOISE -Wno-BLKSEQ -Wno-INITIALDLY \
         --top-module tb_axi_xbar \
-        -GUART_AW=$uart_aw -GCLINT_AW=$clint_aw \
+        -GUART_AW=$uart_aw -GCLINT_AW=$clint_aw -GPLIC_AW=$plic_aw \
         -Mdir "$dir" -o tb_axi_xbar \
         $DESIGN test_benches/axi/tb_axi_xbar.sv
     echo "== run =="

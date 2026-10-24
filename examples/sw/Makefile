@@ -51,6 +51,7 @@ SRCS      := crt0.S trap.S main.c puts.c
 MEMTEST_SRCS := crt0.S trap.S memtest.c puts.c
 TIMER_SRCS := crt0.S trap.S timer.c puts.c
 CSRS_SRCS := crt0.S trap.S csrs.c puts.c
+PLIC_SRCS := crt0.S trap.S plic.c puts.c
 LDSCRIPT  := link.ld
 CFLAGS    := -march=$(ARCH) -mabi=$(ABI) -Os -g -ffreestanding -nostdlib -I. -Wl,--build-id=none
 
@@ -84,7 +85,7 @@ ELF2TCL     := $(CVA5_DIR)/tools/elf-to-load-tcl.py
 OPENOCD     ?= openocd
 OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 
-.PHONY: all program ram app load memtest timer csrs run-csrs sim run clean lint lint-full clean-cva5-sim
+.PHONY: all program ram app load memtest timer csrs run-csrs plic sim run clean lint lint-full clean-cva5-sim
 all: program
 program: program.hex
 
@@ -162,6 +163,19 @@ csrs: csrs.tcl
 	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
 	           -f csrs.tcl -c "init; load_program; shutdown"
 
+# The PLIC on hardware. Interactive: it waits for a keypress on the serial
+# console, because the UART's receive interrupt is the only source wired and
+# nothing in software can raise it.
+plic.elf: $(PLIC_SRCS) $(APP_LDSCRIPT)
+	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(PLIC_SRCS) -lgcc -o $@
+
+plic.tcl: plic.elf
+	python3 $(ELF2TCL) $(CROSS) $(APP_BASE) $< $@
+
+plic: plic.tcl
+	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
+	           -f plic.tcl -c "init; load_program; shutdown"
+
 # The same test in the Verilator core sim, which is the only place the core's
 # CSR behaviour can be checked without a bitstream -- and the only place both
 # polarities of INCLUDE_TIME_CSR can be run, since the sim takes upstream's
@@ -196,6 +210,7 @@ clean:
 	      memtest.elf memtest.tcl \
 	      timer.elf timer.tcl \
 	      csrs.elf csrs.tcl csrs_sim.elf csrs.hex csrs.sim csrs_log.txt csrs_sig.txt csrs_trace.fst \
+	      plic.elf plic.tcl \
 	      main.elf.rawbinary main.elf.dissasembled \
 	      idle.elf.rawbinary idle.elf.dissasembled \
 		  trace.fst.hier \

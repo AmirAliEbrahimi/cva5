@@ -45,14 +45,18 @@ for it.
 | Debug Module | `0x0000_0000` | 4 KB | present |
 | boot ROM | `0x0001_0000` | 64 KB | present (2 instructions; reset vector) |
 | CLINT | `0x0200_0000` | 768 KB | present (64 KB decoded) |
-| PLIC | `0x0C00_0000` | 64 MB | reserved |
+| PLIC | `0x0C00_0000` | 64 MB | present (one source: the UART) |
 | UART | `0x1000_0000` | 4 KB | present |
 | timer | `0x1800_0000` | 4 KB | reserved |
 | SPI | `0x2000_0000` | 8 MB | reserved |
 | main RAM | `0x8000_0000` | 128 KB | present |
 
 "Reserved" means the window is spoken for and nothing is there yet, so adding
-the device later moves nothing. The sizes are CVA6's even where ours will be
+the device later moves nothing. One consequence of taking CVA6's numbers: the
+PLIC's 64 MB window ends exactly where the UART's begins, `0x0C00_0000 +
+0x0400_0000 == 0x1000_0000`, so there is no gap between them and the word below
+the UART is a PLIC address. `run_xbar.sh` asserts that abutment from both
+sides, which is where a window inserted between them would show up. The sizes are CVA6's even where ours will be
 smaller: the window is reserved, not the device.
 
 The core's peripheral bus covers `0x0000_0000`–`0x7FFF_FFFF` — everything that
@@ -242,8 +246,8 @@ single step, register and memory access, asynchronous halt), and `make
 memtest` passing -- the only test that addresses all 128 KB.
 
 Run `./test_benches/axi/run_xbar.sh`, `bash test_benches/axi/run_plic.sh` and
-`sh test_benches/debug/run_sba_split.sh` before spending a synthesis run — 30
-checks across three port-width configurations, 98, and 73. The first two take
+`sh test_benches/debug/run_sba_split.sh` before spending a synthesis run — 47
+checks across three port-width configurations, 100, and 73. The first two take
 their file lists from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so
 what is simulated is exactly what is synthesised.
 
@@ -551,10 +555,18 @@ the CLINT — vendored under a new name and wrapped as `cva5_plic_axi`. Xilinx's
 equivalent is `axi_intc`, which this design never used; the CORE-V window at
 `0x0C00_0000` was reserved for this from the memory map onwards.
 
-**It is packaged but not yet in the block design.** Wiring it in needs an
-`external` input on `cva5_top`, which today hardwires `m_interrupt.external`
-to zero inside `cva5_wrapper`, and a fourth master port on the crossbar. Both
-are a separate change; this one is the IP and its testbench.
+It is in the block design, on the crossbar's third master port, with
+`cva5_uart_0/irq` as source 1 and `eip` driving `cva5_top`'s new `external`
+input. That makes three interrupt inputs on the core — `msip`, `mtip`,
+`external` — which is the whole of what RISC-V gives a hart however many
+peripherals the bus grows.
+
+`NUM_SOURCES` is 1 in the block design because the UART is the only device with
+an interrupt today. Adding the SPI means `NUM_SOURCES` 2, one more net, and a
+second bit in `EDGE_SENSITIVE` if it needs one. Sensitivity is a **parameter**
+rather than a port precisely so unused sources need nothing tied to them — on a
+block design that would otherwise mean a Xilinx constant block, which is the
+one thing this exercise is trying to avoid.
 
 The register map is the standard RISC-V one, so software written against QEMU's
 `virt` or a SiFive part works unchanged:
@@ -612,6 +624,7 @@ cva5_top/m_axi_dbg  -> s_axi_dbg    the debugger, for anything outside the RAM
 
 m_axi_uart  -> cva5_uart/s_axi      0x1000_0000
 m_axi_clint -> cva5_clint_0/s_axi   0x0200_0000
+m_axi_plic  -> cva5_plic_0/s_axi    0x0C00_0000
 ```
 
 It got there in two steps. First the peripheral window was one AXI4 master port
@@ -758,7 +771,7 @@ something.
 
 | check | command | covers |
 |-------|---------|--------|
-| crossbar | `test_benches/axi/run_xbar.sh` | 30 checks × 3 port-width configurations: decode, both masters to both slaves, cross-contamination, address truncation, window boundaries, DECERR |
+| crossbar | `test_benches/axi/run_xbar.sh` | 47 checks × 3 port-width configurations: decode to all three slaves, both masters to each, cross-contamination, address truncation per master port, window boundaries including the PLIC/UART abutment, DECERR |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
@@ -766,6 +779,7 @@ something.
 | PLIC | `bash test_benches/axi/run_plic.sh` | 98 checks: the register map, pending versus eip, claim/complete including an unserviced level source, edge latching, priority order and ties, threshold suppression. Also checks the vendored copies still match `apu/plic` |
 | CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
 | counter CSRs, in the core sim | `make -C examples/sw run-csrs` | `rdcycle`/`rdinstret`/`mcycle` readable and advancing, `rdtime` and `rdtimeh` taking an illegal-instruction trap. The only place both polarities of `INCLUDE_TIME_CSR` can be run: the sim takes upstream's `EXAMPLE_CONFIG`, so with the bit set the three trap checks are *expected* to fail |
+| PLIC on hardware | `make -C examples/sw plic` | the register file over the bus, priority 0 and the threshold suppressing, then a **keypress on the console** reaching `mip.MEIP`, claim naming the UART, and complete leaving it quiet. Interactive, because the UART's receive interrupt is the only source wired and software cannot raise it |
 | counter CSRs, on hardware | `make -C examples/sw csrs` | the same checks plus the CLINT's `mtime` advancing over the bus. Prints on the serial console. Fails under QEMU on purpose |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |
 | debugger bus split | `sh test_benches/debug/run_sba_split.sh` | 73 checks: `dm_sba_axil` → `cva5_sba_split` → the real RAM port and `tdp_ram` on one side, a peripheral on the other. Routing, window edges, error propagation, byte strobes, and collisions with the core's port |

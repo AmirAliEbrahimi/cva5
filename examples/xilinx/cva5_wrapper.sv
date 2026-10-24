@@ -75,6 +75,12 @@ module cva5_wrapper
         input logic mtip,
         input logic msip,
 
+        //From cva5_plic_axi: the external interrupt, mip.MEIP. One wire for
+        //every device on the bus, which is the PLIC's whole purpose -- it
+        //decides which device interrupt is the highest priority one pending,
+        //and software asks it which by claiming.
+        input logic external,
+
         //Debug System Bus Access, AXI4-Lite master
         output logic [31:0] m_axi_dbg_awaddr,
         output logic [2:0] m_axi_dbg_awprot,
@@ -391,12 +397,10 @@ module cva5_wrapper
     assign mtime = '0;
 
     assign s_interrupt = '{default: '0};
-    //external stays low until the PLIC arrives; the UART's irq is what will
-    //feed it.
     assign m_interrupt = '{
         software : msip,
         timer    : mtip,
-        external : 1'b0
+        external : external
     };
 
     ////////////////////////////////////////////////////

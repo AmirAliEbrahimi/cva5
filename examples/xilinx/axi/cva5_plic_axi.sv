@@ -38,6 +38,15 @@ module cva5_plic_axi #(
     //wrapper corrects it down if it would fall off the end of the tree.
     parameter int unsigned REG_STAGE = 1,
 
+    //Per source, from bit 0 = source 1: 1 for edge sensitive (either edge), 0
+    //for level sensitive and active high. A parameter rather than a port
+    //because a block design has nothing to tie an unused input vector to
+    //without a Xilinx constant block, and sensitivity is a property of the
+    //device wired in, fixed at build time -- cva5_uart's irq is
+    //!rx_fifo_empty, which is level and stays up until software drains the
+    //FIFO.
+    parameter logic [31:0] EDGE_SENSITIVE = 32'h0,
+
     //Width of the slave's address bus, and so the size of the address block
     //this IP offers the block design. The PLIC decodes addr[25:2], so 26 bits
     //is exactly what it answers to: 64 MB, which is also the window
@@ -79,11 +88,6 @@ module cva5_plic_axi #(
     //declared [NUM_SOURCES:1]. Unused bits are tied low.
     input  logic [NUM_SOURCES-1:0] irq_srcs,
 
-    //Per source: 1 for edge sensitive (either edge), 0 for level sensitive
-    //and active high. A level-sensitive source must stay asserted until
-    //software has dealt with it -- cva5_uart's irq is !rx_fifo_empty, which
-    //behaves exactly that way.
-    input  logic [NUM_SOURCES-1:0] edge_sensitive,
 
     //To the core: the external interrupt, mip.MEIP.
     output logic        eip
@@ -112,7 +116,7 @@ module cva5_plic_axi #(
         .rst (rst),
 
         .irq_srcs (irq_srcs),
-        .edge_sensitive (edge_sensitive),
+        .edge_sensitive (EDGE_SENSITIVE[NUM_SOURCES-1:0]),
         .eip (eip),
 
         //Wishbone side unused; AXI = 1 selects the AXI-Lite port

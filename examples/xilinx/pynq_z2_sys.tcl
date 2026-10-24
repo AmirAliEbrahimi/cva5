@@ -92,6 +92,30 @@ connect_bd_net $sys_rstn [get_bd_pins cva5_clint_0/rstn]
 connect_bd_net [get_bd_pins cva5_clint_0/mtip]  [get_bd_pins cva5_top_0/mtip]
 connect_bd_net [get_bd_pins cva5_clint_0/msip]  [get_bd_pins cva5_top_0/msip]
 
+# ---- PLIC -------------------------------------------------------------------
+# The platform interrupt controller: every device interrupt on the bus arrives
+# here and leaves as one wire, eip, which is the core's external interrupt.
+# Together with the CLINT's two that makes three interrupt inputs on cva5_top,
+# and three is all RISC-V gives a hart however many peripherals the bus grows.
+#
+# NUM_SOURCES is 1 because the UART is the only device with an interrupt today.
+# Adding the SPI means NUM_SOURCES 2, one more net here, and a second bit in
+# EDGE_SENSITIVE if it needs one -- sensitivity is a parameter rather than a
+# port so that unused sources need nothing tied to them, which on a block
+# design would otherwise mean a Xilinx constant block.
+#
+# Reset from rstn alone, never ndmreset, for the same reason as the CLINT: the
+# debugger can reach it over the system bus.
+create_bd_cell -type ip -vlnv xilinx.com:user:cva5_plic_axi:1.0 cva5_plic_0
+set_property -dict [list CONFIG.NUM_SOURCES {1}] [get_bd_cells cva5_plic_0]
+connect_bd_net $sys_clk  [get_bd_pins cva5_plic_0/clk]
+connect_bd_net $sys_rstn [get_bd_pins cva5_plic_0/rstn]
+
+# Source 1: the UART's receive interrupt, which is !rx_fifo_empty -- level
+# sensitive, and up until software drains the FIFO.
+connect_bd_net [get_bd_pins cva5_uart_0/irq] [get_bd_pins cva5_plic_0/irq_srcs]
+connect_bd_net [get_bd_pins cva5_plic_0/eip] [get_bd_pins cva5_top_0/external]
+
 # ---- Main RAM ---------------------------------------------------------------
 # There is no memory IP here any more. Main memory is a 128 KB true dual-port
 # block RAM inside cva5_top, inferred from RTL -- no axi_bram_ctrl, no
@@ -145,6 +169,7 @@ connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg] [get_bd_intf_pins ax
 
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_uart]  [get_bd_intf_pins cva5_uart_0/s_axi]
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_clint] [get_bd_intf_pins cva5_clint_0/s_axi]
+connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_plic]  [get_bd_intf_pins cva5_plic_0/s_axi]
 
 # ---- Address map ----------------------------------------------------------
 # Every link here is point to point, so nothing in the block design decodes
@@ -180,6 +205,17 @@ set clint_seg [cva5_seg {axi_xbar_0/m_axi_clint/SEG_cva5_clint_0_reg0} \
 if {$clint_seg eq ""} { error "the crossbar's CLINT port has no address segment" }
 set_property offset 0x02000000 $clint_seg
 set_property range  64K        $clint_seg
+
+# 64M, matching cva5_plic_axi's 26-bit slave address port and the window
+# examples/sw/soc.h reserves. The standard PLIC map needs up to 0x200004, so
+# anything from 4M up would do; 64M is what the device decodes and what CVA6
+# reserves, and a segment cannot exceed the slave's block anyway.
+set plic_seg [cva5_seg {axi_xbar_0/m_axi_plic/SEG_cva5_plic_0_reg0} \
+                       {axi_xbar_0/m_axi_plic/SEG_cva5_plic_0_Reg} \
+                       {axi_xbar_0/m_axi_plic/SEG_cva5_plic_0_s_axi}]
+if {$plic_seg eq ""} { error "the crossbar's PLIC port has no address segment" }
+set_property offset 0x0C000000 $plic_seg
+set_property range  64M        $plic_seg
 
 # ---- Finalise -------------------------------------------------------------
 regenerate_bd_layout

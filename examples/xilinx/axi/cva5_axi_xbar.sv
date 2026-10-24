@@ -5,7 +5,8 @@
  *   S1  s_axi_dbg    debugger (SBA)         AXI4-Lite
  *
  *   M0  m_axi_uart   UART at PERIPH_BASE    AXI4-Lite
- *   M1  m_axi_clint  CLINT at CLINT_BASE    AXI4-Lite
+ *   M1  m_axi_clint  CLINT at CLINT_BASE     AXI4-Lite
+ *   M2  m_axi_plic   PLIC at PLIC_BASE       AXI4-Lite
  *
  * Every port is AXI4-Lite, which is the whole of what this SoC's bus carries.
  * It was not always: the crossbar used to be full AXI4 with a RAM master port,
@@ -18,7 +19,7 @@
  *
  * What that removed, all of it dead weight for Lite traffic: axi_xbar,
  * axi_demux, axi_demux_simple, axi_mux, axi_multicut, axi_lite_to_axi,
- * axi_id_prepend, axi_err_slv, and ZipCPU's axi2axilite with its sfifo,
+ * axi_id_prepend, and ZipCPU's axi2axilite with its sfifo,
  * skidbuffer and axi_addr. The decode is one axi_lite_xbar.
  *
  * The address map is a parameter here rather than something the Vivado address
@@ -26,8 +27,9 @@
  * decode. An address no rule claims gets a DECERR from the Lite crossbar's own
  * error slave, rather than landing somewhere unexpected or hanging.
  *
- * Adding a peripheral -- the timer at 0x1800_0000, the SPI at 0x2000_0000, the
- * PLIC at 0x0C00_0000 -- is a rule, a port and a line in the block design.
+ * Adding a peripheral -- the timer at 0x1800_0000, the SPI at 0x2000_0000 --
+ * is a rule, a port and a line in the block design. The PLIC was the first one
+ * added that way, which is the whole of what it cost here.
  *
  * Copyright © 2024 Chris Keilbart
  * SPDX-License-Identifier: Apache-2.0
@@ -40,6 +42,8 @@ module cva5_axi_xbar #(
     parameter logic [31:0] PERIPH_SIZE = 32'h0001_0000,  // 64 KB, the UART
     parameter logic [31:0] CLINT_BASE  = 32'h0200_0000,
     parameter logic [31:0] CLINT_SIZE  = 32'h0001_0000,  // 64 KB
+    parameter logic [31:0] PLIC_BASE   = 32'h0C00_0000,
+    parameter logic [31:0] PLIC_SIZE   = 32'h0400_0000,  // 64 MB, CVA6's window
 
     // Width of each master port's address bus.
     //
@@ -58,6 +62,7 @@ module cva5_axi_xbar #(
     // because the block design should narrow them.
     parameter int unsigned M_UART_ADDR_WIDTH  = 32,
     parameter int unsigned M_CLINT_ADDR_WIDTH = 32,
+    parameter int unsigned M_PLIC_ADDR_WIDTH  = 32,
 
     // Outstanding transactions allowed per port. Two: every master here issues
     // single register accesses and none of them pipeline.
@@ -156,11 +161,34 @@ module cva5_axi_xbar #(
         input logic [31:0] m_axi_clint_rdata,
         input logic [1:0] m_axi_clint_rresp,
         input logic m_axi_clint_rvalid,
-        output logic m_axi_clint_rready
+        output logic m_axi_clint_rready,
+
+        //----------------------------------------------------------------
+        // M2: PLIC (AXI4-Lite)
+        //----------------------------------------------------------------
+        output logic [M_PLIC_ADDR_WIDTH-1:0] m_axi_plic_awaddr,
+        output logic [2:0] m_axi_plic_awprot,
+        output logic m_axi_plic_awvalid,
+        input logic m_axi_plic_awready,
+        output logic [31:0] m_axi_plic_wdata,
+        output logic [3:0] m_axi_plic_wstrb,
+        output logic m_axi_plic_wvalid,
+        input logic m_axi_plic_wready,
+        input logic [1:0] m_axi_plic_bresp,
+        input logic m_axi_plic_bvalid,
+        output logic m_axi_plic_bready,
+        output logic [M_PLIC_ADDR_WIDTH-1:0] m_axi_plic_araddr,
+        output logic [2:0] m_axi_plic_arprot,
+        output logic m_axi_plic_arvalid,
+        input logic m_axi_plic_arready,
+        input logic [31:0] m_axi_plic_rdata,
+        input logic [1:0] m_axi_plic_rresp,
+        input logic m_axi_plic_rvalid,
+        output logic m_axi_plic_rready
     );
 
     localparam int unsigned NUM_SLV = 32'd2;
-    localparam int unsigned NUM_MST = 32'd2;
+    localparam int unsigned NUM_MST = 32'd3;
 
     //------------------------------------------------------------------
     // AXI4-Lite channel and request/response types. Field order and names
@@ -258,6 +286,9 @@ module cva5_axi_xbar #(
         addr_map[1] = '{idx: 32'd1,
                         start_addr: CLINT_BASE,
                         end_addr:   CLINT_BASE + CLINT_SIZE};
+        addr_map[2] = '{idx: 32'd2,
+                        start_addr: PLIC_BASE,
+                        end_addr:   PLIC_BASE + PLIC_SIZE};
     end
 
     //------------------------------------------------------------------
@@ -392,6 +423,33 @@ module cva5_axi_xbar #(
         mst_resp[1].r.data   = m_axi_clint_rdata;
         mst_resp[1].r.resp   = m_axi_clint_rresp;
         mst_resp[1].r_valid  = m_axi_clint_rvalid;
+    end
+
+    //------------------------------------------------------------------
+    // M2: PLIC
+    //------------------------------------------------------------------
+    assign m_axi_plic_awaddr  = mst_req[2].aw.addr[M_PLIC_ADDR_WIDTH-1:0];
+    assign m_axi_plic_awprot  = mst_req[2].aw.prot;
+    assign m_axi_plic_awvalid = mst_req[2].aw_valid;
+    assign m_axi_plic_wdata   = mst_req[2].w.data;
+    assign m_axi_plic_wstrb   = mst_req[2].w.strb;
+    assign m_axi_plic_wvalid  = mst_req[2].w_valid;
+    assign m_axi_plic_bready  = mst_req[2].b_ready;
+    assign m_axi_plic_araddr  = mst_req[2].ar.addr[M_PLIC_ADDR_WIDTH-1:0];
+    assign m_axi_plic_arprot  = mst_req[2].ar.prot;
+    assign m_axi_plic_arvalid = mst_req[2].ar_valid;
+    assign m_axi_plic_rready  = mst_req[2].r_ready;
+
+    always_comb begin
+        mst_resp[2] = '0;
+        mst_resp[2].aw_ready = m_axi_plic_awready;
+        mst_resp[2].w_ready  = m_axi_plic_wready;
+        mst_resp[2].b.resp   = m_axi_plic_bresp;
+        mst_resp[2].b_valid  = m_axi_plic_bvalid;
+        mst_resp[2].ar_ready = m_axi_plic_arready;
+        mst_resp[2].r.data   = m_axi_plic_rdata;
+        mst_resp[2].r.resp   = m_axi_plic_rresp;
+        mst_resp[2].r_valid  = m_axi_plic_rvalid;
     end
 
 endmodule

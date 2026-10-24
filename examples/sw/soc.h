@@ -55,6 +55,25 @@
  * which is the divider. Software should use this rather than the core clock. */
 #define CLINT_HZ    1000000u
 #define PLIC_BASE   0x0C000000u
+/* Standard PLIC layout, the same one QEMU's virt and SiFive parts use. One
+ * context (hart 0, M-mode), so the per-context strides do not come up here.
+ *
+ * Three things have to be true at once before eip reaches mip.MEIP: the source
+ * is pending, it is enabled, and its priority is STRICTLY above the threshold.
+ * Priority 0 therefore never interrupts, whatever the threshold is.
+ *
+ * And a level-sensitive source that is still asserted goes straight back to
+ * pending when it is completed -- quiet the device first, then write complete,
+ * or the same source is handed back on the next claim. The UART's irq is
+ * !rx_fifo_empty, so "quiet the device" means read the byte. */
+#define PLIC_PRIORITY_OFF(src) (4u * (src))
+#define PLIC_PENDING_OFF   0x001000u
+#define PLIC_ENABLE_OFF    0x002000u
+#define PLIC_THRESHOLD_OFF 0x200000u
+#define PLIC_CLAIM_OFF     0x200004u
+/* Interrupt sources, numbered from 1. Source 0 does not exist and the hardware
+ * pins its priority and enable bit low, as the spec requires. */
+#define PLIC_SRC_UART      1u
 #define TIMER_BASE  0x18000000u
 #define SPI_BASE    0x20000000u
 
@@ -79,9 +98,13 @@
   #define UART_BASE 0x10000000u
 #endif
 
-/* AXI UART Lite register offsets, and the one status bit anything here uses. */
+/* AXI UART Lite register offsets and status bits. cva5_uart keeps
+ * axi_uartlite's layout: status is {tx_full, tx_empty, rx_full, rx_valid}, so
+ * rx_valid is bit 0 and reading UART_RX_OFF pops the byte. */
+#define UART_RX_OFF   0x00u
 #define UART_TX_OFF   0x04u
 #define UART_STAT_OFF 0x08u
+#define UART_RX_VALID (1u << 0)
 #define UART_TX_FULL  (1u << 3)
 
 /*

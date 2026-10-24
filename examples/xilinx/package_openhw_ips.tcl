@@ -121,7 +121,7 @@ dict set openhw_ips cva5_axi_ram {
 }
 
 # AXI interfaces Vivado infers from the port names, to be bound to the clock.
-dict set openhw_busifs cva5_axi_xbar {s_axi_cpu s_axi_dbg m_axi_uart m_axi_clint}
+dict set openhw_busifs cva5_axi_xbar {s_axi_cpu s_axi_dbg m_axi_uart m_axi_clint m_axi_plic}
 dict set openhw_busifs cva5_axi_ram {s_axi}
 dict set openhw_busifs cva5_uart {s_axi}
 dict set openhw_busifs cva5_clint_axi {s_axi}
