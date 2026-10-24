@@ -31,6 +31,7 @@ all-Xilinx baseline of **WNS +0.107** at 100 MHz on the `xc7z020clg400-1`:
 | `axi_bram_ctrl` + `blk_mem_gen` | *removed* — main memory is `tdp_ram` inside the core | — | — |
 | `axi_quad_spi` | `cva5_spi_axi` (pulp `axi_spi_master`) | Solderpad 0.51 | present, on the Arduino header |
 | `axi_intc` | `cva5_plic_axi` (upstream CVA5 `apu/plic`) | Apache-2.0 | present, two sources |
+| `axi_iic` | `cva5_i2c_axi` (Forencich `verilog-i2c`) | **MIT** | packaged; not yet on the bus |
 | `xlconcat` | `cva5_irq_concat` | Apache-2.0 | present, one assignment |
 | `clk_wiz` | *kept* — the MMCM is a hard block | — | — |
 | `proc_sys_reset` | *kept for now* — see below | — | — |
@@ -777,6 +778,60 @@ and cost one bench iteration. The FIFO levels are at `[28:24]` for TX and
 one-hot chip select in `STATUS[11:8]` and the `SPI_LEN()` helper for the
 command/address/data bit counts.
 
+### I2C
+
+Alex Forencich's `i2c_master_axil` from `verilog-i2c`, wrapped as
+`cva5_i2c_axi`. Xilinx's equivalent is `axi_iic`.
+
+**This is the one block here that is not Apache or Solderpad.** It is MIT:
+more permissive than either and compatible with anything done with this fork,
+but with no explicit patent grant, which is the thing Apache-2.0 adds and the
+reason the rest of this tree sticks to it. The Apache alternative was
+OpenTitan's `i2c`, which does not have an AXI port at all — it speaks TLUL and
+arrives with the `prim` library behind it, so taking it would have meant a
+TLUL-to-Lite bridge and a second vendored primitive library to keep in step
+with upstream. That trade was made deliberately; it is not an oversight.
+
+It is also the only peripheral here that needs **no protocol adaptation**. Its
+slave port is already 32-bit AXI4-Lite with `prot`, `strb`, `bresp` and
+`rresp`, so unlike the SPI there is no Lite-to-AXI4 front end and no burst
+fields to tie off. The wrapper does three small things:
+
+- **Inverts the reset.** Forencich's cores take an active-high synchronous
+  `rst`; everything else here is active-low `rstn`. Registered locally from
+  `rstn` alone and never `ndmreset`, by the rule above — the debugger can reach
+  this peripheral over the system bus.
+- **Turns the open-drain triplets into two `inout` pins.** The core drives
+  `scl_o`/`scl_t` and `sda_o`/`sda_t` with `t` and `o` carrying the same value:
+  low drives the line low, high releases it. Vivado infers an IOBUF per `inout`
+  at the top level. The bus needs external pull-ups and the PYNQ-Z2 has them on
+  the Arduino header's `ar_scl`/`ar_sda`.
+- **Widens the address port** to the 4 KB floor a Vivado address segment can be
+  given. The device decodes four words and aliases within the window.
+
+Four registers, byte offsets: `0x0` STATUS (busy, bus state, missed-ack and
+three FIFO flags; writing clears the sticky bits), `0x4` COMMAND (a 7-bit
+address plus start/read/write/write-multiple/stop), `0x8` DATA (a byte out, or
+a byte in — reading pops the read FIFO), `0xC` PRESCALE (16-bit, `clk / (4 ×
+SCL)`; 250 for 100 kHz at 100 MHz, 62 for 400 kHz).
+
+`test_benches/axi/run_i2c.sh` runs 139 checks against a behavioural slave on
+the same two wires — written out by hand rather than reusing Forencich's own
+`i2c_slave`, partly because that one has AXI-stream control interfaces and
+driving it would be more testbench than writing the protocol out, and partly
+because a second copy of the same author's assumptions proves less than an
+independent reading of the spec. It covers the register map, that the
+open-drain tie-off actually drives and releases, a write reaching the right
+slave with the right byte, a read bringing one back, and an address nothing
+answers being reported as a missed ACK rather than hanging. Two mutants were
+run against it: swapping `scl` and `sda` hangs the bus, and inverting the
+tri-state polarity fails at the first address phase.
+
+`axis_fifo`'s optional `tid`/`tdest`/`tuser` fields select past the end of the
+packed register when those features are disabled — dead code behind
+`ENABLE ? ... : 0`, which is why `run_i2c.sh` waives SELRANGE specifically
+rather than widening the lint.
+
 ### The bus is AXI4-Lite end to end
 
 Two slave ports and two master ports, one `axi_lite_xbar`, no protocol
@@ -942,7 +997,9 @@ something.
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
 | CLINT | `sh test_benches/debug/run_clint.sh` | mtime tick rate, writes, mtimecmp→mtip at the boundary, msip |
 | SPI | `bash test_benches/axi/run_spi.sh` | 73 checks against a mode-0 slave model: the register map, FIFO levels, a command-then-data write seen bit by bit on MOSI, chip-select selection, a read coming back through `sdi1`, the clock divider, and the soft reset |
-| PLIC | `bash test_benches/axi/run_plic.sh` | 103 checks at `NUM_SOURCES` 8 and 57 at 1 — the configuration the board deploys, which takes different widths inside the PLIC: the register map, pending versus eip, claim/complete including an unserviced level source, edge latching, priority order and ties, threshold suppression. Also checks the vendored copies still match `apu/plic` |
+| PLIC | `bash test_benches/axi/run_plic.sh` | 103 checks at `NUM_SOURCES` 8 and 57 each at 2 — the configuration the board deploys — and at 1, the narrowest the PLIC builds, which takes different widths inside it: the register map, pending versus eip, claim/complete including an unserviced level source, edge latching, priority order and ties, threshold suppression. Also checks the vendored copies still match `apu/plic` |
+| interrupt wiring | `bash test_benches/axi/run_irq_concat.sh` | 62 checks: `cva5_irq_concat` driving a real two-source PLIC — which port becomes which source number, claimed by number, and a one-cycle pulse latching with the source level sensitive |
+| I2C | `bash test_benches/axi/run_i2c.sh` | 139 checks against a hand-written behavioural slave: the register map, the open-drain tie-off driving and releasing, a write reaching the right slave with the right byte, a read coming back, and an unanswered address reported as a missed ACK rather than hanging |
 | CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
 | counter CSRs, in the core sim | `make -C examples/sw run-csrs` | `rdcycle`/`rdinstret`/`mcycle` readable and advancing, `rdtime` and `rdtimeh` taking an illegal-instruction trap. The only place both polarities of `INCLUDE_TIME_CSR` can be run: the sim takes upstream's `EXAMPLE_CONFIG`, so with the bit set the three trap checks are *expected* to fail |
 | SPI on hardware | `make -C examples/sw spi` | the register file and FIFO levels with nothing attached, a transfer running to completion, then — with MOSI jumpered to MISO on the ICSP header — a held 1 reading back as all ones and a held 0 as all zeros, on two chip selects |

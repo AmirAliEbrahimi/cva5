@@ -115,6 +115,21 @@ dict set openhw_ips cva5_spi_axi {
     examples/xilinx/axi/cva5_spi_axi.sv
 }
 
+# Alex Forencich's I2C master, with its own AXI4-Lite slave port -- the only
+# peripheral here that needs no protocol adaptation at all. MIT licensed, which
+# is this tree's one departure from Apache or Solderpad: more permissive than
+# both, compatible with anything done with this fork, but with no explicit
+# patent grant. The Apache alternative was OpenTitan's i2c, which arrives with
+# TLUL and the prim library attached.
+#
+# Compile order: the FIFO first, then the master, then the register front end.
+dict set openhw_ips cva5_i2c_axi {
+    third_party/verilog-i2c/rtl/axis_fifo.v
+    third_party/verilog-i2c/rtl/i2c_master.v
+    third_party/verilog-i2c/rtl/i2c_master_axil.v
+    examples/xilinx/axi/cva5_i2c_axi.sv
+}
+
 # Two scalar interrupt lines into the vector the PLIC takes, because a block
 # design cannot attach two nets to two bits of one pin. Ours rather than
 # xlconnect/xlconcat, which are Xilinx IPs. No clock, no bus, one assignment.
@@ -173,6 +188,7 @@ dict set openhw_busifs cva5_uart {s_axi}
 dict set openhw_busifs cva5_clint_axi {s_axi}
 dict set openhw_busifs cva5_plic_axi {s_axi}
 dict set openhw_busifs cva5_spi_axi {s_axi}
+dict set openhw_busifs cva5_i2c_axi {s_axi}
 dict set openhw_busifs cva5_irq_concat {}
 
 # One sentence per IP for the Vivado catalog, which is also what answers
@@ -183,6 +199,7 @@ dict set openhw_descs cva5_uart {UART (lowRISC) behind an AXI4-Lite adapter, kee
 dict set openhw_descs cva5_clint_axi {RISC-V core-local interruptor: mtime, mtimecmp and msip, driving the hart's timer and software interrupts directly}
 dict set openhw_descs cva5_plic_axi {RISC-V platform-level interrupt controller, aggregating device interrupts into the hart's single external interrupt}
 dict set openhw_descs cva5_spi_axi {SPI master (pulp-platform axi_spi_master) with four chip selects and a programmable clock divider, in place of axi_quad_spi}
+dict set openhw_descs cva5_i2c_axi {I2C master (Alex Forencich verilog-i2c) with command, write and read FIFOs and a runtime prescaler, on open-drain pins}
 dict set openhw_descs cva5_irq_concat {Two device interrupt lines into one vector for cva5_plic_axi, in place of xlconcat}
 dict set openhw_descs cva5_axi_ram {AXI4 block-RAM slave (ZipCPU demofull); simulation only, not packaged}
 
