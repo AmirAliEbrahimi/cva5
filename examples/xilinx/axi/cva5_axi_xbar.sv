@@ -315,13 +315,36 @@ module cva5_axi_xbar #(
     // AXI4-Lite carries no IDs, so the ID widths here are the minimum the
     // configuration struct accepts rather than anything meaningful.
     //
-    // LatencyMode cuts the address channels on the demultiplexer side only.
-    // That is where the long combinational run is -- address decode into the
-    // arbiter -- and it registers fewer points than CUT_ALL_AX, which matters:
-    // this crossbar shares the die with CVA5, and the flops it spends show up
-    // as congestion on the core's fetch path, not as a timing problem inside
-    // the fabric. axi_pkg::CUT_ALL_AX and then CUT_ALL_PORTS are the steps
-    // back up if the critical path ever moves in here.
+    // LatencyMode cuts the address channels on the demultiplexer side, which
+    // is where the long combinational run is -- address decode into the
+    // arbiter -- plus the demultiplexer's R channel.
+    //
+    // That last cut was added because the critical path moved in here, which
+    // the previous version of this comment predicted it might. On the board it
+    // reported as
+    //
+    //   from  axi_xbar_0/.../gen_slv_port_demux[1]/gen_demux.i_r_fifo/mem_q_reg
+    //   to    cva5_top_0/.../gen_ls_pbus.gen_axi.axi_bus/ls.data_out_reg[16]
+    //   11 levels, 9.775 ns, 79% routing, WNS +0.076
+    //
+    // -- the debugger port's R-channel FIFO, through the response arbitration,
+    // all the way into the core's AXI sub-unit read-data register, with no
+    // register in between. DemuxR puts one there.
+    //
+    // The cost is a cycle on peripheral responses, and it is close to free:
+    // main memory is answered inside cva5_top on the local memory interface
+    // and never crosses this crossbar, so nothing on the load-to-use path
+    // pays. What pays is a UART status poll, a CLINT read, a PLIC claim --
+    // accesses that are already several cycles and are not in any inner loop.
+    //
+    // It is deliberately DemuxR and not CUT_SLV_PORTS, which would also
+    // register W and B. Those are not on a critical path, and the flops this
+    // crossbar spends show up as congestion next to the core: the fifth master
+    // port cost 192 LUTs, most of it widening these same demuxes, and the
+    // build that added it lost 0.26 ns. Spend registers where the measurement
+    // points, not by the preset.
+    //
+    // axi_pkg::CUT_ALL_AX and then CUT_ALL_PORTS remain the steps back up.
     //------------------------------------------------------------------
     localparam axi_pkg::xbar_cfg_t XbarCfg = '{
         NoSlvPorts:         32'(NUM_SLV),
@@ -329,7 +352,8 @@ module cva5_axi_xbar #(
         MaxMstTrans:        32'(MAX_TRANS),
         MaxSlvTrans:        32'(MAX_TRANS),
         FallThrough:        1'b0,
-        LatencyMode:        axi_pkg::CUT_SLV_AX,
+        LatencyMode:        axi_pkg::xbar_latency_e'(axi_pkg::CUT_SLV_AX |
+                                                    axi_pkg::DemuxR),
         PipelineStages:     32'd0,
         AxiIdWidthSlvPorts: 32'd1,
         AxiIdUsedSlvPorts:  32'd1,

@@ -328,6 +328,54 @@ inside 0.6 ns of each other:
 | + CLINT as a peripheral | — | — | **—** (not built alone) |
 | + SBA split, Lite-only bus, `time` unimplemented | load queue index → RAM address | 8.665 | **+0.414** |
 | + PLIC on the bus | register file → divider CLZ | 8.917 | **+0.430** |
+| + SPI irq to the PLIC | load queue index → RAM address | 8.876 | **+0.364** |
+| + I2C on the bus | load queue index → RAM address | 8.990 | **+0.103** |
+| + synthesis warning fixes | crossbar R FIFO → core AXI data_out | 9.775 | **+0.076** |
+
+#### The limiter is a cluster, not a path
+
+The last three rows are worth reading together, because they corrected two
+things that were believed here.
+
+**The margin is not a lottery to be waited out.** Vivado is deterministic:
+same sources, same version, same part, same placement. The I2C row differs
+from the one above it by exactly one change — the peripheral went on the bus,
+patch 27 having packaged the IP without instantiating it — so the 0.261 ns is
+attributable to that change and no rebuild hands it back.
+
+**But it was not where it looked.** Decomposing that 0.261 ns:
+
+| term | SPI-irq build | I2C build | Δ |
+|---|---|---|---|
+| data path delay | 8.876 | 8.990 | −0.114 |
+| source clock delay | −0.987 | −1.074 | +0.087 |
+| **BRAM setup** | **−0.566** | **−0.774** | **−0.208** |
+| slack | +0.364 | +0.103 | −0.261 |
+
+Four fifths of it is the *setup requirement of the destination pin*. Placement
+moved the endpoint from `ADDRARDADDR[7]` on one RAMB36 to `ADDRARDADDR[13]` on
+another, and the 7-series speed file gives the second a 0.208 ns tighter
+requirement. The actual logic grew 0.114 ns and two thirds of that was
+cancelled by the launch clock arriving later. So when reading these numbers,
+**datapath delay and the endpoint's setup have to be read separately** — WNS
+alone has now twice suggested a cause that the arithmetic did not support.
+
+**And the limiter moves between subsystems on changes that should not matter.**
+The last row is the synthesis-warning patch: no block design change, no address
+map change, no software change — an instantiated `IOBUF` instead of an inferred
+one, and a `.mif` restored to the packaged IP so the block RAMs carry their
+initialisation. The critical path left the memory system entirely and landed in
+the crossbar, from the debugger port's R-channel FIFO through the response
+arbitration into the core's AXI read-data register: 11 levels, 79% routing.
+
+That is the finding that matters for what to do about any of it. There is no
+single path to fix. There is a cluster of structures within about 0.03 ns of
+each other, and flattening one promotes the next — which is why the first
+response to the I2C row, pipelining the local memory's address inside the core,
+was abandoned: it would have added a cycle to every load to fix a path that was
+no longer critical, and left the crossbar reporting at +0.076 anyway. The
+crossbar's `DemuxR` cut was taken instead, where the measurement actually
+pointed and where a cycle costs a peripheral access rather than a load.
 
 The PLIC row is the first build with four peripherals and three interrupt lines
 into the core. Its worst path left the memory system entirely and went back to
@@ -849,7 +897,7 @@ rather than widening the lint.
 
 ### The bus is AXI4-Lite end to end
 
-Two slave ports and two master ports, one `axi_lite_xbar`, no protocol
+Two slave ports and five master ports, one `axi_lite_xbar`, no protocol
 conversion anywhere:
 
 ```
@@ -860,7 +908,28 @@ m_axi_uart  -> cva5_uart/s_axi      0x1000_0000
 m_axi_clint -> cva5_clint_0/s_axi   0x0200_0000
 m_axi_plic  -> cva5_plic_0/s_axi    0x0C00_0000
 m_axi_spi   -> cva5_spi_0/s_axi     0x2000_0000
+m_axi_i2c   -> cva5_i2c_0/s_axi     0x2800_0000
 ```
+
+`LatencyMode` is `CUT_SLV_AX | DemuxR`: the address channels are registered on
+the demultiplexer side, where the decode-into-arbiter run is, and so is the
+demultiplexer's R channel.
+
+The R cut was not there originally and was added when the critical path moved
+into the crossbar — the debugger port's R FIFO, through the response
+arbitration, into the core's AXI read-data register with no register between,
+11 levels and 79% routing at +0.076. **A read costs 2 cycles from the AR
+handshake to the R handshake instead of 1**, which `tb_axi_xbar` measures and
+prints rather than asserting, so a future change to this setting shows up in
+the log without pinning a number that would then have to be edited.
+
+That cycle is close to free. Main memory is answered inside `cva5_top` on the
+local memory interface and never crosses this crossbar, so nothing on the
+load-to-use path pays it; what pays is a UART status poll, a CLINT read, a PLIC
+claim — already several cycles, and not in an inner loop. It is deliberately
+`DemuxR` rather than the `CUT_SLV_PORTS` preset, which would also register W
+and B: those are not on a critical path, and flops here land next to the core,
+which is where the pressure already is.
 
 It got there in two steps. First the peripheral window was one AXI4 master port
 converted to Lite once and then fanned out by a Lite crossbar — which was the

@@ -488,9 +488,42 @@ module tb_axi_xbar #(
         end
     endtask
 
+    //A read, with the cycles from the AR handshake to the R handshake counted.
+    //
+    //Every other check here is handshake-driven and so passes at any latency,
+    //which is the right way to write them -- but it means the crossbar's
+    //LatencyMode is invisible to this bench, and that setting is the thing
+    //most likely to be changed for timing by someone who has not thought about
+    //what it costs. Measuring it and printing it puts the number in the log,
+    //the way tb_spi prints the SPI clock period, so a change shows up without
+    //pinning an exact value that would have to be edited every time.
+    task automatic lite_read_timed(input lite_port_e port,
+                                   input logic [31:0] addr,
+                                   output logic [31:0] data,
+                                   output logic [1:0] resp,
+                                   output int unsigned cycles);
+        cycles = 0;
+        if (port == PORT_CPU) begin
+            cpu_araddr = addr; cpu_arvalid = 1;
+            while (!cpu_arready) step();
+            step(); cpu_arvalid = 0;
+            cpu_rready = 1;
+            while (!cpu_rvalid) begin step(); cycles++; end
+            data = cpu_rdata; resp = cpu_rresp; step(); cpu_rready = 0;
+        end else begin
+            dbg_araddr = addr; dbg_arvalid = 1;
+            while (!dbg_arready) step();
+            step(); dbg_arvalid = 0;
+            dbg_rready = 1;
+            while (!dbg_rvalid) begin step(); cycles++; end
+            data = dbg_rdata; resp = dbg_rresp; step(); dbg_rready = 0;
+        end
+    endtask
+
     //==================================================================
     logic [31:0] rdata;
     logic [1:0]  resp;
+    int unsigned rd_cycles;
 
     initial begin
         cpu_awvalid = 0; cpu_wvalid = 0; cpu_bready = 0;
@@ -697,6 +730,21 @@ module tb_axi_xbar #(
         join
         expect_eq("contended write from the CPU landed", uart_regs[1], 32'hAAAA_0001);
         expect_eq("contended write from the debugger landed", uart_regs[2], 32'hBBBB_0002);
+
+        //--- read latency, measured rather than assumed
+        $display("-- read latency");
+        lite_write(PORT_CPU, PERIPH_BASE + 32'h0, 32'h1234_5678, resp);
+        lite_read_timed(PORT_CPU, PERIPH_BASE + 32'h0, rdata, resp, rd_cycles);
+        expect_eq("the timed read returns the right data", rdata, 32'h1234_5678);
+        $display("   AR handshake to R handshake: %0d cycles (CPU port)",
+                 rd_cycles);
+        lite_read_timed(PORT_DBG, PERIPH_BASE + 32'h0, rdata, resp, rd_cycles);
+        $display("   AR handshake to R handshake: %0d cycles (debugger port)",
+                 rd_cycles);
+        //A band, not a number: the point is to notice a change, not to pin
+        //LatencyMode so that touching it edits this file.
+        expect_eq("read latency is in a sane band",
+                  32'(rd_cycles >= 1 && rd_cycles <= 12), 32'd1);
 
         //--- byte strobes reach the slave
         lite_write(PORT_CPU, PERIPH_BASE + 32'h0, 32'h9999_8888, resp, 4'b0011);
