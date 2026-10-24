@@ -41,6 +41,41 @@
 #ifndef CVA5_SOC_H
 #define CVA5_SOC_H
 
+/* Reading a device register after writing a DIFFERENT one needs a fence.
+ *
+ * A store to a peripheral is posted: it retires when the store queue accepts
+ * it, not when the write has crossed the crossbar. A later load is not held
+ * behind it -- load_store_unit.sv guarantees that stores do not reorder among
+ * themselves and that an earlier load beats a later store, but not that a
+ * later load waits for an earlier store. So this can read the register as it
+ * was before the write:
+ *
+ *     SPI_TX = word;
+ *     v = SPI_STATUS;          // may be issued before the TX write lands
+ *
+ * A write followed by a read of the SAME address is safe without this, because
+ * the store queue forwards to the load -- which is why every "reads back"
+ * check in these tests passes and only the cross-register ones are flaky, and
+ * why this is invisible in simulation, where the testbench's AXI master is
+ * strictly ordered.
+ *
+ * `fence o,i` is the architectural answer and the core implements it: the
+ * predecessor set is device output and the successor set device input, which
+ * load_store_unit.sv counts as a nontrivial fence and holds the unit for until
+ * the store queue has drained and no write is outstanding.
+ *
+ * Use it between a device write and a read of a different register of any
+ * device -- not blanket after every write. timer.c measures the crossbar's
+ * write latency by counting polls, and a fence there would report zero by
+ * construction and measure nothing.
+ *
+ * It does not replace mip_wait() in mip.h. mip's bits are a registered copy of
+ * the interrupt pins, so they lag the device by a cycle that no fence covers,
+ * and `csrr mip` is not a load. */
+static inline void dev_fence(void) {
+    __asm__ volatile ("fence o,i" ::: "memory");
+}
+
 #define DM_BASE     0x00000000u
 #define ROM_BASE    0x00010000u
 #define CLINT_BASE  0x02000000u

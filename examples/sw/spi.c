@@ -114,8 +114,13 @@ static unsigned int read_with_held_level(unsigned int cmd, int cs) {
     SPI_CMD = cmd;
     SPI_LENREG = SPI_LEN(8, 0, 32);
     SPI_STATUS = SPI_START_RD | SPI_CS(cs);
+    /* The three writes above reach the device in order -- the store queue does
+     * not reorder stores -- so the command and length are in place before the
+     * start. wait_idle polls STATUS, which is slow enough that the RX read
+     * cannot race it, but say so rather than rely on it. */
     if (!wait_idle())
         return 0xDEADDEADu;
+    dev_fence();
     return SPI_RX;
 }
 
@@ -148,12 +153,16 @@ int main(void) {
     SPI_DUMMY = 0u;
     check("dummy reads back", SPI_DUMMY == 0u);
 
+    /* Every check above reads back the register it just wrote, which the store
+     * queue forwards, so none of them can race. STATUS is a different one. */
+    dev_fence();
     v = SPI_STATUS;
     check("status reports idle", (v & SPI_IDLE) != 0u);
     check("both FIFOs are empty",
           SPI_TX_LEVEL(v) == 0u && SPI_RX_LEVEL(v) == 0u);
 
     SPI_TX = 0xDEADBEEFu;
+    dev_fence();              /* STATUS is a different register; see soc.h */
     v = SPI_STATUS;
     check("a word written to TX shows in the level", SPI_TX_LEVEL(v) == 1u);
 
@@ -204,12 +213,18 @@ int main(void) {
     PLIC_THRESHOLD = 0u;
     PLIC_ENABLE = SPI_SRC_BIT;
     PLIC_PRIORITY(PLIC_SRC_SPI) = 3u;
+    dev_fence();
 
+    /* Without that fence the claim below was issued before the priority write
+     * landed, so it saw priority 0, returned 0, and drained nothing -- leaving
+     * the source from the transfers above pending for the two checks that
+     * follow. The symptom looked like the interrupt being stuck on. */
     for (unsigned i = 0; i < 3u; i++) {
         unsigned int stale = PLIC_CLAIM;
         if (!stale)
             break;
         PLIC_CLAIM = stale;
+        dev_fence();          /* complete, before the next claim */
     }
     check("draining leaves meip down", mip_wait(MIP_MEIP, 0) >= 0);
     check("and the SPI's source quiet", (PLIC_PENDING & SPI_SRC_BIT) == 0u);
@@ -224,9 +239,13 @@ int main(void) {
     check("a claim names the SPI, not the UART", id == PLIC_SRC_SPI);
     check("claiming suppresses it", mip_wait(MIP_MEIP, 0) >= 0);
 
-    /* Nothing to quiet first, unlike the UART: the pulse is long gone, so a
-     * complete leaves this source down instead of handing it straight back. */
+    /* Nothing to quiet first, unlike the UART: eot is one cycle wide
+     * (spi_master_controller.sv drives it combinationally for the cycle the
+     * state machine returns to IDLE) and events_o[0] is an edge detector on
+     * the FIFO levels, so neither is still asserted here and a complete leaves
+     * the source down instead of handing it straight back. */
     PLIC_CLAIM = id;
+    dev_fence();
     check("completing leaves it down", mip_wait(MIP_MEIP, 0) >= 0);
     check("and nothing pending", (PLIC_PENDING & SPI_SRC_BIT) == 0u);
 

@@ -128,12 +128,17 @@ int main(void) {
     PLIC_ENABLE = 0xFFFFFFFFu;
     for (unsigned s = 1u; s <= PLIC_NUM_SOURCES; s++)
         PLIC_PRIORITY(s) = 1u;
+    /* The claim is a read of a different register from the writes above, so
+     * without this it can be issued before they land -- and a claim taken with
+     * the priorities still at 0 returns 0 and drains nothing. See soc.h. */
+    dev_fence();
     for (unsigned i = 0; i < PLIC_NUM_SOURCES + 1u; i++) {
         unsigned int stale = PLIC_CLAIM;
         if (!stale)
             break;
         put_hex("draining a source left pending by an earlier run: ", stale);
         PLIC_CLAIM = stale;
+        dev_fence();          /* complete, before the next claim */
     }
     PLIC_ENABLE = 0u;
     for (unsigned s = 1u; s <= PLIC_NUM_SOURCES; s++)
@@ -241,6 +246,10 @@ int main(void) {
           (UART_STAT & UART_RX_VALID) == 0u);
 
     PLIC_CLAIM = id;                  /* complete */
+    /* mip.MEIP is already down from the claim, so mip_wait would return
+     * immediately whether or not the complete has landed, and the pending read
+     * after it would race. */
+    dev_fence();
     check("completing a quiet source leaves meip down",
           mip_wait(MIP_MEIP, 0) >= 0);
     check("and nothing is pending", (PLIC_PENDING & UART_SRC_BIT) == 0u);

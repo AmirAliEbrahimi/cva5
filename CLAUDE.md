@@ -153,6 +153,51 @@ A vendoring note in `cva5_plic.sv` wrapped so that a line began
 `// verilator <word>` as a directive wherever it appears, so a comment line
 must not begin with that word. Reword the sentence; do not add a suppression.
 
+## Reading a device register after writing a different one needs a fence
+
+A store to a peripheral is posted. `load_store_unit.sv` guarantees that stores
+do not reorder among themselves and that an earlier load beats a later store —
+but **not** that a later load waits for an earlier store. So this reads the
+register as it was before the write:
+
+```c
+SPI_TX = word;
+v = SPI_STATUS;            /* may be issued before the TX write lands */
+```
+
+A write followed by a read of the **same** address is safe, because the store
+queue forwards to the load. That is what makes this so good at hiding: every
+"reads back" check in `examples/sw` passes, only the cross-register ones race,
+and **simulation cannot see it at all** — every testbench here drives AXI from
+a strictly ordered master, so the bench passes with 73 checks while the board
+fails.
+
+`fence o,i` is the fix and the core already implements it: predecessor
+`o` is device output, successor `i` device input, which
+`load_store_unit.sv:237` counts as a nontrivial fence and which holds the unit
+until the store queue has drained and no write is outstanding. `soc.h` wraps it
+as `dev_fence()`.
+
+Two things it is not. It is not `mip_wait()`: `mip`'s bits are a registered
+copy of the interrupt pins, so they lag by a cycle no fence covers, and
+`csrr mip` is not a load. And it is not something to put after every write —
+`timer.c` measures the crossbar's write latency by counting polls between a
+store to `msip` and `mip` agreeing, and a fence there would report zero by
+construction.
+
+The bug this was found by is the shape to recognise. `spi.c` opened its
+interrupt section with
+
+```c
+PLIC_PRIORITY(PLIC_SRC_SPI) = 3u;
+for (...) { stale = PLIC_CLAIM; if (!stale) break; ... }
+```
+
+The claim was issued before the priority write landed, so it was taken with the
+priority still 0, returned 0, and drained nothing — and the preamble written to
+clear a stale interrupt left it pending. The symptom looked like an interrupt
+stuck on, i.e. like a hardware fault in the thing the test was checking.
+
 ## A block design connects nets to whole pins
 
 There is no way to attach two nets to two bits of one vector pin in a block

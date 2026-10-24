@@ -119,6 +119,10 @@ int main(void) {
      *   msip reads back 1  ->  the CLINT has it and mip never saw it: the
      *                          msip net out of cva5_clint_axi, or the latch
      */
+    /* Deliberately NOT fenced, unlike the device reads in plic.c and spi.c.
+     * The poll count below IS the write latency through the crossbar -- a
+     * dev_fence() here would drain the store queue first and report zero by
+     * construction, measuring nothing. See soc.h for when a fence is wanted. */
     MSIP = 1u;
     int polls = mip_wait(MIP_MSIP, 1);
     if (polls < 0) {

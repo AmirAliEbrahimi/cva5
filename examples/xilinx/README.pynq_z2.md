@@ -630,6 +630,38 @@ transfer. `examples/sw/spi.c` checks the SPI side end to end — transfer,
 pending, `mip.MEIP`, claim names source 2, complete leaves it down — and
 `examples/sw/plic.c` keeps the UART side, where the keypress is.
 
+#### A device read after a device write needs `fence o,i`
+
+Found on hardware, by this patch's own test failing. A store to a peripheral is
+posted, and `load_store_unit.sv` does not hold a later load behind it — it
+guarantees only that stores keep their order among themselves and that an
+earlier load beats a later store. So a read of a *different* register than the
+one just written can be issued first and see the old value.
+
+A read of the **same** address is safe, because the store queue forwards to the
+load. That is what makes it hide so well: every "reads back" check passes, only
+cross-register reads race, and no testbench here can see it — they all drive
+AXI from a strictly ordered master, so `tb_spi` passes 73 checks against the
+same code that fails on the board.
+
+`soc.h` wraps the fix as `dev_fence()`. The core implements `fence o,i`
+properly: predecessor device-output, successor device-input, which
+`load_store_unit.sv:237` classes as a nontrivial fence and which holds the unit
+until the store queue has drained and no write is outstanding.
+
+It is not a substitute for `mip_wait()` — `mip`'s bits are a registered copy of
+the interrupt pins and lag by a cycle no fence covers — and it is deliberately
+*absent* from one place: `timer.c` measures the crossbar's write latency by
+counting polls between the store to `msip` and `mip` agreeing, and a fence
+there would report zero by construction.
+
+The failure that found it is worth keeping, because it pointed at the wrong
+thing. `spi.c`'s drain loop claimed before its `PLIC_PRIORITY` write landed, so
+the claim was taken at priority 0, returned 0 and drained nothing — and the
+preamble written to clear a stale interrupt left it pending. On the console it
+read as an interrupt stuck on: exactly like a fault in the hardware the test
+was there to check.
+
 One consequence of the PLIC resetting from `rstn` alone, which is now visible
 in software: pending bits, enables and priorities all survive a program reload,
 so `make -C examples/sw spi` leaves source 2 latched for whatever runs next.
