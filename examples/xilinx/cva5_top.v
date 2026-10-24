@@ -24,8 +24,7 @@ module cva5_top
 
     #(
         parameter LOCAL_MEM = "ram.mif", //Preload for main memory
-        parameter WORDS = 32768,         //Main memory size in words (128 KB)
-        parameter RAM_ADDR_W = $clog2(WORDS)
+        parameter WORDS = 32768          //Main memory size in words (128 KB)
     )
     (
         input clk,
@@ -93,6 +92,20 @@ module cva5_top
 
         output ndmreset
     );
+
+    //Derived, and deliberately not a parameter. As a parameter with a default
+    //expression it became a user parameter of the packaged IP whose dependency
+    //on WORDS the packager drops:
+    //
+    //  INFO: [IP_Flow 19-818] Not transferring value dependency attribute
+    //        "spirit:ceil(spirit:log(2,spirit:decode(id('MODELPARAM_VALUE.WORDS'))))"
+    //        into user parameter "RAM_ADDR_W".
+    //
+    //which left the IP GUI offering an address width that would not follow a
+    //changed WORDS -- and the RAM window cva5_sba_split decodes is cut from it,
+    //so a stale value aims the debugger's writes at the wrong side of the split.
+    //A localparam cannot be overridden, so there is nothing to get out of step.
+    localparam RAM_ADDR_W = $clog2(WORDS);
 
     cva5_wrapper #(.LOCAL_MEM(LOCAL_MEM), .WORDS(WORDS), .RAM_ADDR_W(RAM_ADDR_W)) cva5_inst(
         .clk(clk),

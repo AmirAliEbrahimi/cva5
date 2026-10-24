@@ -169,6 +169,92 @@ throughout the load and routed every response to the side the request did not
 go to, so every `make load` would have hung — in simulation as well, which is
 why it was worth making the split a module with one explicit reset port.
 
+## The packaging logs are a check, so keep them readable
+
+`19-3833` — "Unreferenced file from the top module is not packaged" — is the
+**only** thing that checks the file lists in `package_openhw_ips.tcl` and
+`package_as_ip_pynq_z2.tcl`. Verilator reads the same lists and says nothing
+about a file no one instantiates, so a dependency that has gone dead shows up
+here and nowhere else. That is worth one line of log and useless under
+twenty-one, which is what `add_files -force {core examples/xilinx examples/sw}`
+produced: every peripheral IP's sources, swept into the core IP's project,
+reported one by one. Both scripts list files explicitly for that reason. If a
+`19-3833` appears, something is actually wrong — a file that lost its
+instantiation, or a list entry left behind by a refactor.
+
+Four warnings these scripts raise are structural. Do not spend a patch on them:
+
+- `19-5101`, SystemVerilog top not fully supported — raised for every IP but
+  `cva5_top`. The `19-5107` lines that follow show inference working anyway,
+  because these wrappers keep flat port lists. The cure is a Verilog shim per
+  block, and the first section of this file is about the cost of the one shim
+  that already exists.
+- `19-2187`, missing Product Guide — it wants a vendor datasheet.
+- `19-11888` and `19-11770` appear twice each, once from
+  `ipx::package_project` and once from `ipx::check_integrity`.
+  `cva5_ip_metadata` in `examples/xilinx/ip_metadata.tcl` answers the second;
+  the first is raised before there is a component to set anything on.
+- `BD 5-670`, no frequency on a user-created input clock port — raised by the
+  board automation rule about the port **it** creates, two lines before it sets
+  the frequency itself. Answering it means creating `sys_clock` by hand, which
+  takes the clock pin constraint away from the board file; `pynq_z2_cva5.xdc`
+  deliberately does not constrain that pin.
+
+## A derived parameter must not be a parameter of a packaged IP
+
+`cva5_top` had `parameter RAM_ADDR_W = $clog2(WORDS)`, and the packager reports
+what it does with a default expression like that:
+
+```
+INFO: [IP_Flow 19-818] Not transferring value dependency attribute
+      "spirit:ceil(spirit:log(2,spirit:decode(id('MODELPARAM_VALUE.WORDS'))))"
+      into user parameter "RAM_ADDR_W".
+```
+
+The dependency is dropped, so the IP offers a second knob that does not follow
+the first. Nothing in the block design sets `RAM_ADDR_W` today, but the window
+`cva5_sba_split` decodes is cut from it, and a value out of step with `WORDS`
+aims the debugger's writes at the wrong side of the split — silently, and only
+on hardware. It is a `localparam` now, which cannot be overridden and leaves
+nothing to get out of step. Anything derivable from another parameter belongs
+in the body, not the parameter list.
+
+## Port names decide what Vivado thinks a port is
+
+The packager infers bus interfaces from names alone, which is how `s_axi*`
+becomes an AXI interface and `irq` becomes `xilinx.com:signal:interrupt:1.0`
+with the right sensitivity, both without being asked. The same mechanism read
+the SPI's serial clock *output*, then named `spi_clk`, as a clock interface:
+
+```
+INFO:    [IP_Flow 19-5107] Inferred bus interface 'spi_clk' of definition
+         'xilinx.com:signal:clock:1.0'
+WARNING: [IP_Flow 19-4751] Bus Interface 'spi_clk': FREQ_HZ bus parameter is
+         missing for output clock interface
+```
+
+It is a divided data output on its way to a pin; nothing is clocked from it and
+software sets the divider, so there is no frequency to declare. The port is
+`spi_sck` now. Rename the port rather than removing the inferred interface in
+the script — a suppression has to be remembered for the next block whose output
+has `clk` in its name.
+
+## A read-only block-design parameter means the value lives somewhere else
+
+```
+CRITICAL WARNING: [BD 41-737] Cannot set the parameter C_EXT_RESET_HIGH on
+                  /proc_sys_reset_0. It is read-only.
+```
+
+Vivado 2025.1 derives `proc_sys_reset`'s external reset polarity by propagation
+instead of taking it as a setting, so the `set_property` that used to configure
+it fails. It failed in the way that is worst to inherit: the design still came
+up active-low, because the same net drives `clk_wiz_0/resetn` and *that* pin's
+polarity propagated into the port. The reset sense of the whole SoC rested on
+an unrelated connection. `reset_sw` is now created with `create_bd_port` and
+given `CONFIG.POLARITY ACTIVE_LOW` directly, which is where propagation reads
+it from anyway.
+
 ## Timing numbers are not a per-patch score
 
 Over 100 setup paths sit within 0.22 ns of WNS and over 1000 within 1.0 ns, so

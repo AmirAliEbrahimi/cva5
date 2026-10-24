@@ -1,8 +1,38 @@
 puts "This script will create a project for CVA5 in the ./vivado folder and package it as an IP"
 
+# Shared with package_openhw_ips.tcl; see that file for the warnings it answers.
+source ./examples/xilinx/ip_metadata.tcl
+
 # Create the project
 create_project -force -part xc7z020clg400-1 CVA5IP ./vivado/CVA5IP
-add_files -force {core examples/xilinx examples/sw}
+
+# core/ goes in whole: every file under it is reached from cva5_top.
+add_files -force {core}
+
+# ---- This board's wrapper and its debug subsystem
+# Listed file by file rather than by adding examples/xilinx recursively. The
+# recursive form also swept in the peripheral IPs' sources -- the crossbar, the
+# UART, the CLINT, the PLIC, the SPI, their vendored pulp copies -- none of
+# which cva5_top instantiates, and the packager reported each one:
+#
+#   WARNING: [IP_Flow 19-3833] Unreferenced file from the top module is not
+#            packaged: '.../examples/xilinx/vendor/uart.sv'.
+#
+# Twenty-one of those, and a reader cannot tell the harmless ones from a file
+# that went unreferenced because a connection was lost. Those blocks are
+# packaged separately by package_openhw_ips.tcl; nothing here needs them.
+set soc_files {
+    examples/xilinx/vendor/boot_rom.sv
+    examples/xilinx/debug/vendor/cdc_2phase_clearable.sv
+    examples/xilinx/debug/dm_sba_axil.sv
+    examples/xilinx/debug/dm_mem_port.sv
+    examples/xilinx/debug/cva5_ram_port.sv
+    examples/xilinx/debug/cva5_sba_split.sv
+    examples/xilinx/debug/cva5_debug_subsys.sv
+    examples/xilinx/cva5_wrapper.sv
+    examples/xilinx/cva5_top.v
+}
+add_files -norecurse $soc_files
 
 # ---- Debug subsystem: pulp-platform riscv-dbg v0.9.0 + common_cells v1.24.0
 # Explicit list: riscv-dbg ships two dmi_jtag_tap variants; only the BSCANE2
@@ -29,12 +59,12 @@ set dbg_files {
 }
 add_files -norecurse $dbg_files
 
-# ---- Cached memory path: CVA5's AXI4 adapter for the I$/D$ line fills
-# (its remaining dependencies live under core/, added above)
-add_files -norecurse {
-    apu/busses/multicore_arbiter.sv
-    apu/busses/axi_adapter.sv
-}
+# Nothing from apu/ is added. apu/busses/axi_adapter.sv and
+# apu/busses/multicore_arbiter.sv used to be listed here for the I$/D$ line
+# fills; the caches went when main memory moved inside cva5_top onto the local
+# memory interface, and the packager has been reporting both files unreferenced
+# ever since. They stay in the tree for the multi-hart APU, which is what they
+# are for.
 
 set_property top cva5_top [current_fileset]
 update_compile_order -fileset sources_1
@@ -45,6 +75,12 @@ ipx::unload_core ./vivado/ip_repo/component.xml
 ipx::edit_ip_in_project -upgrade true -name tmp_edit_project -directory ./vivado/ip_repo ./vivado/ip_repo/component.xml
 ipx::update_source_project_archive -component [ipx::current_core]
 ipx::associate_bus_interfaces -busif m_axi_dbg -clock clk [ipx::current_core]
+
+set cva5_desc "CVA5 RV32IM soft processor: the core, its JTAG debug module and"
+append cva5_desc " its local memory, with an AXI4-Lite master for peripherals"
+append cva5_desc " and a second for the debugger's system bus"
+cva5_ip_metadata $cva5_desc 100000000
+
 ipx::create_xgui_files [ipx::current_core]
 ipx::update_checksums [ipx::current_core]
 ipx::check_integrity [ipx::current_core]

@@ -27,7 +27,7 @@ set_property -dict { PACKAGE_PIN Y19 IOSTANDARD LVCMOS33 } [get_ports uart_rx] ;
 # header); the four chip selects take the Arduino slave-select net and three
 # digital pins, which is how a multi-device shield is normally wired.
 #
-#   spi_clk     ck_sck   H15   Sch=sck
+#   spi_sck     ck_sck   H15   Sch=sck
 #   spi_mosi    ck_mosi  T12   Sch=ar_mosi_r
 #   spi_miso    ck_miso  W15   Sch=miso
 #   spi_csn[0]  ck_ss    F16   Sch=ss          (Arduino D10 / SS)
@@ -38,7 +38,7 @@ set_property -dict { PACKAGE_PIN Y19 IOSTANDARD LVCMOS33 } [get_ports uart_rx] ;
 # For the loopback test in examples/sw/spi.c, jumper MOSI to MISO on the ICSP
 # header -- no device needed, and it proves the receive path as well as the
 # transmit one.
-set_property -dict { PACKAGE_PIN H15 IOSTANDARD LVCMOS33 } [get_ports spi_clk]
+set_property -dict { PACKAGE_PIN H15 IOSTANDARD LVCMOS33 } [get_ports spi_sck]
 set_property -dict { PACKAGE_PIN T12 IOSTANDARD LVCMOS33 } [get_ports spi_mosi]
 set_property -dict { PACKAGE_PIN W15 IOSTANDARD LVCMOS33 } [get_ports spi_miso]
 set_property -dict { PACKAGE_PIN F16 IOSTANDARD LVCMOS33 } [get_ports {spi_csn[0]}]

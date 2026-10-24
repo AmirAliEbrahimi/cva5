@@ -181,7 +181,7 @@ int main(void) {
         puts("or MISO is wired to the IP's sdi0 instead of sdi1 -- see the");
         puts("note at the top of examples/xilinx/axi/cva5_spi_axi.sv.");
         puts("0xdeaddead means a transfer never finished: check CLKDIV and");
-        puts("that the block design wired spi_clk out at all.");
+        puts("that the block design wired spi_sck out at all.");
     }
 
     puts(fails ? "spi: FAIL" : "spi: PASS");

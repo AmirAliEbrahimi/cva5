@@ -32,22 +32,51 @@ make_bd_pins_external -name uart_tx [get_bd_pins cva5_uart_0/tx]
 make_bd_pins_external -name uart_rx [get_bd_pins cva5_uart_0/rx]
 
 # ---- Reset ----------------------------------------------------------------
+# The polarity of the external reset is declared on the port, below, not here.
+# proc_sys_reset's C_EXT_RESET_HIGH is read-only in Vivado 2025.1 -- it takes
+# the polarity by propagation from whatever drives ext_reset_in now -- so
+# setting it directly fails:
+#
+#   CRITICAL WARNING: [BD 41-737] Cannot set the parameter C_EXT_RESET_HIGH on
+#                     /proc_sys_reset_0. It is read-only.
+#
+# It failed silently in the sense that mattered: the design still came up
+# active-low, because the net reset_sw also drives clk_wiz_0/resetn and that
+# pin's polarity propagated into the port. The whole reset chain therefore
+# depended on the clk_wiz connection for its sense, which is not something to
+# leave implicit.
 create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_0
-# Active-low external reset. The externalised reset_sw port inherits this, so
-# the whole reset chain (switch, clk_wiz, proc_sys_reset) is active-low:
-# switch LOW (down) = reset asserted, switch HIGH (up) = run.
-set_property -dict [list CONFIG.C_EXT_RESET_HIGH {0}] [get_bd_cells proc_sys_reset_0]
 
 # ---- Clock ----------------------------------------------------------------
 create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 clk_wiz_0
 # Active-low reset to match (this renames the port from 'reset' to 'resetn').
 set_property -dict [list CONFIG.RESET_TYPE {ACTIVE_LOW}] [get_bd_cells clk_wiz_0]
+# The board rule creates the sys_clock port and then sets its frequency, and
+# complains about its own intermediate step on the way:
+#
+#   WARNING: [BD 5-670] It is required to provide a frequency value for a user
+#            created input clock port. Please use the <-freq_hz $freq_val>
+#            argument of the create_bd_port command.
+#
+# The advice is addressed to whoever creates the port, and that is Vivado: the
+# INFO lines right after it show the rule creating sys_clock, setting FREQ_HZ to
+# 100 MHz and then to the board's real 125 MHz. Creating the port here instead,
+# with -freq_hz, would answer the warning and take the clock pin constraint away
+# from the board file with it -- pynq_z2_cva5.xdc deliberately does not
+# constrain that pin, so it would have to grow a PACKAGE_PIN and a create_clock
+# that the board file currently supplies. Not worth it for a warning the tool
+# raises about itself.
 apply_bd_automation -rule xilinx.com:bd_rule:board \
   -config { Board_Interface {sys_clock ( System Clock ) } Manual_Source {Auto}} \
   [get_bd_pins clk_wiz_0/clk_in1]
 
 # ---- One switch drives BOTH resets (active-low) --------------------------
-make_bd_pins_external -name reset_sw [get_bd_pins proc_sys_reset_0/ext_reset_in]
+# Created rather than externalised, so that the polarity is stated once, on the
+# port, and both consumers take it from there:
+# switch LOW (down) = reset asserted, switch HIGH (up) = run.
+create_bd_port -dir I -type rst reset_sw
+set_property CONFIG.POLARITY ACTIVE_LOW [get_bd_ports reset_sw]
+connect_bd_net [get_bd_ports reset_sw] [get_bd_pins proc_sys_reset_0/ext_reset_in]
 connect_bd_net [get_bd_ports reset_sw] [get_bd_pins clk_wiz_0/resetn]
 
 # Tie the clock network into the reset block. Done BEFORE the AXI automation
@@ -130,7 +159,7 @@ create_bd_cell -type ip -vlnv xilinx.com:user:cva5_spi_axi:1.0 cva5_spi_0
 connect_bd_net $sys_clk  [get_bd_pins cva5_spi_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins cva5_spi_0/rstn]
 
-make_bd_pins_external -name spi_clk  [get_bd_pins cva5_spi_0/spi_clk]
+make_bd_pins_external -name spi_sck  [get_bd_pins cva5_spi_0/spi_sck]
 make_bd_pins_external -name spi_mosi [get_bd_pins cva5_spi_0/spi_mosi]
 make_bd_pins_external -name spi_miso [get_bd_pins cva5_spi_0/spi_miso]
 make_bd_pins_external -name spi_csn  [get_bd_pins cva5_spi_0/spi_csn]

@@ -82,7 +82,7 @@ module tb_spi;
     logic        bvalid, bready, arvalid, arready, rvalid, rready;
     logic [1:0]  bresp, rresp;
 
-    logic        spi_clk;
+    logic        spi_sck;
     logic [3:0]  spi_csn;
     logic        spi_mosi, spi_miso;
     logic        miso_reg;
@@ -103,7 +103,7 @@ module tb_spi;
         .s_axi_arvalid (arvalid), .s_axi_arready (arready),
         .s_axi_rdata (rdata), .s_axi_rresp (rresp),
         .s_axi_rvalid (rvalid), .s_axi_rready (rready),
-        .spi_clk (spi_clk), .spi_csn (spi_csn),
+        .spi_sck (spi_sck), .spi_csn (spi_csn),
         .spi_mosi (spi_mosi), .spi_miso (spi_miso),
         .irq (irq)
     );
@@ -151,12 +151,12 @@ module tb_spi;
     assign spi_miso = loopback_mode ? spi_mosi : miso_reg;
 
     //One driver for the whole model, clocked on the core clock with edge
-    //detection on spi_clk -- several always blocks writing the same signals
+    //detection on spi_sck -- several always blocks writing the same signals
     //from different clocks is what Verilator's MULTIDRIVEN is for.
-    logic spi_clk_q, cs_q;
+    logic spi_sck_q, cs_q;
 
     always_ff @(posedge clk) begin
-        spi_clk_q <= spi_clk;
+        spi_sck_q <= spi_sck;
         cs_q <= cs_active;
 
         if (cs_active && !cs_q) begin
@@ -167,12 +167,12 @@ module tb_spi;
             miso_reg  <= miso_pattern[63];
         end
         else if (cs_active) begin
-            if (spi_clk && !spi_clk_q) begin
+            if (spi_sck && !spi_sck_q) begin
                 //rising edge: where the master guarantees MOSI
                 mosi_seen <= {mosi_seen[62:0], spi_mosi};
                 mosi_bits <= mosi_bits + 1;
             end
-            if (!spi_clk && spi_clk_q) begin
+            if (!spi_sck && spi_sck_q) begin
                 //falling edge: the slave moves MISO
                 miso_reg  <= miso_pattern[62 - miso_bits];
                 miso_bits <= miso_bits + 1;
@@ -306,21 +306,21 @@ module tb_spi;
             reg_write(REG_SPILEN, 32'h0000_0020);   //32 bits of command
             reg_write(REG_SPICMD, 32'hFFFF_FFFF);
             reg_write(REG_STATUS, ST_WR | cs_onehot(0));
-            @(posedge spi_clk);
+            @(posedge spi_sck);
             t0 = 0;
             @(posedge clk);
-            while (!(spi_clk == 1'b0)) begin @(posedge clk); t0++; end
-            while (!(spi_clk == 1'b1)) begin @(posedge clk); t0++; end
+            while (!(spi_sck == 1'b0)) begin @(posedge clk); t0++; end
+            while (!(spi_sck == 1'b1)) begin @(posedge clk); t0++; end
             period_div2 = t0;
             await_transfer(32);
 
             reg_write(REG_CLKDIV, 32'd8);
             reg_write(REG_STATUS, ST_WR | cs_onehot(0));
-            @(posedge spi_clk);
+            @(posedge spi_sck);
             t1 = 0;
             @(posedge clk);
-            while (!(spi_clk == 1'b0)) begin @(posedge clk); t1++; end
-            while (!(spi_clk == 1'b1)) begin @(posedge clk); t1++; end
+            while (!(spi_sck == 1'b0)) begin @(posedge clk); t1++; end
+            while (!(spi_sck == 1'b1)) begin @(posedge clk); t1++; end
             period_div8 = t1;
             await_transfer(32);
 
@@ -330,7 +330,7 @@ module tb_spi;
                        period_div8, period_div2);
                 errors++;
             end
-            $display("   spi_clk period: %0d core clocks at clkdiv 2, %0d at 8",
+            $display("   spi_sck period: %0d core clocks at clkdiv 2, %0d at 8",
                      period_div2, period_div8);
         end
 

@@ -101,8 +101,23 @@ module cva5_spi_axi #(
     output logic        s_axi_rvalid,
     input  logic        s_axi_rready,
 
-    //SPI, to the pins
-    output logic        spi_clk,
+    //SPI, to the pins.
+    //
+    //sck, not spi_clk, because Vivado's packager infers bus interfaces from
+    //port names and a name containing "clk" on an output got this one read as a
+    //clock interface:
+    //
+    //  INFO:    [IP_Flow 19-5107] Inferred bus interface 'spi_clk' of
+    //           definition 'xilinx.com:signal:clock:1.0'
+    //  WARNING: [IP_Flow 19-4751] Bus Interface 'spi_clk': FREQ_HZ bus
+    //           parameter is missing for output clock interface
+    //
+    //It is not a clock in the block design's sense -- it is a divided serial
+    //clock on its way to a pin, nothing in the design is clocked from it, and
+    //there is no single frequency to declare since software sets the divider.
+    //The conventional SPI name has no "clk" in it, so it stops the inference
+    //and is the better name anyway.
+    output logic        spi_sck,
     output logic [3:0]  spi_csn,
     output logic        spi_mosi,
     input  logic        spi_miso,
@@ -180,7 +195,7 @@ module cva5_spi_axi #(
 
         .events_o (events),
 
-        .spi_clk (spi_clk),
+        .spi_clk (spi_sck),
         .spi_csn0 (spi_csn[0]),
         .spi_csn1 (spi_csn[1]),
         .spi_csn2 (spi_csn[2]),

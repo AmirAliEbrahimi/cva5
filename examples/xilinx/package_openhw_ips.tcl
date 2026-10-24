@@ -17,9 +17,14 @@
 # Sourced twice in one interactive Vivado session, `dict set` would add to
 # whatever these already held, and an IP removed from this file would go on
 # being packaged from the stale copy in memory. Start from nothing.
-unset -nocomplain openhw_ips openhw_busifs openhw_sim_only
+unset -nocomplain openhw_ips openhw_busifs openhw_descs openhw_sim_only
 
 set openhw_repo ./vivado/ip_repo_openhw
+
+# Shared with package_as_ip_pynq_z2.tcl. Defines cva5_ip_metadata, and its
+# header is where the packager's warnings about these IPs are written down --
+# the two it answers and the two nothing here can.
+source ./examples/xilinx/ip_metadata.tcl
 
 # Each entry: IP name -> source files, in compile order: packages and leaf
 # modules first, the wrapper (the IP's top) last. Verilator needs that order
@@ -42,7 +47,6 @@ dict set openhw_ips cva5_axi_xbar {
     third_party/common_cells/src/lzc.sv
     third_party/common_cells/src/counter.sv
     third_party/common_cells/src/delta_counter.sv
-    third_party/common_cells/src/onehot_to_bin.sv
     third_party/common_cells/src/rr_arb_tree.sv
     third_party/common_cells/src/addr_decode.sv
     third_party/common_cells/src/fifo_v3.sv
@@ -55,6 +59,18 @@ dict set openhw_ips cva5_axi_xbar {
     examples/xilinx/vendor/axi_lite_xbar.sv
     examples/xilinx/axi/cva5_axi_xbar.sv
 }
+
+# onehot_to_bin.sv was in that list and is not any more. axi_demux needed it
+# while this was an AXI4 crossbar; the Lite path goes through axi_lite_demux and
+# rr_arb_tree, which get by with lzc, so it survived the collapse to Lite as a
+# dependency nothing instantiates:
+#
+#   WARNING: [IP_Flow 19-3833] Unreferenced file from the top module is not
+#            packaged: '.../common_cells/src/onehot_to_bin.sv'.
+#
+# That warning is the only check on these lists. Verilator reads them too, but
+# an unused file there is silent, so a stale entry only ever shows up here --
+# which is a reason to keep this log clean enough that one line stands out.
 
 # lowRISC's UART, replacing Xilinx's axi_uartlite. The register map is
 # axi_uartlite's, so examples/sw and the QEMU machine are unchanged -- see the
@@ -151,6 +167,16 @@ dict set openhw_busifs cva5_clint_axi {s_axi}
 dict set openhw_busifs cva5_plic_axi {s_axi}
 dict set openhw_busifs cva5_spi_axi {s_axi}
 
+# One sentence per IP for the Vivado catalog, which is also what answers
+# IP_Flow 19-11888. Say what the block is and where it came from; the file lists
+# above carry the reasoning.
+dict set openhw_descs cva5_axi_xbar {AXI4-Lite crossbar (pulp-platform axi_lite_xbar) with the address decode built in from examples/sw/soc.h, in place of the Xilinx AXI Interconnect}
+dict set openhw_descs cva5_uart {UART (lowRISC) behind an AXI4-Lite adapter, keeping axi_uartlite's register map}
+dict set openhw_descs cva5_clint_axi {RISC-V core-local interruptor: mtime, mtimecmp and msip, driving the hart's timer and software interrupts directly}
+dict set openhw_descs cva5_plic_axi {RISC-V platform-level interrupt controller, aggregating device interrupts into the hart's single external interrupt}
+dict set openhw_descs cva5_spi_axi {SPI master (pulp-platform axi_spi_master) with four chip selects and a programmable clock divider, in place of axi_quad_spi}
+dict set openhw_descs cva5_axi_ram {AXI4 block-RAM slave (ZipCPU demofull); simulation only, not packaged}
+
 # Entries present for the testbenches' file lists but deliberately not
 # packaged. See the note above cva5_axi_ram.
 set openhw_sim_only {cva5_axi_ram}
@@ -188,6 +214,8 @@ foreach ip [dict keys $openhw_ips] {
     foreach busif [dict get $openhw_busifs $ip] {
         ipx::associate_bus_interfaces -busif $busif -clock clk [ipx::current_core]
     }
+
+    cva5_ip_metadata [dict get $openhw_descs $ip] 100000000
 
     ipx::create_xgui_files [ipx::current_core]
     ipx::update_checksums [ipx::current_core]
