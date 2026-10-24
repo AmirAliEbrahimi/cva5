@@ -24,12 +24,22 @@ in the `docs` directory.
 > - RISC-V external debug support (debug mode, `dcsr`/`dpc`/`dscratch`, `dret`,
 >   single-step) and a PYNQ-Z2 system that runs programs from on-chip block RAM, so software
 >   can be loaded and debugged over JTAG without rebuilding the bitstream (see
->   [Debugging on the PYNQ-Z2](#debugging-on-the-pynq-z2)).
+>   [Debugging on the PYNQ-Z2](#debugging-on-the-pynq-z2));
+> - an SoC for that board built from **open-hardware blocks rather than Xilinx IP** —
+>   an AXI4-Lite crossbar, UART, CLINT, PLIC, SPI and I2C master, each packaged as an IP
+>   and each with a Verilator testbench. The only Xilinx IPs left in the block design are
+>   the MMCM, which is a hard block, and a reset synchroniser (see
+>   [`examples/xilinx/README.pynq_z2.md`](examples/xilinx/README.pynq_z2.md)).
 >
-> **Clone with submodules.** The debug module comes from
-> [pulp-platform/riscv-dbg](https://github.com/pulp-platform/riscv-dbg) and
-> [common_cells](https://github.com/pulp-platform/common_cells), pinned under
-> `third_party/`:
+> **Clone with submodules.** Six upstream projects are pinned under `third_party/`:
+> [riscv-dbg](https://github.com/pulp-platform/riscv-dbg) and
+> [common_cells](https://github.com/pulp-platform/common_cells) for the debug module,
+> [axi](https://github.com/pulp-platform/axi) for the crossbar,
+> [axi_spi_master](https://github.com/pulp-platform/axi_spi_master) for the SPI,
+> [verilog-i2c](https://github.com/alexforencich/verilog-i2c) for the I2C, and
+> [wb2axip](https://github.com/ZipCPU/wb2axip) for a measured dead end kept for its
+> measurement. All are Apache-2.0 or Solderpad except verilog-i2c, which is MIT; the
+> reasoning is in `examples/xilinx/README.pynq_z2.md`.
 >
 > ```bash
 > git clone --recurse-submodules https://github.com/AmirAliEbrahimi/cva5
@@ -227,7 +237,7 @@ A script to package CVA5 as an IP is available and can be run in Vivado with
 `source ./examples/xilinx/package_as_ip.tcl`. A companion script can then create a system
 running a small hello-world application from block memory on the Nexys A7 FPGA.
 
-For detailed instructions on executing the hello-world application from block memory on the PYNQ-Z2 FPGA, please review `examples\xilinx\README.pynq_z2.md`. Tested with Vivado 2025.1
+For detailed instructions on executing the hello-world application from block memory on the PYNQ-Z2 FPGA, please review [`examples/xilinx/README.pynq_z2.md`](examples/xilinx/README.pynq_z2.md). Tested with Vivado 2025.1
 
 The PYNQ-Z2 system in `examples/xilinx/pynq_z2_sys.tcl` additionally carries a RISC-V Debug
 Module and runs programs from on-chip block RAM; see

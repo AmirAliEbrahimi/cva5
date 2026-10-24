@@ -401,6 +401,53 @@ whether the design still closes and whether the worst path lands in the RTL
 that changed, not on which way the number moved. `README.pynq_z2.md` keeps the
 build-by-build history and the measurements behind this.
 
+## Checks that exist, and what each one is for
+
+Most of this file documents a trap that no testbench can see. These are the
+things that *can* be checked, and they are easy to miss because none of them
+run from one command:
+
+```sh
+make -f tools/cva5.mak CVA5_DIR=$(pwd) lint      # the core, at Verilator 5.032
+bash test_benches/axi/run_xbar.sh                # 72 checks x 3 port widths
+bash test_benches/axi/run_plic.sh                # 103/57/57, + the vendoring diff
+bash test_benches/axi/run_irq_concat.sh          # 62, + the source numbering
+bash test_benches/axi/run_spi.sh                 # 73
+bash test_benches/axi/run_i2c.sh                 # 139, + the IOBUF mutants
+bash test_benches/axi/run_uart.sh
+sh   test_benches/debug/run_sba_split.sh         # 73
+sh   test_benches/debug/run_ram_port.sh          # 1110
+sh   test_benches/debug/run_clint.sh
+sh   test_benches/debug/run_boot_rom.sh
+sh   test_benches/debug/run_tb.sh
+python3 tools/check-soc-map.py                   # three copies of the map agree
+python3 tools/check-openocd-globals.py examples/xilinx/openocd/*.cfg
+python3 tools/check-doc-refs.py README.md CLAUDE.md \
+        examples/xilinx/README.pynq_z2.md        # 99 filenames named in prose
+```
+
+Four of those check something other than behaviour, and are the ones worth
+knowing about:
+
+- `run_plic.sh` diffs the vendored `cva5_plic*` against `apu/plic` from
+  `module` down, so a rename stays a rename.
+- `check-soc-map.py` holds `soc.h`, the crossbar's decode parameters and the
+  OpenOCD config together. None of the three can include the others.
+- `check-openocd-globals.py` reads the lines of the OpenOCD configs that have
+  not run yet, which in a diagnostic is most of them.
+- `check-doc-refs.py` resolves every filename these documents name. Prose is
+  the one place a rename leaves no compile error behind, and it had already
+  gone stale: the README sent readers to a "pynq_z2_waivers.xdc" that has
+  never existed, for a waiver that lives in `pynq_z2_jtag.xdc`. Note the
+  quotes rather than backticks on that one — backticks are what the checker
+  reads as a file reference, so a name being cited *as* missing must not wear
+  them, or the documentation of the bug reintroduces it.
+
+And two things no check covers, both recorded above: the packaging logs
+(`19-3833` for a dead file list entry, `8-5799` for a lost tri-state,
+`8-4445` for a missing `ram.mif`), and the port parity between
+`cva5_wrapper.sv` and `cva5_top.v`, whose script is in the first section.
+
 ## Delivery
 
 Patches only. Commits are authored by the repository owner, carry no

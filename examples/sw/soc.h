@@ -1,5 +1,13 @@
 /*
- * SoC memory map -- the one place software gets an address from.
+ * SoC memory map -- the one place SOFTWARE gets an address from.
+ *
+ * It is not the only copy. The hardware and the debugger cannot include a C
+ * header, so the same addresses appear as parameters in
+ * examples/xilinx/axi/cva5_axi_xbar.sv, where the decode lives, and as Tcl in
+ * examples/xilinx/openocd/cva5-pynq-z2-p1.cfg, where p1_diag probes each
+ * peripheral before any software runs. tools/check-soc-map.py holds the three
+ * together; a disagreement is not a build error in any of them, and shows up
+ * as a decode error that looks like a broken bus.
  *
  * The addresses follow CVA6's, so that anything written against a CORE-V
  * system lands in the right place here, and so the choices are someone

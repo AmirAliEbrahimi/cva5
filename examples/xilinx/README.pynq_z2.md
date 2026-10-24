@@ -6,17 +6,36 @@ block RAM inside the core, with lowRISC's UART for console output. A single slid
 
 ## Files (in `examples/xilinx/`)
 
-| file                          | purpose                                                                 |
-|-------------------------------|-------------------------------------------------------------------------|
-| `package_as_ip_pynq_z2.tcl`   | packages the CVA5 core as a Vivado IP into `./vivado/ip_repo`            |
-| `pynq_z2_sys.tcl`             | builds the SoC block design (clock, reset, CVA5, UART) + XDC            |
-| `pynq_z2_cva5.xdc`            | pins only — reset switch and PMOD UART                                  |
-| `vendor/boot_rom.sv`          | riscv-dbg's boot ROM, hand-vendored (see Boot ROM)                      |
-| `vendor/uart.sv`              | lowRISC's UART, hand-vendored (see UART)                                |
-| `axi/cva5_uart.sv`            | that UART behind an AXI4-Lite slave port                                |
-| `vendor/cva5_clint.sv`        | CVA5's CLINT, vendored with a 1 MHz prescaler (see CLINT)               |
-| `axi/cva5_clint_axi.sv`       | that CLINT as a block-design peripheral                                 |
-| `pynq_z2_jtag.xdc`            | JTAG clock, its CDC constraints, TIMING-9 waiver (implementation only)  |
+Build scripts, run from the repository root in this order:
+
+| file | purpose |
+|---|---|
+| `package_as_ip_pynq_z2.tcl` | packages CVA5 and its debug subsystem as one IP into `./vivado/ip_repo`. Needs `examples/sw/ram.mif` to exist first — it is baked in as the memory's preload |
+| `package_openhw_ips.tcl` | packages the seven open-hardware blocks into `./vivado/ip_repo_openhw`; its file lists are also what the testbenches compile, through `tools/ip-filelist.py` |
+| `ip_metadata.tcl` | shared by both: descriptions and `FREQ_HZ`, and a record of which packager warnings are answerable and which are structural |
+| `pynq_z2_sys.tcl` | builds the block design — clock, reset, core, crossbar, five peripherals, interrupt wiring, address map — and adds the constraints |
+| `pynq_z2_cva5.xdc` | pins: reset switch, UART on a PMOD, SPI and I2C on the Arduino header |
+| `pynq_z2_jtag.xdc` | JTAG clock, its CDC constraints and the TIMING-9 waiver (implementation only, for the reason given below) |
+
+The RTL, by subsystem:
+
+| file | purpose |
+|---|---|
+| `cva5_wrapper.sv` | the SoC's core: CVA5, its debug subsystem, the boot ROM and 128 KB of local memory |
+| `cva5_top.v` | a plain-Verilog, port-for-port shim around it, because the IP packager will not analyse a SystemVerilog top. **A port added to one must be added to the other** — see `CLAUDE.md` |
+| `debug/cva5_debug_subsys.sv` | riscv-dbg's Debug Module, DMI and JTAG TAP |
+| `debug/cva5_sba_split.sv` | routes the debugger's system bus: RAM window straight to the RAM's second port, everything else out to the crossbar |
+| `debug/cva5_ram_port.sv`, `debug/dm_mem_port.sv`, `debug/dm_sba_axil.sv` | the rest of the debugger's path to memory |
+| `axi/cva5_axi_xbar.sv` | the peripheral interconnect: two slave ports, five master ports, address decode from `soc.h` |
+| `axi/cva5_uart.sv` | lowRISC's UART behind AXI4-Lite, keeping `axi_uartlite`'s register map |
+| `axi/cva5_clint_axi.sv` | the CLINT as a peripheral: `mtime`, `mtimecmp`, `msip` |
+| `axi/cva5_plic_axi.sv` | the PLIC, aggregating device interrupts into the hart's external interrupt |
+| `axi/cva5_irq_concat.sv` | two device interrupt lines into the vector the PLIC takes, in place of `xlconcat` |
+| `axi/cva5_spi_axi.sv` | pulp's SPI master behind AXI4-Lite |
+| `axi/cva5_i2c_axi.sv` | Forencich's I2C master, with explicitly instantiated `IOBUF`s |
+| `axi/cva5_axi_ram.sv` | a measured dead end, kept for the measurement. Simulation only; see Memory |
+| `vendor/` | hand-vendored copies: riscv-dbg's boot ROM, lowRISC's UART, CVA5's CLINT and PLIC, and the pulp AXI-Lite blocks. Renamed `cva5_*` where upstream compiles the original into the core simulation |
+| `openocd/` | bring-up and program-load configs. `cva5-pynq-z2-p1.cfg` carries `p1_diag`, which probes every peripheral over JTAG with the core held in reset |
 
 ## Open-hardware AXI blocks
 
@@ -261,9 +280,9 @@ memtest` passing -- the only test that addresses all 128 KB.
 Run `./test_benches/axi/run_xbar.sh`, `bash test_benches/axi/run_plic.sh`,
 `bash test_benches/axi/run_irq_concat.sh`, `bash test_benches/axi/run_spi.sh`
 and `sh test_benches/debug/run_sba_split.sh` before spending a synthesis run —
-57 checks across three port-width configurations, 103/57/57 across three PLIC
+72 checks across three port-width configurations, 103/57/57 across three PLIC
 source counts, 62 for the interrupt wiring into a two-source PLIC, 73 for the
-SPI, and 73 for the debugger's bus split. All of them take their file lists
+SPI, 139 for the I2C, and 73 for the debugger's bus split. All of them take their file lists
 from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so what is simulated
 is exactly what is synthesised.
 
@@ -1028,7 +1047,7 @@ Measured on the routed design with both in force — requirement 20.000, actual
 **0 violations**. The router is under no pressure from the bound; it is there
 to keep things that way.
 
-One Warning remains after that, and it is waived in `pynq_z2_waivers.xdc`:
+One Warning remains after that, and it is waived in `pynq_z2_jtag.xdc`:
 **TIMING-9, "Unknown CDC Logic"** — no double-register synchroniser on the
 capture side. That is structural for any handshake CDC. The payload
 deliberately has no synchroniser, which is the point of qualifying it with a
@@ -1101,7 +1120,7 @@ something.
 
 | check | command | covers |
 |-------|---------|--------|
-| crossbar | `test_benches/axi/run_xbar.sh` | 57 checks × 3 port-width configurations: decode to all four slaves, both masters to each, cross-contamination, address truncation per master port, window boundaries including the PLIC/UART abutment, DECERR |
+| crossbar | `test_benches/axi/run_xbar.sh` | 72 checks × 3 port-width configurations: decode to all five slaves, both masters to each, cross-contamination, address truncation per master port, window boundaries including the PLIC/UART abutment and the I2C's hole on both sides, DECERR, and the AR-to-R latency measured and printed |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
@@ -1122,11 +1141,23 @@ something.
 | debugger load | `make -C examples/sw load` | SBA block write, verify, release |
 | DM bring-up | `openocd … -c "init; p1_diag; shutdown"` | DM, SBA, then every peripheral on the bus with the core still in reset: RAM, UART, the CLINT's `mtime` advancing, a PLIC write/read-back, the SPI reporting idle, and the I2C's prescale reading its non-zero reset value — the one identity check here a bus returning zeros cannot fake |
 | OpenOCD config scoping | `python3 tools/check-openocd-globals.py examples/xilinx/openocd/*.cfg` | procs that read a global without declaring it. Tcl does not complain until the line runs, and in a diagnostic that can be never |
+| memory map | `python3 tools/check-soc-map.py` | that `soc.h`, the crossbar's decode parameters and the OpenOCD config still agree. Three copies, none of which can include the others |
+| documentation | `python3 tools/check-doc-refs.py README.md CLAUDE.md examples/xilinx/README.pynq_z2.md` | that every filename these documents name exists. A renamed file leaves its old name behind in prose, where nothing compiles it — this document sent readers to a "pynq_z2_waivers.xdc" that never existed. Names cited as missing go in quotes, not backticks, which are what the checker reads |
 | **all of main memory** | `make -C examples/sw memtest` | **the only thing that addresses all 128 KB**, so the only thing that reaches cascade rows above the first. Prints on the serial console, not the terminal |
 | QEMU parity | `tools/cva5-qemu` | same reset vector and map as the board. `csrs` is the known exception: QEMU implements `time` |
 
-Run the four simulation checks before spending a synthesis run. All of the
-above pass on the current design.
+Run the simulation checks before spending a synthesis run — the AXI ones take
+seconds and `run_xbar.sh`, `run_plic.sh` and `run_i2c.sh` each sweep several
+configurations.
+
+**All of the above pass on the current design, in simulation and on hardware.**
+The hardware run was at the `+0.365` build: `p1_diag`, `load`, `memtest`,
+`timer` (7000 µs per 100000 iterations, so `mtime` ticks at exactly 1 MHz;
+`mtip` overshoot 0; `msip` polls 0), `i2c`, `spi` including the loopback and
+the interrupt, and `plic` including the keypress. The I2C's bus scan found
+nothing, which is the expected result with nothing attached and is the one
+thing in this design still unproven on hardware — the pins can only be
+demonstrated by a device answering.
 
 ## Pin map (`xc7z020clg400-1`)
 
