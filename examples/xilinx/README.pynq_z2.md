@@ -247,7 +247,7 @@ memtest` passing -- the only test that addresses all 128 KB.
 
 Run `./test_benches/axi/run_xbar.sh`, `bash test_benches/axi/run_plic.sh` and
 `sh test_benches/debug/run_sba_split.sh` before spending a synthesis run — 47
-checks across three port-width configurations, 100, and 73. The first two take
+checks across three port-width configurations, 103 and 57 across two source counts, and 73. The first two take
 their file lists from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so
 what is simulated is exactly what is synthesised.
 
@@ -776,10 +776,10 @@ something.
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
 | CLINT | `sh test_benches/debug/run_clint.sh` | mtime tick rate, writes, mtimecmp→mtip at the boundary, msip |
-| PLIC | `bash test_benches/axi/run_plic.sh` | 98 checks: the register map, pending versus eip, claim/complete including an unserviced level source, edge latching, priority order and ties, threshold suppression. Also checks the vendored copies still match `apu/plic` |
+| PLIC | `bash test_benches/axi/run_plic.sh` | 103 checks at `NUM_SOURCES` 8 and 57 at 1 — the configuration the board deploys, which takes different widths inside the PLIC: the register map, pending versus eip, claim/complete including an unserviced level source, edge latching, priority order and ties, threshold suppression. Also checks the vendored copies still match `apu/plic` |
 | CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
 | counter CSRs, in the core sim | `make -C examples/sw run-csrs` | `rdcycle`/`rdinstret`/`mcycle` readable and advancing, `rdtime` and `rdtimeh` taking an illegal-instruction trap. The only place both polarities of `INCLUDE_TIME_CSR` can be run: the sim takes upstream's `EXAMPLE_CONFIG`, so with the bit set the three trap checks are *expected* to fail |
-| PLIC on hardware | `make -C examples/sw plic` | the register file over the bus, priority 0 and the threshold suppressing, then a **keypress on the console** reaching `mip.MEIP`, claim naming the UART, and complete leaving it quiet. Interactive, because the UART's receive interrupt is the only source wired and software cannot raise it |
+| PLIC on hardware | `make -C examples/sw plic` | the register file over the bus, then **one keypress on the console** reaching `mip.MEIP`, and every filtering check made against that one asserted source: the threshold holding it down and letting it back, priority 0 doing the same, claim naming the UART, and complete leaving it quiet. Interactive, because the UART's receive interrupt is the only source wired and software cannot raise it. Waits 30 s, measured with `mtime` |
 | counter CSRs, on hardware | `make -C examples/sw csrs` | the same checks plus the CLINT's `mtime` advancing over the bus. Prints on the serial console. Fails under QEMU on purpose |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |
 | debugger bus split | `sh test_benches/debug/run_sba_split.sh` | 73 checks: `dm_sba_axil` → `cva5_sba_split` → the real RAM port and `tdp_ram` on one side, a peripheral on the other. Routing, window edges, error propagation, byte strobes, and collisions with the core's port |

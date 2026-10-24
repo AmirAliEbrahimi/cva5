@@ -69,8 +69,12 @@ module tb_plic #(
     logic        bvalid, bready, arvalid, arready, rvalid, rready;
     logic [1:0]  bresp, rresp;
 
-    logic [NUM_SOURCES-1:0] irq_srcs = '0;
-    logic                   eip;
+    //Stimulus is always eight bits wide and only the low NUM_SOURCES of it
+    //reach the DUT. The multi-source sections below are guarded by a runtime
+    //`if`, not a generate, so a narrow build would otherwise see
+    //out-of-range selects in code it never executes.
+    logic [7:0] src = '0;
+    logic       eip;
 
     //Source 3 is wired as edge sensitive, every other source as level --
     //sensitivity is a build-time parameter, so the bench instantiates the
@@ -92,7 +96,7 @@ module tb_plic #(
         .s_axi_arvalid (arvalid), .s_axi_arready (arready),
         .s_axi_rdata (rdata), .s_axi_rresp (rresp),
         .s_axi_rvalid (rvalid), .s_axi_rready (rready),
-        .irq_srcs (irq_srcs),
+        .irq_srcs (src[NUM_SOURCES-1:0]),
         .eip (eip)
     );
 
@@ -154,14 +158,17 @@ module tb_plic #(
 
         //---- the register file
         $display("-- registers");
-        reg_write(PRIO(3), 32'd7);
-        reg_read(PRIO(3), v);
-        expect_eq("source 3 priority", v, 32'd7);
         reg_write(PRIO(1), 32'd2);
         reg_read(PRIO(1), v);
         expect_eq("source 1 priority", v, 32'd2);
-        reg_read(PRIO(3), v);
-        expect_eq("source 3 priority is untouched by source 1", v, 32'd7);
+
+        if (NUM_SOURCES >= 3) begin
+            reg_write(PRIO(3), 32'd7);
+            reg_read(PRIO(3), v);
+            expect_eq("source 3 priority", v, 32'd7);
+            reg_read(PRIO(1), v);
+            expect_eq("source 1 priority is untouched by source 3", v, 32'd2);
+        end
 
         reg_write(PRIO(0), 32'd15);
         reg_read(PRIO(0), v);
@@ -181,7 +188,7 @@ module tb_plic #(
         $display("-- level source, pending and eip");
         reg_write(ENABLE, 32'd0);
         reg_write(PRIO(1), 32'd0);
-        irq_srcs[0] = 1'b1;              //source 1
+        src[0] = 1'b1;              //source 1
         settle();
 
         reg_read(PENDING, v);
@@ -214,7 +221,7 @@ module tb_plic #(
         reg_read(PENDING, v);
         expect_eq("pending again", v, 32'd2);
 
-        irq_srcs[0] = 1'b0;              //drop the line, then clear it out
+        src[0] = 1'b0;              //drop the line, then clear it out
         reg_read(CLAIM, v);
         expect_eq("claim returns source 1 again", v, 32'd1);
         reg_write(CLAIM, 32'd1);
@@ -223,15 +230,21 @@ module tb_plic #(
         reg_read(PENDING, v);
         expect_eq("nothing pending", v, 32'd0);
 
+        //---- the rest needs more than one source. The block design deploys
+        //NUM_SOURCES = 1 -- one UART -- and that configuration takes different
+        //widths inside the PLIC (a 1-bit claim id, a 2-entry padded source
+        //vector), so it is swept as its own run rather than assumed.
+        if (NUM_SOURCES >= 3) begin
+
         //---- an edge source latches a pulse
         $display("-- edge source");
         reg_write(PRIO(3), 32'd3);       //source 3 is the edge-sensitive one
         reg_write(ENABLE, 32'd8);
         settle();
 
-        irq_srcs[2] = 1'b1;
+        src[2] = 1'b1;
         @(negedge clk);
-        irq_srcs[2] = 1'b0;              //one cycle, then gone
+        src[2] = 1'b0;              //one cycle, then gone
         settle();
 
         reg_read(PENDING, v);
@@ -259,18 +272,18 @@ module tb_plic #(
         reg_write(PRIO(1), 32'd4);
         reg_write(PRIO(2), 32'd9);
         reg_write(ENABLE, 32'd6);        //sources 1 and 2
-        irq_srcs[0] = 1'b1;
-        irq_srcs[1] = 1'b1;
+        src[0] = 1'b1;
+        src[1] = 1'b1;
         settle();
 
         reg_read(CLAIM, v);
         expect_eq("the higher priority is claimed first", v, 32'd2);
-        irq_srcs[1] = 1'b0;              //the handler services the device
+        src[1] = 1'b0;              //the handler services the device
         reg_write(CLAIM, 32'd2);
         settle();
         reg_read(CLAIM, v);
         expect_eq("then the lower one", v, 32'd1);
-        irq_srcs[0] = 1'b0;
+        src[0] = 1'b0;
         reg_write(CLAIM, 32'd1);
         settle();
         expect_eq("and then nothing is left", 32'(eip), 32'd0);
@@ -280,8 +293,8 @@ module tb_plic #(
         //complete it without quieting it.
         reg_write(PRIO(1), 32'd4);
         reg_write(PRIO(2), 32'd9);
-        irq_srcs[0] = 1'b1;
-        irq_srcs[1] = 1'b1;
+        src[0] = 1'b1;
+        src[1] = 1'b1;
         settle();
         reg_read(CLAIM, v);
         expect_eq("the high one again", v, 32'd2);
@@ -290,24 +303,24 @@ module tb_plic #(
         reg_read(CLAIM, v);
         expect_eq("an unserviced level source is re-claimed ahead of the rest",
                   v, 32'd2);
-        irq_srcs[1] = 1'b0;
+        src[1] = 1'b0;
         reg_write(CLAIM, 32'd2);
         settle();
         reg_read(CLAIM, v);
         expect_eq("and only then does the low one get its turn", v, 32'd1);
-        irq_srcs[0] = 1'b0;
+        src[0] = 1'b0;
         reg_write(CLAIM, 32'd1);
         settle();
 
         //Ties go to the lower id.
         reg_write(PRIO(1), 32'd6);
         reg_write(PRIO(2), 32'd6);       //equal
-        irq_srcs[0] = 1'b1;
-        irq_srcs[1] = 1'b1;
+        src[0] = 1'b1;
+        src[1] = 1'b1;
         settle();
         reg_read(CLAIM, v);
         expect_eq("a tie goes to the lower source id", v, 32'd1);
-        irq_srcs[0] = 1'b0;
+        src[0] = 1'b0;
         reg_write(CLAIM, 32'd1);
         settle();
         reg_read(CLAIM, v);
@@ -315,20 +328,31 @@ module tb_plic #(
         reg_write(CLAIM, 32'd2);
         settle();
 
-        //Both pending again, at equal priority 6, for the threshold checks.
-        irq_srcs[0] = 1'b1;
-        irq_srcs[1] = 1'b1;
-        settle();
-        expect_eq("both pending, eip up", 32'(eip), 32'd1);
+        end //NUM_SOURCES >= 3
 
-        //---- the threshold suppresses everything
+        //Set up whatever this build has for the threshold checks: source 1
+        //always, source 2 as well when it exists, both at priority 6.
+        reg_write(PRIO(1), 32'd6);
+        reg_write(ENABLE, NUM_SOURCES >= 3 ? 32'd6 : 32'd2);
+        src[0] = 1'b1;
+        if (NUM_SOURCES >= 3) begin
+            reg_write(PRIO(2), 32'd6);
+            src[1] = 1'b1;
+        end
+        settle();
+        expect_eq("pending, eip up", 32'(eip), 32'd1);
+
+        //---- the threshold suppresses what is pending, with whatever is
+        //pending: both sources when there are three or more, otherwise the
+        //one the single-source build has.
         $display("-- threshold");
         reg_write(THRESHOLD, 32'd15);
         settle();
         expect_eq("a threshold above every priority holds eip down",
                   32'(eip), 32'd0);
         reg_read(PENDING, v);
-        expect_eq("the sources are still pending underneath", v, 32'd6);
+        expect_eq("the sources are still pending underneath",
+                  v, NUM_SOURCES >= 3 ? 32'd6 : 32'd2);
         reg_read(CLAIM, v);
         expect_eq("and a claim reads 0", v, 32'd0);
 
@@ -336,7 +360,7 @@ module tb_plic #(
         settle();
         expect_eq("lowering it lets them through again", 32'(eip), 32'd1);
 
-        irq_srcs = '0;
+        src = '0;
 
         if (errors == 0)
             $display("PASS tb_plic: %0d checks (NUM_SOURCES=%0d PRIORITY_W=%0d)",

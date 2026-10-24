@@ -54,14 +54,23 @@ UPSTREAM_NOISE="-Wno-UNUSEDSIGNAL -Wno-ASCRANGE -Wno-WIDTHEXPAND
 echo "== lint (our wrapper is held to -Wall) =="
 verilator --lint-only -Wall $UPSTREAM_NOISE --top-module cva5_plic_axi $DESIGN
 
-echo "== build =="
+# Two configurations: eight sources, which exercises the priority tree, the
+# edge path and ties; and one source, which is what the block design deploys
+# and which takes different widths inside the PLIC -- a 1-bit claim id and a
+# 2-entry padded source vector. Testing only the wide one would leave the
+# shipped configuration unexercised.
 rm -rf "$BUILD"
-mkdir -p "$BUILD"
-verilator --binary -j 0 --timing \
-    $UPSTREAM_NOISE -Wno-BLKSEQ -Wno-INITIALDLY -Wno-WIDTHTRUNC \
-    --top-module tb_plic \
-    -Mdir "$BUILD" -o tb_plic \
-    $DESIGN test_benches/axi/tb_plic.sv
-
-echo "== run =="
-"$BUILD/tb_plic"
+status=0
+for n in 8 1; do
+    dir="$BUILD/src$n"
+    echo "== build (NUM_SOURCES=$n) =="
+    mkdir -p "$dir"
+    verilator --binary -j 0 --timing \
+        $UPSTREAM_NOISE -Wno-BLKSEQ -Wno-INITIALDLY -Wno-WIDTHTRUNC \
+        --top-module tb_plic -GNUM_SOURCES=$n \
+        -Mdir "$dir" -o tb_plic \
+        $DESIGN test_benches/axi/tb_plic.sv
+    echo "== run =="
+    "$dir/tb_plic" || status=1
+done
+exit $status
