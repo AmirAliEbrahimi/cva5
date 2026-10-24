@@ -76,6 +76,36 @@
 #define PLIC_SRC_UART      1u
 #define TIMER_BASE  0x18000000u
 #define SPI_BASE    0x20000000u
+/* pulp-platform's axi_spi_master, byte offsets into its window. Word
+ * addressing with five bits of word address, so the device decodes 128 bytes:
+ * the registers are words 0..5, a write with word-address bit 3 set lands in
+ * the TX FIFO, and a read with bit 4 set comes from the RX FIFO. */
+#define SPI_STATUS_OFF   0x00u
+#define SPI_CLKDIV_OFF   0x04u
+#define SPI_CMD_OFF      0x08u
+#define SPI_ADDR_OFF     0x0Cu
+#define SPI_LEN_OFF      0x10u
+#define SPI_DUMMY_OFF    0x14u
+#define SPI_TX_FIFO_OFF  0x20u
+#define SPI_RX_FIFO_OFF  0x40u
+/* STATUS, written: these start a transfer or reset the controller, and the
+ * chip select is one-hot in bits 11:8. */
+#define SPI_START_RD  (1u << 0)
+#define SPI_START_WR  (1u << 1)
+#define SPI_START_QRD (1u << 2)
+#define SPI_START_QWR (1u << 3)
+#define SPI_SWRST     (1u << 4)
+#define SPI_CS(n)     (1u << (8u + (n)))
+/* STATUS, read: bit 0 is set in the IDLE state -- an idle flag, not busy --
+ * and the FIFO levels sit above the state bits. */
+#define SPI_IDLE          (1u << 0)
+#define SPI_TX_LEVEL(s)   (((s) >> 24) & 0x1Fu)
+#define SPI_RX_LEVEL(s)   (((s) >> 16) & 0x1Fu)
+/* SPILEN: command, address and data lengths, all in bits. Command and address
+ * bits are taken from the top of SPICMD/SPIADR, MSB first. */
+#define SPI_LEN(cmd_bits, addr_bits, data_bits) \
+    (((cmd_bits) & 0xFFu) | (((addr_bits) & 0xFFu) << 8) | \
+     (((data_bits) & 0xFFFFu) << 16))
 
 #define RAM_BASE    0x80000000u
 #define RAM_SIZE    0x00020000u   /* 128 KB on the board; 4 KB in the sim */

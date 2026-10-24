@@ -29,6 +29,7 @@ all-Xilinx baseline of **WNS +0.107** at 100 MHz on the `xc7z020clg400-1`:
 | `axi_interconnect`   | `cva5_axi_xbar` (pulp `axi_lite_xbar`) | Solderpad 0.51 | same build |
 | `axi_uartlite`       | `cva5_uart` (lowRISC `uart`) | Apache-2.0 | see below |
 | `axi_bram_ctrl` + `blk_mem_gen` | *removed* — main memory is `tdp_ram` inside the core | — | — |
+| `axi_quad_spi` | `cva5_spi_axi` (pulp `axi_spi_master`) | Solderpad 0.51 | packaged, not yet in the BD |
 | `clk_wiz` | *kept* — the MMCM is a hard block | — | — |
 
 `clk_wiz` is the only Xilinx IP left in the block design.
@@ -613,6 +614,49 @@ in `plic_cmptree`'s unregistered base case, `highest_valid` is assigned
 `chose_priority` rather than `chose_valid`. `plic.sv` leaves that output
 unconnected, so it cannot matter here — but it would to anyone who wired it up.
 
+### SPI
+
+pulp-platform's `axi_spi_master`, in place of Xilinx's `axi_quad_spi`:
+Solderpad 0.51, four chip selects, a programmable clock divider,
+command/address/dummy phases and 32-bit TX and RX FIFOs. Seven files, listed
+straight from `third_party/axi_spi_master` rather than vendored — the renames
+the CLINT and PLIC needed were forced by `tools/compile_order` compiling the
+`apu/` originals into the core simulation, and nothing in this tree collides
+with these names.
+
+**Packaged but not yet in the block design**, same split as the PLIC: this is
+the IP and its testbench, the crossbar port and the pins are the next patch.
+
+Two things about it are worth writing down.
+
+**Its slave port is full AXI4** — `awid[15:0]`, `awlen[7:0]`, `wlast`, `*user`
+— and this bus is Lite from end to end. `cva5_spi_axi` presents a Lite slave
+and ties the burst fields off, because a Lite transaction *is* a single-beat
+AXI4 one: AWLEN 0, WLAST 1, IDs and USER zero, echoed BID/RID/RLAST dropped.
+That is the same handful of constants `cva5_sba_split` uses to reach the RAM
+port, and it is why the AXI4-to-Lite converter did not have to come back. Of
+those tie-offs only AWLEN/ARLEN matter: a mutation showed the slave's write FSM
+counts beats from AWLEN and never looks at WLAST.
+
+**MISO is not on line 0.** In single-bit mode the transmitter drives `sdo0`
+(`spi_master_tx.sv`: `sdo0 = data_int[31]`) but the receiver samples **`sdi1`**
+(`spi_master_rx.sv`: `data_int_next = {data_int[30:0], sdi1}`) — the ordinary
+two-wire convention expressed through the quad pin names. Wiring MISO to `sdi0`
+gives a controller that transmits perfectly and reads back nothing but zeros,
+which is a miserable thing to debug on a board; `run_spi.sh` kills that mutant.
+
+The controller is mode 0: the clock idles low, the transmitter shifts on the
+falling edge and the receiver samples on the rising one
+(`spi_master_controller.sv` wires `tx_edge` to `spi_fall` and `rx_edge` to
+`spi_rise`). The divider gives a period of `2·(CLKDIV+1)` core clocks — 6 at
+CLKDIV 2, 18 at 8, both measured in the bench.
+
+`STATUS` bit 0 reads as **idle**, not busy, which is the opposite of the guess
+and cost one bench iteration. The FIFO levels are at `[28:24]` for TX and
+`[20:16]` for RX. `examples/sw/soc.h` carries the whole map, including the
+one-hot chip select in `STATUS[11:8]` and the `SPI_LEN()` helper for the
+command/address/data bit counts.
+
 ### The bus is AXI4-Lite end to end
 
 Two slave ports and two master ports, one `axi_lite_xbar`, no protocol
@@ -776,6 +820,7 @@ something.
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
 | CLINT | `sh test_benches/debug/run_clint.sh` | mtime tick rate, writes, mtimecmp→mtip at the boundary, msip |
+| SPI | `bash test_benches/axi/run_spi.sh` | 56 checks against a mode-0 slave model: the register map, FIFO levels, a command-then-data write seen bit by bit on MOSI, chip-select selection, a read coming back through `sdi1`, the clock divider, and the soft reset |
 | PLIC | `bash test_benches/axi/run_plic.sh` | 103 checks at `NUM_SOURCES` 8 and 57 at 1 — the configuration the board deploys, which takes different widths inside the PLIC: the register map, pending versus eip, claim/complete including an unserviced level source, edge latching, priority order and ties, threshold suppression. Also checks the vendored copies still match `apu/plic` |
 | CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
 | counter CSRs, in the core sim | `make -C examples/sw run-csrs` | `rdcycle`/`rdinstret`/`mcycle` readable and advancing, `rdtime` and `rdtimeh` taking an illegal-instruction trap. The only place both polarities of `INCLUDE_TIME_CSR` can be run: the sim takes upstream's `EXAMPLE_CONFIG`, so with the bit set the three trap checks are *expected* to fail |

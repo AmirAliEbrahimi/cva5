@@ -10,3 +10,6 @@
 [submodule "third_party/wb2axip"]
 	path = third_party/wb2axip
 	url = https://github.com/ZipCPU/wb2axip
+[submodule "third_party/axi_spi_master"]
+	path = third_party/axi_spi_master
+	url = https://github.com/pulp-platform/axi_spi_master.git
