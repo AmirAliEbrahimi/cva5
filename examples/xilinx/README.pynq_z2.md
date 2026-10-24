@@ -331,6 +331,7 @@ inside 0.6 ns of each other:
 | + SPI irq to the PLIC | load queue index → RAM address | 8.876 | **+0.364** |
 | + I2C on the bus | load queue index → RAM address | 8.990 | **+0.103** |
 | + synthesis warning fixes | crossbar R FIFO → core AXI data_out | 9.775 | **+0.076** |
+| + crossbar DemuxR | crossbar AR spill → crossbar R spill | 9.733 | **+0.153** |
 
 #### The limiter is a cluster, not a path
 
@@ -911,25 +912,49 @@ m_axi_spi   -> cva5_spi_0/s_axi     0x2000_0000
 m_axi_i2c   -> cva5_i2c_0/s_axi     0x2800_0000
 ```
 
-`LatencyMode` is `CUT_SLV_AX | DemuxR`: the address channels are registered on
-the demultiplexer side, where the decode-into-arbiter run is, and so is the
-demultiplexer's R channel.
+#### `LatencyMode`, and the trap in the presets
 
-The R cut was not there originally and was added when the critical path moved
-into the crossbar — the debugger port's R FIFO, through the response
-arbitration, into the core's AXI read-data register with no register between,
-11 levels and 79% routing at +0.076. **A read costs 2 cycles from the AR
-handshake to the R handshake instead of 1**, which `tb_axi_xbar` measures and
-prints rather than asserting, so a future change to this setting shows up in
-the log without pinning a number that would then have to be edited.
+`LatencyMode` is `CUT_SLV_AX | DemuxR | MuxAr | MuxR`, written out as four bits
+rather than a preset, because **the presets are the problem**.
 
-That cycle is close to free. Main memory is answered inside `cva5_top` on the
-local memory interface and never crosses this crossbar, so nothing on the
-load-to-use path pays it; what pays is a UART status poll, a CLINT read, a PLIC
-claim — already several cycles, and not in an inner loop. It is deliberately
-`DemuxR` rather than the `CUT_SLV_PORTS` preset, which would also register W
-and B: those are not on a critical path, and flops here land next to the core,
-which is where the pressure already is.
+`axi_lite_xbar` splits the field in half: bits `[9:5]` configure the
+per-slave-port demultiplexers, `[4:0]` the per-master-port multiplexers.
+`CUT_SLV_AX` and `CUT_SLV_PORTS` live entirely in the upper half. Either of
+them leaves every multiplexer with **no register on any channel**, and a
+crossbar registered on one side only has a combinational run straight across
+the other — out of one demultiplexer, through a multiplexer, into the next.
+
+That is what the board measured, twice, as the design grew:
+
+| build | critical path | levels | WNS |
+|---|---|---|---|
+| `CUT_SLV_AX` | demux R FIFO → **core's** AXI read-data register | 11 | +0.076 |
+| `+ DemuxR` | demux AR spill → **demux** R spill, across the mux | 10 | +0.153 |
+| `+ MuxAr \| MuxR` | — | — | measure it |
+
+The first cut stopped the path reaching into the core. It did not stop it
+crossing the crossbar, because the multiplexer in the middle was still bare:
+eight of the ten worst paths in that build were the same cone, a slave port's
+AR spill register through the arbitration and the addressed peripheral's read
+path into a slave port's R spill register. `MuxAr` and `MuxR` put the two
+missing registers in, so that run becomes three short segments — demux AR to
+mux AR, mux AR through the peripheral to mux R, mux R to demux R.
+
+AW, W and B stay unregistered on the multiplexer side. They are not on a
+critical path and the flops are not free: this crossbar sits against the core,
+the fifth master port cost 192 LUTs of mostly demultiplexer widening, and that
+build lost 0.26 ns. If the limiter moves to the write path, `MuxAw` is the
+matching step and `CUT_ALL_PORTS` the blunt one.
+
+**A read now costs 4 cycles from the AR handshake to the R handshake**, against
+1 originally. `tb_axi_xbar` measures that and prints it rather than asserting a
+number, so the cost of a future change to this setting is visible in the bench
+log instead of being discovered on a board.
+
+Those cycles are close to free here. Main memory is answered inside `cva5_top`
+on the local memory interface and never crosses this crossbar, so nothing on
+the load-to-use path pays; what pays is a UART status poll, a CLINT read, a
+PLIC claim — already several cycles, and not in an inner loop.
 
 It got there in two steps. First the peripheral window was one AXI4 master port
 converted to Lite once and then fanned out by a Lite crossbar — which was the

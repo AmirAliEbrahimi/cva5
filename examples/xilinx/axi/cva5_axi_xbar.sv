@@ -315,36 +315,45 @@ module cva5_axi_xbar #(
     // AXI4-Lite carries no IDs, so the ID widths here are the minimum the
     // configuration struct accepts rather than anything meaningful.
     //
-    // LatencyMode cuts the address channels on the demultiplexer side, which
-    // is where the long combinational run is -- address decode into the
-    // arbiter -- plus the demultiplexer's R channel.
+    // LatencyMode, and why it is written as four bits rather than a preset.
     //
-    // That last cut was added because the critical path moved in here, which
-    // the previous version of this comment predicted it might. On the board it
-    // reported as
+    // axi_lite_xbar splits this field in half: bits [9:5] configure the
+    // per-slave-port demultiplexers, bits [4:0] the per-master-port
+    // multiplexers. CUT_SLV_AX and CUT_SLV_PORTS live entirely in the upper
+    // half, so either of them leaves every multiplexer with no register on any
+    // channel -- and a crossbar registered on one side only has a
+    // combinational run straight across the other, from one demultiplexer
+    // through a multiplexer and into the next.
     //
-    //   from  axi_xbar_0/.../gen_slv_port_demux[1]/gen_demux.i_r_fifo/mem_q_reg
-    //   to    cva5_top_0/.../gen_ls_pbus.gen_axi.axi_bus/ls.data_out_reg[16]
-    //   11 levels, 9.775 ns, 79% routing, WNS +0.076
+    // That is what the board measured. With CUT_SLV_AX | DemuxR, eight of the
+    // ten worst paths were the same cone:
     //
-    // -- the debugger port's R-channel FIFO, through the response arbitration,
-    // all the way into the core's AXI sub-unit read-data register, with no
-    // register in between. DemuxR puts one there.
+    //   from  gen_slv_port_demux[0]/gen_demux.i_ar_spill_reg/.../b_full_q_reg
+    //   to    gen_slv_port_demux[*]/gen_demux.i_r_spill_reg/.../a_data_q_reg
+    //   10 levels, ~9.7 ns, 76% routing, WNS +0.153
     //
-    // The cost is a cycle on peripheral responses, and it is close to free:
-    // main memory is answered inside cva5_top on the local memory interface
-    // and never crosses this crossbar, so nothing on the load-to-use path
-    // pays. What pays is a UART status poll, a CLINT read, a PLIC claim --
-    // accesses that are already several cycles and are not in any inner loop.
+    // -- a slave port's AR spill register, through the multiplexer's
+    // arbitration and the addressed peripheral's read path, into a slave
+    // port's R spill register, with nothing registered in between. MuxAr and
+    // MuxR put the two missing registers in, so the run becomes three short
+    // segments instead of one long one: demux AR to mux AR, mux AR through the
+    // peripheral to mux R, mux R to demux R.
     //
-    // It is deliberately DemuxR and not CUT_SLV_PORTS, which would also
-    // register W and B. Those are not on a critical path, and the flops this
-    // crossbar spends show up as congestion next to the core: the fifth master
-    // port cost 192 LUTs, most of it widening these same demuxes, and the
-    // build that added it lost 0.26 ns. Spend registers where the measurement
-    // points, not by the preset.
+    // AW, W and B are left unregistered on the multiplexer side. They are not
+    // on a critical path and the flops are not free -- this crossbar sits
+    // against the core, the fifth master port cost 192 LUTs of mostly demux
+    // widening, and that build lost 0.26 ns. If the limiter moves to the write
+    // path, MuxAw is the matching step and CUT_ALL_PORTS the blunt one.
     //
-    // axi_pkg::CUT_ALL_AX and then CUT_ALL_PORTS remain the steps back up.
+    // The cost is latency on peripheral accesses only. Main memory is answered
+    // inside cva5_top on the local memory interface and never crosses this
+    // crossbar, so nothing on the load-to-use path pays; what pays is a UART
+    // status poll, a CLINT read, a PLIC claim. tb_axi_xbar measures the AR-to-R
+    // latency and prints it rather than asserting a number, so the cost of a
+    // change here is visible in the bench log.
+    //
+    // AXI4-Lite carries no IDs, so the ID widths below are the minimum the
+    // configuration struct accepts rather than anything meaningful.
     //------------------------------------------------------------------
     localparam axi_pkg::xbar_cfg_t XbarCfg = '{
         NoSlvPorts:         32'(NUM_SLV),
@@ -353,7 +362,9 @@ module cva5_axi_xbar #(
         MaxSlvTrans:        32'(MAX_TRANS),
         FallThrough:        1'b0,
         LatencyMode:        axi_pkg::xbar_latency_e'(axi_pkg::CUT_SLV_AX |
-                                                    axi_pkg::DemuxR),
+                                                    axi_pkg::DemuxR     |
+                                                    axi_pkg::MuxAr      |
+                                                    axi_pkg::MuxR),
         PipelineStages:     32'd0,
         AxiIdWidthSlvPorts: 32'd1,
         AxiIdUsedSlvPorts:  32'd1,
