@@ -72,8 +72,21 @@
 #define PLIC_THRESHOLD_OFF 0x200000u
 #define PLIC_CLAIM_OFF     0x200004u
 /* Interrupt sources, numbered from 1. Source 0 does not exist and the hardware
- * pins its priority and enable bit low, as the spec requires. */
+ * pins its priority and enable bit low, as the spec requires.
+ *
+ * These numbers are the bit order cva5_irq_concat is wired in -- src1 to
+ * irq_srcs[0], which is source 1 -- so the two files have to agree. See the
+ * interrupt-sources section of examples/xilinx/pynq_z2_sys.tcl.
+ *
+ * The UART's source is a level: !rx_fifo_empty, asserted until software reads
+ * the byte. The SPI's is a pulse, end of transfer, and the PLIC's gateway
+ * latches it, so both are configured level sensitive. The practical difference
+ * is at complete time: completing the UART's source with a byte still in the
+ * FIFO hands it straight back, while the SPI's stays quiet until the next
+ * transfer. */
 #define PLIC_SRC_UART      1u
+#define PLIC_SRC_SPI       2u
+#define PLIC_NUM_SOURCES   2u
 #define TIMER_BASE  0x18000000u
 #define SPI_BASE    0x20000000u
 /* pulp-platform's axi_spi_master, byte offsets into its window. Word

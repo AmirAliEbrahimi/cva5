@@ -153,6 +153,30 @@ A vendoring note in `cva5_plic.sv` wrapped so that a line began
 `// verilator <word>` as a directive wherever it appears, so a comment line
 must not begin with that word. Reword the sentence; do not add a suppression.
 
+## A block design connects nets to whole pins
+
+There is no way to attach two nets to two bits of one vector pin in a block
+design, so a PLIC that takes its sources as `irq_srcs[N-1:0]` cannot have two
+devices wired into it directly. Vivado's answer is `xlconcat`;
+`cva5_irq_concat` is ours, and it is one assignment.
+
+Two things about it that are not visible in the RTL:
+
+**The ports are named by PLIC source number, not bit index**, because the two
+differ by one — RISC-V reserves source 0, so `irq_srcs[0]` is source 1. The
+order has to match `examples/sw/soc.h`'s `PLIC_SRC_*`. A swap costs nothing in
+area or timing, passes synthesis, passes lint, and shows up only on hardware,
+as one device's interrupt attributed to another. That is why
+`test_benches/axi/tb_irq_concat.sv` drives the concat into a real PLIC and
+claims each source by number rather than checking the assignment.
+
+**A pulse does not need `EDGE_SENSITIVE`.** The SPI's `irq` is end-of-transfer,
+one cycle wide, and both sources are left level sensitive, because
+`cva5_plic_gateway` latches: `ip <= (ip | raise) & ~in_progress & ~claim`. Edge
+mode would be worse, not better — its edge path is `irq ^ irq_r`, both edges,
+so a pulse would raise a second time as it fell. The bench pulses one cycle and
+checks it, because that is a claim about vendored upstream code.
+
 ## Peripherals the debugger can reach must not reset on ndmreset
 
 `ndmreset` is the Debug Module's "reset the system but not me" request, and
@@ -168,6 +192,14 @@ the wrapper, first used `rst`. Held in reset it would have read zero
 throughout the load and routed every response to the side the request did not
 go to, so every `make load` would have hung — in simulation as well, which is
 why it was worth making the split a module with one explicit reset port.
+
+The rule has a cost in software, and it is easy to forget: anything that resets
+from `rstn` alone **survives a program reload**. The CLINT's `mtimecmp` and
+`msip` do, which is why `examples/sw/timer.c` opens by disarming them, and the
+PLIC's pending bits, enables and priorities do, which is why `plic.c` and
+`spi.c` claim and complete whatever they find before arming anything. A test
+that assumes a clean peripheral passes on the first run after a power cycle and
+fails on the second.
 
 ## The packaging logs are a check, so keep them readable
 

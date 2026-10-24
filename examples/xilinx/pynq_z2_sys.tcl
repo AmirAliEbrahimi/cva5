@@ -127,22 +127,22 @@ connect_bd_net [get_bd_pins cva5_clint_0/msip]  [get_bd_pins cva5_top_0/msip]
 # Together with the CLINT's two that makes three interrupt inputs on cva5_top,
 # and three is all RISC-V gives a hart however many peripherals the bus grows.
 #
-# NUM_SOURCES is 1 because the UART is the only device with an interrupt today.
-# Adding the SPI means NUM_SOURCES 2, one more net here, and a second bit in
-# EDGE_SENSITIVE if it needs one -- sensitivity is a parameter rather than a
-# port so that unused sources need nothing tied to them, which on a block
-# design would otherwise mean a Xilinx constant block.
+# NUM_SOURCES is 2: the UART and the SPI. The sources themselves are wired
+# below, once the SPI cell exists.
+#
+# EDGE_SENSITIVE stays 0 for both, which is also right for the SPI's pulse --
+# see the interrupt-sources section for why. Sensitivity is a parameter rather
+# than a port so that unused sources need nothing tied to them, which on a
+# block design would otherwise mean a Xilinx constant block.
 #
 # Reset from rstn alone, never ndmreset, for the same reason as the CLINT: the
-# debugger can reach it over the system bus.
+# debugger can reach it over the system bus. Note what that means for software:
+# the pending bits, the enables and the priorities all survive a program
+# reload, so a test has to put the PLIC into a known state before trusting it.
 create_bd_cell -type ip -vlnv xilinx.com:user:cva5_plic_axi:1.0 cva5_plic_0
-set_property -dict [list CONFIG.NUM_SOURCES {1}] [get_bd_cells cva5_plic_0]
+set_property -dict [list CONFIG.NUM_SOURCES {2}] [get_bd_cells cva5_plic_0]
 connect_bd_net $sys_clk  [get_bd_pins cva5_plic_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins cva5_plic_0/rstn]
-
-# Source 1: the UART's receive interrupt, which is !rx_fifo_empty -- level
-# sensitive, and up until software drains the FIFO.
-connect_bd_net [get_bd_pins cva5_uart_0/irq] [get_bd_pins cva5_plic_0/irq_srcs]
 connect_bd_net [get_bd_pins cva5_plic_0/eip] [get_bd_pins cva5_top_0/external]
 
 # ---- SPI --------------------------------------------------------------------
@@ -150,11 +150,8 @@ connect_bd_net [get_bd_pins cva5_plic_0/eip] [get_bd_pins cva5_top_0/external]
 # out to the Arduino shield header; see the XDC for the pins and for the
 # loopback jumper the software test uses.
 #
-# Its irq (end of transfer, or a FIFO watermark) is deliberately left
-# unconnected. Routing it to the PLIC means two interrupt sources, and a block
-# design cannot drive a 2-bit vector pin from two separate nets without
-# xlconcat -- a Xilinx IP, which is the thing this exercise removes. A ten-line
-# concat of our own is the fix, and it belongs in the patch that needs it.
+# Its irq -- end of transfer, or a FIFO watermark, ORed into one line -- goes
+# to the PLIC as source 2; see the interrupt-sources section below.
 create_bd_cell -type ip -vlnv xilinx.com:user:cva5_spi_axi:1.0 cva5_spi_0
 connect_bd_net $sys_clk  [get_bd_pins cva5_spi_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins cva5_spi_0/rstn]
@@ -163,6 +160,33 @@ make_bd_pins_external -name spi_sck  [get_bd_pins cva5_spi_0/spi_sck]
 make_bd_pins_external -name spi_mosi [get_bd_pins cva5_spi_0/spi_mosi]
 make_bd_pins_external -name spi_miso [get_bd_pins cva5_spi_0/spi_miso]
 make_bd_pins_external -name spi_csn  [get_bd_pins cva5_spi_0/spi_csn]
+
+# ---- Interrupt sources ------------------------------------------------------
+# cva5_plic_axi takes its sources as one vector, and a block design connects a
+# net to a whole pin, so two devices cannot be attached to two bits of it
+# directly. Vivado's answer is xlconcat; cva5_irq_concat is ours, and it is one
+# assignment.
+#
+# The source numbers are the ones examples/sw/soc.h declares, and the two must
+# agree -- a swap here is invisible in synthesis and shows up on hardware as
+# one device's interrupt attributed to the other:
+#
+#   src1 -> PLIC source 1   the UART's receive interrupt, !rx_fifo_empty:
+#                           level sensitive, and up until software reads the
+#                           byte, so it re-raises after a complete if the FIFO
+#                           still has one.
+#   src2 -> PLIC source 2   the SPI's end of transfer: a pulse, not a level.
+#
+# Both are left level sensitive, the pulse included, because the PLIC's gateway
+# latches: `ip <= (ip | raise) & ~in_progress & ~claim`, so one cycle high is
+# enough and the pending bit stays up until it is claimed. Edge mode would be
+# worse here, not better -- cva5_plic_gateway's edge path is `irq ^ irq_r`,
+# both edges, so a pulse would raise a second time as it fell.
+create_bd_cell -type ip -vlnv xilinx.com:user:cva5_irq_concat:1.0 irq_concat_0
+connect_bd_net [get_bd_pins cva5_uart_0/irq] [get_bd_pins irq_concat_0/src1]
+connect_bd_net [get_bd_pins cva5_spi_0/irq]  [get_bd_pins irq_concat_0/src2]
+connect_bd_net [get_bd_pins irq_concat_0/irq_srcs] \
+               [get_bd_pins cva5_plic_0/irq_srcs]
 
 # ---- Main RAM ---------------------------------------------------------------
 # There is no memory IP here any more. Main memory is a 128 KB true dual-port

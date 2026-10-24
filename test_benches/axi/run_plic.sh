@@ -54,14 +54,18 @@ UPSTREAM_NOISE="-Wno-UNUSEDSIGNAL -Wno-ASCRANGE -Wno-WIDTHEXPAND
 echo "== lint (our wrapper is held to -Wall) =="
 verilator --lint-only -Wall $UPSTREAM_NOISE --top-module cva5_plic_axi $DESIGN
 
-# Two configurations: eight sources, which exercises the priority tree, the
-# edge path and ties; and one source, which is what the block design deploys
-# and which takes different widths inside the PLIC -- a 1-bit claim id and a
-# 2-entry padded source vector. Testing only the wide one would leave the
+# Three configurations: eight sources, which exercises the priority tree, the
+# edge path and ties; two, which is what the block design deploys now that the
+# SPI's interrupt is wired alongside the UART's; and one, which is the narrowest
+# the PLIC can be built and takes different widths inside it -- a 1-bit claim id
+# and a 2-entry padded source vector. Testing only the wide one would leave the
 # shipped configuration unexercised.
+#
+# How the sources reach a 2-source PLIC through cva5_irq_concat, and which port
+# becomes which source number, is tb_irq_concat's job.
 rm -rf "$BUILD"
 status=0
-for n in 8 1; do
+for n in 8 2 1; do
     dir="$BUILD/src$n"
     echo "== build (NUM_SOURCES=$n) =="
     mkdir -p "$dir"

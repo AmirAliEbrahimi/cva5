@@ -16,49 +16,13 @@
  */
 #include <stdio.h>
 #include "soc.h"
+#include "mip.h"
 
 #define MTIME_LO   (*(volatile unsigned int *)(CLINT_BASE + CLINT_MTIME_OFF))
 #define MTIME_HI   (*(volatile unsigned int *)(CLINT_BASE + CLINT_MTIME_OFF + 4))
 #define MTIMECMP_LO (*(volatile unsigned int *)(CLINT_BASE + CLINT_MTIMECMP_OFF))
 #define MTIMECMP_HI (*(volatile unsigned int *)(CLINT_BASE + CLINT_MTIMECMP_OFF + 4))
 #define MSIP       (*(volatile unsigned int *)(CLINT_BASE + CLINT_MSIP_OFF))
-
-/* mip, read with Zicsr enabled just for this instruction -- the Makefile's
- * -march is rv32im and has not implied Zicsr since the extension was split
- * out of the base ISA. The same trick trap.S uses. */
-static inline unsigned int read_mip(void) {
-    unsigned int v;
-    __asm__ volatile (".option push\n"
-                      ".option arch, +zicsr\n"
-                      "csrr %0, mip\n"
-                      ".option pop"
-                      : "=r" (v));
-    return v;
-}
-
-#define MIP_MTIP (1u << 7)
-#define MIP_MSIP (1u << 3)
-
-/* Every check below reads mip after storing to the CLINT, and that store is
- * posted: it retires when the store queue accepts it, not when the write has
- * crossed the crossbar. CSR instructions issue once they are the oldest
- * instruction, which the store already is, so `csrr mip` can run several
- * cycles ahead of the CLINT seeing the value -- and csr_unit.sv needs one
- * cycle more, because mip's bits are a registered copy of the pins
- * (csr_unit.sv:518-520). So nothing here reads mip once and concludes; it
- * polls until mip agrees or a bound runs out.
- *
- * Returns the number of polls it took, or -1 if the bound ran out. The count
- * is worth printing: it is the write latency through the crossbar, and it is
- * what made the single-read version of this test pass or fail by luck. */
-#define MIP_POLL_LIMIT 100000u
-
-static int mip_wait(unsigned int mask, int want_set) {
-    for (unsigned int i = 0; i < MIP_POLL_LIMIT; i++)
-        if (!!(read_mip() & mask) == !!want_set)
-            return (int)i;
-    return -1;
-}
 
 /* 64-bit mtime read. mtime is two 32-bit registers, so the low half can wrap
  * between the two reads; retry until the high half is stable. */

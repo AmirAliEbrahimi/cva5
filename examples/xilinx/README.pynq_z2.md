@@ -30,9 +30,19 @@ all-Xilinx baseline of **WNS +0.107** at 100 MHz on the `xc7z020clg400-1`:
 | `axi_uartlite`       | `cva5_uart` (lowRISC `uart`) | Apache-2.0 | see below |
 | `axi_bram_ctrl` + `blk_mem_gen` | *removed* — main memory is `tdp_ram` inside the core | — | — |
 | `axi_quad_spi` | `cva5_spi_axi` (pulp `axi_spi_master`) | Solderpad 0.51 | present, on the Arduino header |
+| `axi_intc` | `cva5_plic_axi` (upstream CVA5 `apu/plic`) | Apache-2.0 | present, two sources |
+| `xlconcat` | `cva5_irq_concat` | Apache-2.0 | present, one assignment |
 | `clk_wiz` | *kept* — the MMCM is a hard block | — | — |
+| `proc_sys_reset` | *kept for now* — see below | — | — |
 
-`clk_wiz` is the only Xilinx IP left in the block design.
+Two Xilinx IPs are left in the block design. `clk_wiz` stays because the MMCM
+is a hard block and no amount of RTL replaces it. `proc_sys_reset` is a reset
+synchroniser and a counter, which is thirty lines of our own, and it is still
+here only because it has not been worth a build cycle yet; it is the next one
+to go. `axi_intc` and `xlconcat` were never instantiated here — the PLIC
+window was reserved from the memory map onwards and the concat was written
+before it was needed — but they are the IPs a Vivado user would reach for, so
+they belong in the table.
 
 ### Memory map
 
@@ -46,7 +56,7 @@ for it.
 | Debug Module | `0x0000_0000` | 4 KB | present |
 | boot ROM | `0x0001_0000` | 64 KB | present (2 instructions; reset vector) |
 | CLINT | `0x0200_0000` | 768 KB | present (64 KB decoded) |
-| PLIC | `0x0C00_0000` | 64 MB | present (one source: the UART) |
+| PLIC | `0x0C00_0000` | 64 MB | present (two sources: UART, SPI) |
 | UART | `0x1000_0000` | 4 KB | present |
 | timer | `0x1800_0000` | 4 KB | reserved |
 | SPI | `0x2000_0000` | 8 MB | present (4 KB decoded, on the Arduino header) |
@@ -247,11 +257,13 @@ single step, register and memory access, asynchronous halt), and `make
 memtest` passing -- the only test that addresses all 128 KB.
 
 Run `./test_benches/axi/run_xbar.sh`, `bash test_benches/axi/run_plic.sh`,
-`bash test_benches/axi/run_spi.sh` and
-`sh test_benches/debug/run_sba_split.sh` before spending a synthesis run — 57
-checks across three port-width configurations, 103 and 57 across two PLIC source counts, 73 for the SPI, and 73 for the debugger's bus split. The first two take
-their file lists from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so
-what is simulated is exactly what is synthesised.
+`bash test_benches/axi/run_irq_concat.sh`, `bash test_benches/axi/run_spi.sh`
+and `sh test_benches/debug/run_sba_split.sh` before spending a synthesis run —
+57 checks across three port-width configurations, 103/57/57 across three PLIC
+source counts, 62 for the interrupt wiring into a two-source PLIC, 73 for the
+SPI, and 73 for the debugger's bus split. All of them take their file lists
+from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so what is simulated
+is exactly what is synthesised.
 
 ### Replacing the memory behind AXI: three attempts that failed
 
@@ -570,18 +582,60 @@ the CLINT — vendored under a new name and wrapped as `cva5_plic_axi`. Xilinx's
 equivalent is `axi_intc`, which this design never used; the CORE-V window at
 `0x0C00_0000` was reserved for this from the memory map onwards.
 
-It is in the block design, on the crossbar's third master port, with
-`cva5_uart_0/irq` as source 1 and `eip` driving `cva5_top`'s new `external`
-input. That makes three interrupt inputs on the core — `msip`, `mtip`,
-`external` — which is the whole of what RISC-V gives a hart however many
-peripherals the bus grows.
+It is in the block design, on the crossbar's third master port, with `eip`
+driving `cva5_top`'s `external` input. That makes three interrupt inputs on the
+core — `msip`, `mtip`, `external` — which is the whole of what RISC-V gives a
+hart however many peripherals the bus grows.
 
-`NUM_SOURCES` is 1 in the block design because the UART is the only device with
-an interrupt today. Adding the SPI means `NUM_SOURCES` 2, one more net, and a
-second bit in `EDGE_SENSITIVE` if it needs one. Sensitivity is a **parameter**
-rather than a port precisely so unused sources need nothing tied to them — on a
-block design that would otherwise mean a Xilinx constant block, which is the
-one thing this exercise is trying to avoid.
+`NUM_SOURCES` is 2: the UART's receive interrupt as source 1 and the SPI's
+end-of-transfer as source 2. Sensitivity is a **parameter** rather than a port
+precisely so unused sources need nothing tied to them — on a block design that
+would otherwise mean a Xilinx constant block, which is the one thing this
+exercise is trying to avoid.
+
+#### Getting two interrupts into one vector
+
+`irq_srcs` is a vector and a block design connects a net to a whole pin, so two
+devices cannot be attached to two bits of it. Vivado's answer is `xlconcat`,
+another Xilinx IP; `cva5_irq_concat` is ours, and it is one assignment with no
+clock and no state.
+
+Its ports are named by **PLIC source number**, not bit index, because the two
+differ by one — source 0 is reserved, so `irq_srcs[0]` is source 1 — and
+`examples/sw/soc.h`'s `PLIC_SRC_*` has to agree with the order. Two sources
+swapped costs nothing in area or timing, passes synthesis and passes lint; it
+shows up on hardware only as one device's interrupt attributed to the other.
+`test_benches/axi/tb_irq_concat.sv` therefore drives the concat into a real
+two-source PLIC and claims each source by number — 62 checks, and swapping the
+assignment fails the first of them.
+
+**`EDGE_SENSITIVE` stays 0 for both sources, the SPI's pulse included.** The
+SPI's `irq` is end-of-transfer, one cycle wide, which looks like a case for
+edge sensitivity and is not: `cva5_plic_gateway` latches, with
+
+```systemverilog
+ip <= (ip | raise) & ~in_progress & ~claim;
+```
+
+so one cycle high is enough and the pending bit stays up until it is claimed.
+Edge mode would be actively worse, because the gateway's edge path is
+`irq ^ irq_r` — *both* edges — so a pulse would raise a second time as it fell.
+`tb_irq_concat` pulses one cycle and checks the latch, rather than leaving that
+as a claim about vendored code in a comment.
+
+The practical difference between the two sources is at complete time:
+completing the UART's level source with a byte still in its FIFO hands it
+straight back on the next claim, while the SPI's stays quiet until the next
+transfer. `examples/sw/spi.c` checks the SPI side end to end — transfer,
+pending, `mip.MEIP`, claim names source 2, complete leaves it down — and
+`examples/sw/plic.c` keeps the UART side, where the keypress is.
+
+One consequence of the PLIC resetting from `rstn` alone, which is now visible
+in software: pending bits, enables and priorities all survive a program reload,
+so `make -C examples/sw spi` leaves source 2 latched for whatever runs next.
+Both tests claim and complete whatever they find before arming anything —
+`plic.c` would otherwise see `MEIP` before any key was pressed and fail on a
+byte the UART never had.
 
 The register map is the standard RISC-V one, so software written against QEMU's
 `virt` or a SiFive part works unchanged:

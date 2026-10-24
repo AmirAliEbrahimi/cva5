@@ -16,12 +16,15 @@
  *   - a transfer runs to completion and ends idle again;
  *   - with the jumper in place, the word that went out comes back bit for
  *     bit -- which also means the chip select framed it and the clock ran;
- *   - a second word of a different shape, so a stuck bit cannot pass both.
+ *   - a second word of a different shape, so a stuck bit cannot pass both;
+ *   - the end-of-transfer interrupt reaches the PLIC as source 2 and the core
+ *     as mip.MEIP, and a claim names the SPI rather than the UART.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <stdio.h>
 #include "soc.h"
+#include "mip.h"
 
 #define SPI_STATUS  (*(volatile unsigned int *)(SPI_BASE + SPI_STATUS_OFF))
 #define SPI_CLKDIV  (*(volatile unsigned int *)(SPI_BASE + SPI_CLKDIV_OFF))
@@ -31,6 +34,14 @@
 #define SPI_DUMMY   (*(volatile unsigned int *)(SPI_BASE + SPI_DUMMY_OFF))
 #define SPI_TX      (*(volatile unsigned int *)(SPI_BASE + SPI_TX_FIFO_OFF))
 #define SPI_RX      (*(volatile unsigned int *)(SPI_BASE + SPI_RX_FIFO_OFF))
+
+#define PLIC_PRIORITY(src) (*(volatile unsigned int *)(PLIC_BASE + PLIC_PRIORITY_OFF(src)))
+#define PLIC_PENDING   (*(volatile unsigned int *)(PLIC_BASE + PLIC_PENDING_OFF))
+#define PLIC_ENABLE    (*(volatile unsigned int *)(PLIC_BASE + PLIC_ENABLE_OFF))
+#define PLIC_THRESHOLD (*(volatile unsigned int *)(PLIC_BASE + PLIC_THRESHOLD_OFF))
+#define PLIC_CLAIM     (*(volatile unsigned int *)(PLIC_BASE + PLIC_CLAIM_OFF))
+
+#define SPI_SRC_BIT (1u << PLIC_SRC_SPI)
 
 static int fails;
 
@@ -174,6 +185,53 @@ int main(void) {
      * loopback result is the same -- it is the CS pin that differs. */
     v = read_with_held_level(0x00800000u, 1);
     check("and the same on chip select 1", v == 0xFFFFFFFFu);
+
+    /* --- the interrupt
+     *
+     * events_o[1] is end of transfer and events_o[0] a FIFO watermark, ORed
+     * into one irq, through cva5_irq_concat to PLIC source 2. It is a pulse,
+     * not a level, and that is fine level sensitive: the PLIC's gateway is
+     * `ip <= (ip | raise) & ~in_progress & ~claim`, so one cycle high latches
+     * and the pending bit stays up until it is claimed.
+     *
+     * Which makes this the one check here that cares what ran before it, in
+     * both directions. The PLIC resets from rstn alone, so pending survives a
+     * program reload -- hence the claim-and-complete below before arming -- and
+     * every transfer above has already raised this source, so the pending bit
+     * has to be cleared and then raised again by a transfer of our own rather
+     * than read where it stands. */
+    puts("");
+    PLIC_THRESHOLD = 0u;
+    PLIC_ENABLE = SPI_SRC_BIT;
+    PLIC_PRIORITY(PLIC_SRC_SPI) = 3u;
+
+    for (unsigned i = 0; i < 3u; i++) {
+        unsigned int stale = PLIC_CLAIM;
+        if (!stale)
+            break;
+        PLIC_CLAIM = stale;
+    }
+    check("draining leaves meip down", mip_wait(MIP_MEIP, 0) >= 0);
+    check("and the SPI's source quiet", (PLIC_PENDING & SPI_SRC_BIT) == 0u);
+
+    (void)read_with_held_level(0x00800000u, 0);
+
+    check("a transfer makes the SPI's source pending",
+          (PLIC_PENDING & SPI_SRC_BIT) != 0u);
+    check("and it reaches mip.MEIP", mip_wait(MIP_MEIP, 1) >= 0);
+
+    unsigned int id = PLIC_CLAIM;
+    check("a claim names the SPI, not the UART", id == PLIC_SRC_SPI);
+    check("claiming suppresses it", mip_wait(MIP_MEIP, 0) >= 0);
+
+    /* Nothing to quiet first, unlike the UART: the pulse is long gone, so a
+     * complete leaves this source down instead of handing it straight back. */
+    PLIC_CLAIM = id;
+    check("completing leaves it down", mip_wait(MIP_MEIP, 0) >= 0);
+    check("and nothing pending", (PLIC_PENDING & SPI_SRC_BIT) == 0u);
+
+    PLIC_ENABLE = 0u;
+    PLIC_PRIORITY(PLIC_SRC_SPI) = 0u;
 
     if (fails) {
         puts("");

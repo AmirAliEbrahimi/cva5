@@ -6,9 +6,14 @@
  * parks by design -- so this reads mip instead, the same way timer.c reads it
  * for mtip.
  *
- * The one source wired today is the UART's receive interrupt, !rx_fifo_empty:
- * level sensitive, asserted until software reads the byte. Nothing in software
- * can raise it, so this test needs one keypress on the serial console. It then
+ * Two sources are wired: the UART's receive interrupt and the SPI's end of
+ * transfer. This test is about the UART's, because !rx_fifo_empty is level
+ * sensitive and asserted until software reads the byte, which is the harder
+ * case and the one whose complete-ordering trap is worth pinning down. The
+ * SPI's source is checked in spi.c, where there is a transfer to raise it.
+ *
+ * Nothing in software can raise the UART's, so this test needs one keypress on
+ * the serial console. It then
  * does all of its filtering checks against that one asserted source, which is
  * the only way they mean anything: with nothing pending, "priority 0 does not
  * interrupt" and "the threshold suppresses it" pass whether or not the
@@ -33,6 +38,7 @@
  */
 #include <stdio.h>
 #include "soc.h"
+#include "mip.h"
 
 #define PLIC_PRIORITY(src) (*(volatile unsigned int *)(PLIC_BASE + PLIC_PRIORITY_OFF(src)))
 #define PLIC_PENDING   (*(volatile unsigned int *)(PLIC_BASE + PLIC_PENDING_OFF))
@@ -44,30 +50,6 @@
 #define UART_STAT  (*(volatile unsigned int *)(UART_BASE + UART_STAT_OFF))
 
 #define UART_SRC_BIT (1u << PLIC_SRC_UART)
-#define MIP_MEIP     (1u << 11)
-
-static inline unsigned int read_mip(void) {
-    unsigned int v;
-    __asm__ volatile (".option push\n"
-                      ".option arch, +zicsr\n"
-                      "csrr %0, mip\n"
-                      ".option pop"
-                      : "=r" (v));
-    return v;
-}
-
-/* Waits on the bus, in microseconds. A store to a peripheral is posted, so mip
- * can be read before the write has crossed the crossbar, and mip's bits are a
- * registered copy of the pins on top of that -- so poll, with a bound. This is
- * not the bound to use when waiting on a person; see the keypress below. */
-#define MIP_POLL_LIMIT 100000u
-
-static int mip_wait(unsigned int mask, int want_set) {
-    for (unsigned int i = 0; i < MIP_POLL_LIMIT; i++)
-        if (!!(read_mip() & mask) == !!want_set)
-            return (int)i;
-    return -1;
-}
 
 /* mtime, for waits measured in real time. One tick is one microsecond; the low
  * half wraps, so retry while the high half is moving. */
@@ -124,14 +106,38 @@ int main(void) {
     puts("PLIC check");
 
     /* --- a known state. Like the CLINT, the PLIC resets from rstn alone and
-     * never from ndmreset, so a previous run's settings are still here. */
+     * never from ndmreset, so a previous run's settings are still here: the
+     * enables, the priorities, and the pending bits. Pending matters most now
+     * that the SPI is source 2 -- `make -C examples/sw spi` leaves its
+     * end-of-transfer interrupt latched, and this test would then see MEIP
+     * before any key was pressed and fail on a byte the UART never had. */
     PLIC_THRESHOLD = 0u;
     PLIC_ENABLE = 0u;
-    PLIC_PRIORITY(PLIC_SRC_UART) = 0u;
+    for (unsigned s = 1u; s <= PLIC_NUM_SOURCES; s++)
+        PLIC_PRIORITY(s) = 0u;
 
-    /* Drain whatever the UART already holds, so its irq starts low. */
+    /* Drain whatever the UART already holds, so its irq starts low. Before the
+     * claims below, so a level source that is still asserted cannot come
+     * straight back. */
     while (UART_STAT & UART_RX_VALID)
         (void)UART_RX;
+
+    /* Claim and complete anything already latched. A claim only returns an
+     * enabled source whose priority is above the threshold, so everything is
+     * opened up for the duration and shut again after. */
+    PLIC_ENABLE = 0xFFFFFFFFu;
+    for (unsigned s = 1u; s <= PLIC_NUM_SOURCES; s++)
+        PLIC_PRIORITY(s) = 1u;
+    for (unsigned i = 0; i < PLIC_NUM_SOURCES + 1u; i++) {
+        unsigned int stale = PLIC_CLAIM;
+        if (!stale)
+            break;
+        put_hex("draining a source left pending by an earlier run: ", stale);
+        PLIC_CLAIM = stale;
+    }
+    PLIC_ENABLE = 0u;
+    for (unsigned s = 1u; s <= PLIC_NUM_SOURCES; s++)
+        PLIC_PRIORITY(s) = 0u;
 
     if (mip_wait(MIP_MEIP, 0) < 0) {
         put_hex("FAIL: meip stuck high with nothing enabled; pending ",
@@ -150,6 +156,13 @@ int main(void) {
     PLIC_ENABLE = 0xFFFFFFFFu;
     check("enable sets the UART's bit", (PLIC_ENABLE & UART_SRC_BIT) != 0u);
     check("and leaves source 0 pinned low", (PLIC_ENABLE & 1u) == 0u);
+
+    /* The register check wanted every bit; the interrupt checks want exactly
+     * one source, so that "pending", "claim" and MEIP can only be about the
+     * UART. The SPI is source 2 and nothing here drives it, but leaving it
+     * enabled would make every check below conditional on that staying true. */
+    PLIC_ENABLE = UART_SRC_BIT;
+    check("and enable narrows back to one source", PLIC_ENABLE == UART_SRC_BIT);
 
     PLIC_PRIORITY(PLIC_SRC_UART) = 3u;
 

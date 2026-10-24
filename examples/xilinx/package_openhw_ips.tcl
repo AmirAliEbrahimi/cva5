@@ -115,6 +115,13 @@ dict set openhw_ips cva5_spi_axi {
     examples/xilinx/axi/cva5_spi_axi.sv
 }
 
+# Two scalar interrupt lines into the vector the PLIC takes, because a block
+# design cannot attach two nets to two bits of one pin. Ours rather than
+# xlconnect/xlconcat, which are Xilinx IPs. No clock, no bus, one assignment.
+dict set openhw_ips cva5_irq_concat {
+    examples/xilinx/axi/cva5_irq_concat.sv
+}
+
 # Upstream CVA5's own PLIC, vendored under a new name -- the platform
 # interrupt controller, aggregating device interrupts into the core's single
 # external interrupt. The register map is the standard RISC-V one, so software
@@ -166,6 +173,7 @@ dict set openhw_busifs cva5_uart {s_axi}
 dict set openhw_busifs cva5_clint_axi {s_axi}
 dict set openhw_busifs cva5_plic_axi {s_axi}
 dict set openhw_busifs cva5_spi_axi {s_axi}
+dict set openhw_busifs cva5_irq_concat {}
 
 # One sentence per IP for the Vivado catalog, which is also what answers
 # IP_Flow 19-11888. Say what the block is and where it came from; the file lists
@@ -175,11 +183,15 @@ dict set openhw_descs cva5_uart {UART (lowRISC) behind an AXI4-Lite adapter, kee
 dict set openhw_descs cva5_clint_axi {RISC-V core-local interruptor: mtime, mtimecmp and msip, driving the hart's timer and software interrupts directly}
 dict set openhw_descs cva5_plic_axi {RISC-V platform-level interrupt controller, aggregating device interrupts into the hart's single external interrupt}
 dict set openhw_descs cva5_spi_axi {SPI master (pulp-platform axi_spi_master) with four chip selects and a programmable clock divider, in place of axi_quad_spi}
+dict set openhw_descs cva5_irq_concat {Two device interrupt lines into one vector for cva5_plic_axi, in place of xlconcat}
 dict set openhw_descs cva5_axi_ram {AXI4 block-RAM slave (ZipCPU demofull); simulation only, not packaged}
 
 # Entries present for the testbenches' file lists but deliberately not
 # packaged. See the note above cva5_axi_ram.
 set openhw_sim_only {cva5_axi_ram}
+
+# IPs with no clk port, so nothing for cva5_ip_metadata to put a FREQ_HZ on.
+set openhw_clockless {cva5_irq_concat}
 
 foreach ip [dict keys $openhw_ips] {
     if {[lsearch -exact $openhw_sim_only $ip] >= 0} {
@@ -215,7 +227,11 @@ foreach ip [dict keys $openhw_ips] {
         ipx::associate_bus_interfaces -busif $busif -clock clk [ipx::current_core]
     }
 
-    cva5_ip_metadata [dict get $openhw_descs $ip] 100000000
+    set clk_hz 100000000
+    if {[lsearch -exact $openhw_clockless $ip] >= 0} {
+        set clk_hz 0
+    }
+    cva5_ip_metadata [dict get $openhw_descs $ip] $clk_hz
 
     ipx::create_xgui_files [ipx::current_core]
     ipx::update_checksums [ipx::current_core]

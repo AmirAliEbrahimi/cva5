@@ -53,6 +53,11 @@ TIMER_SRCS := crt0.S trap.S timer.c puts.c
 CSRS_SRCS := crt0.S trap.S csrs.c puts.c
 PLIC_SRCS := crt0.S trap.S plic.c puts.c
 SPI_SRCS  := crt0.S trap.S spi.c puts.c
+# Headers, as prerequisites. soc.h carries the memory map and the PLIC source
+# numbers, so an image built against a stale copy of it talks to the wrong
+# address or attributes an interrupt to the wrong device -- and nothing about
+# the result says it was built before the header changed.
+HDRS      := soc.h stdio.h mip.h
 LDSCRIPT  := link.ld
 CFLAGS    := -march=$(ARCH) -mabi=$(ABI) -Os -g -ffreestanding -nostdlib -I. -Wl,--build-id=none
 
@@ -93,7 +98,7 @@ program: program.hex
 # The sim image is a different SoC: its UART sits in the peripheral range that
 # upstream's EXAMPLE_CONFIG declares, not at the board's address. soc.h keeps
 # both and CVA5_SIM picks. See the note in soc.h.
-main.elf: $(SRCS) $(LDSCRIPT)
+main.elf: $(SRCS) $(HDRS) $(LDSCRIPT)
 	$(CC) $(CFLAGS) -DCVA5_SIM -T $(LDSCRIPT) $(SRCS) -lgcc -o $@
 
 program.hex: main.elf
@@ -107,14 +112,14 @@ app: app.elf
 # another program if you want the board to come up doing something.
 IDLE_SRCS := idle.S trap.S
 
-idle.elf: $(IDLE_SRCS) $(APP_LDSCRIPT)
+idle.elf: $(IDLE_SRCS) $(HDRS) $(APP_LDSCRIPT)
 	$(CC) -march=$(ARCH) -mabi=$(ABI) -nostdlib -Wl,--build-id=none \
 	      -T $(APP_LDSCRIPT) $(IDLE_SRCS) -o $@
 
 ram.mif: idle.elf
 	python3 $(ELF2HW) $(CROSS) $(APP_BASE) $$(( $(RAM_WORDS) * 4 )) $< ram.mif ram.sim
 
-app.elf: $(SRCS) $(APP_LDSCRIPT)
+app.elf: $(SRCS) $(HDRS) $(APP_LDSCRIPT)
 	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(SRCS) -lgcc -o $@
 
 load.tcl: app.elf
@@ -128,7 +133,7 @@ load: load.tcl
 # Main RAM test. Same flow as 'load', different image: the test runs on the
 # CPU once the debugger releases it, so the pass or fail line comes out on the
 # serial console and this target only reports the load.
-memtest.elf: $(MEMTEST_SRCS) $(APP_LDSCRIPT)
+memtest.elf: $(MEMTEST_SRCS) $(HDRS) $(APP_LDSCRIPT)
 	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(MEMTEST_SRCS) -lgcc -o $@
 
 memtest.tcl: memtest.elf
@@ -140,7 +145,7 @@ memtest: memtest.tcl
 
 # The CLINT check: mtime's tick rate, mtimecmp -> mtip, and msip. Polled, so it
 # needs no interrupt handler; prints on the serial console like memtest.
-timer.elf: $(TIMER_SRCS) $(APP_LDSCRIPT)
+timer.elf: $(TIMER_SRCS) $(HDRS) $(APP_LDSCRIPT)
 	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(TIMER_SRCS) -lgcc -o $@
 
 timer.tcl: timer.elf
@@ -154,7 +159,7 @@ timer: timer.tcl
 # core, time/timeh trapping because the count lives in the CLINT. Brings its
 # own trap handler, since trap.S's parks by design. Prints on the serial
 # console like memtest. Fails under QEMU on purpose -- see csrs.c.
-csrs.elf: $(CSRS_SRCS) $(APP_LDSCRIPT)
+csrs.elf: $(CSRS_SRCS) $(HDRS) $(APP_LDSCRIPT)
 	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(CSRS_SRCS) -lgcc -o $@
 
 csrs.tcl: csrs.elf
@@ -167,7 +172,7 @@ csrs: csrs.tcl
 # The PLIC on hardware. Interactive: it waits for a keypress on the serial
 # console, because the UART's receive interrupt is the only source wired and
 # nothing in software can raise it.
-plic.elf: $(PLIC_SRCS) $(APP_LDSCRIPT)
+plic.elf: $(PLIC_SRCS) $(HDRS) $(APP_LDSCRIPT)
 	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(PLIC_SRCS) -lgcc -o $@
 
 plic.tcl: plic.elf
@@ -179,7 +184,7 @@ plic: plic.tcl
 
 # The SPI on hardware. The register checks need nothing attached; the loopback
 # part needs MOSI jumpered to MISO on the ICSP header, and says so.
-spi.elf: $(SPI_SRCS) $(APP_LDSCRIPT)
+spi.elf: $(SPI_SRCS) $(HDRS) $(APP_LDSCRIPT)
 	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(SPI_SRCS) -lgcc -o $@
 
 spi.tcl: spi.elf
@@ -195,7 +200,7 @@ spi: spi.tcl
 # EXAMPLE_CONFIG. With that bit set, "rdtime traps" is expected to FAIL: the
 # sim drives mtime and the CSR is implemented there. Clear it in
 # core/types_and_interfaces/cva5_config.sv and every check passes.
-csrs_sim.elf: $(CSRS_SRCS) $(LDSCRIPT)
+csrs_sim.elf: $(CSRS_SRCS) $(HDRS) $(LDSCRIPT)
 	$(CC) $(CFLAGS) -DCVA5_SIM -T $(LDSCRIPT) $(CSRS_SRCS) -lgcc -o $@
 
 csrs.hex: csrs_sim.elf
