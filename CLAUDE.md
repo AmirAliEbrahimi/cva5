@@ -198,6 +198,42 @@ priority still 0, returned 0, and drained nothing — and the preamble written t
 clear a stale interrupt left it pending. The symptom looked like an interrupt
 stuck on, i.e. like a hardware fault in the thing the test was checking.
 
+## An inferred tri-state does not survive a packaged IP
+
+A block design synthesises each IP **out of context**: in that run the IP is
+the top, so a high-Z written at its boundary has no I/O buffer to attach to and
+Vivado resolves it away.
+
+```
+CRITICAL WARNING: [Synth 8-5799] Converted tricell instance 'i_1' to logic
+```
+
+`cva5_i2c_axi` had `assign scl = scl_t ? 1'bz : scl_o;`, one per line, and got
+one warning per line. What that leaves is a pin **driven high** where it should
+be released, so on an open-drain bus the master fights every slave that pulls
+the line down to ACK — a contention between two push-pull drivers, which is
+the one failure here that can damage a part.
+
+**Instantiate `IOBUF` rather than inferring it.** A real cell survives the
+out-of-context boundary; an expression does not.
+
+The reason this is in this file rather than a code comment is how it hides.
+Everything short of a transfer still passes — registers read back, the
+controller reports idle, an addressed slave never answers — and "no device
+answered" is also the correct result on an empty bus. And **no testbench here
+could see it**: the RTL that synthesises wrong simulates right, which is the
+same shape as the device-fence bug above, where the bench's strictly ordered
+AXI master hid a race the board had.
+
+Verilator has no UNISIM library, so `test_benches/axi/IOBUF_stub.v` models the
+primitive. It is a real model, not a tie-off like
+`test_benches/debug/BSCANE2_stub.v` — the released state is the whole point,
+and a stub that drove the line would hide the bug the explicit buffer exists to
+prevent. Changing it to `assign IO = I;` reproduces 8-5799's effect and
+`tb_i2c` fails on a missed ACK, which is the check that this stays fixed. What
+simulation still cannot check is that Vivado keeps the cell; the packaging log
+does that, by not reporting 8-5799.
+
 ## A block design connects nets to whole pins
 
 There is no way to attach two nets to two bits of one vector pin in a block

@@ -104,12 +104,38 @@ module cva5_i2c_axi #(
     logic scl_i, scl_o, scl_t;
     logic sda_i, sda_o, sda_t;
 
-    //Open drain, the convention i2c_master.v's own header documents: t and o
-    //carry the same value, low drives the line low and high releases it.
-    assign scl = scl_t ? 1'bz : scl_o;
-    assign sda = sda_t ? 1'bz : sda_o;
-    assign scl_i = scl;
-    assign sda_i = sda;
+    //Open drain: t and o carry the same value, low drives the line low and
+    //high releases it, which is the convention i2c_master.v's own header
+    //documents.
+    //
+    //The buffers are instantiated rather than inferred, and that is not a
+    //stylistic choice. Written as
+    //
+    //    assign scl = scl_t ? 1'bz : scl_o;
+    //
+    //it simulates correctly and SYNTHESISES WRONG, because a block design
+    //synthesises each IP out of context: in that run this module is the top,
+    //there is no I/O buffer for the high-Z to attach to, and Vivado resolves
+    //it away --
+    //
+    //  CRITICAL WARNING: [Synth 8-5799] Converted tricell instance 'i_1' to
+    //                    logic
+    //
+    //-- one per line. The released state goes with it and the pin is driven
+    //high instead of let go, so this master fights every slave that pulls the
+    //line down to ACK. Everything short of an actual transfer still passes:
+    //the registers read back, the controller reports idle, and an addressed
+    //slave never answers -- which is indistinguishable from an empty bus.
+    //
+    //An IOBUF is a real cell rather than an inferred one, so it survives the
+    //out-of-context boundary. Verilator has no UNISIM library, so
+    //test_benches/axi/IOBUF_stub.v models it -- a real model and not a tie-off,
+    //so that what the bench drives through is the structure synthesis builds
+    //rather than a second expression of the same intent. What the bench cannot
+    //check is that Vivado keeps the cell; the packaging log does that, by not
+    //reporting 8-5799.
+    IOBUF scl_buf (.I(scl_o), .O(scl_i), .T(scl_t), .IO(scl));
+    IOBUF sda_buf (.I(sda_o), .O(sda_i), .T(sda_t), .IO(sda));
 
     i2c_master_axil #(
         .DEFAULT_PRESCALE (DEFAULT_PRESCALE),

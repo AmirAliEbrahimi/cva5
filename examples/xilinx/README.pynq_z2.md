@@ -802,11 +802,22 @@ fields to tie off. The wrapper does three small things:
   `rst`; everything else here is active-low `rstn`. Registered locally from
   `rstn` alone and never `ndmreset`, by the rule above — the debugger can reach
   this peripheral over the system bus.
-- **Turns the open-drain triplets into two `inout` pins.** The core drives
-  `scl_o`/`scl_t` and `sda_o`/`sda_t` with `t` and `o` carrying the same value:
-  low drives the line low, high releases it. Vivado infers an IOBUF per `inout`
-  at the top level. The bus needs external pull-ups and the PYNQ-Z2 has them on
-  the Arduino header's `ar_scl`/`ar_sda`.
+- **Turns the open-drain triplets into two `inout` pins**, through an
+  explicitly instantiated `IOBUF` each. `t` and `o` carry the same value: low
+  drives the line low, high releases it. The bus needs external pull-ups and
+  the PYNQ-Z2 has them on the Arduino header's `ar_scl`/`ar_sda` (R49/R50,
+  2.2k).
+
+  The buffers are instantiated and not inferred, and that cost a build to
+  learn. Written as `assign scl = scl_t ? 1'bz : scl_o;` it simulates correctly
+  and synthesises wrong: a block design synthesises each IP out of context, so
+  in that run the module is the top, the high-Z has no buffer to attach to, and
+  Vivado reports `CRITICAL WARNING: [Synth 8-5799] Converted tricell instance
+  to logic` — once per line — and leaves the pin driven high where it should be
+  released. On an open-drain bus that means fighting every slave that pulls the
+  line down to ACK. Everything short of a transfer still passed, and "no device
+  answered" is the correct result on an empty bus, so the first board run would
+  have looked like a bus with nothing on it. `CLAUDE.md` has the full note.
 - **Widens the address port** to the 4 KB floor a Vivado address segment can be
   given. The device decodes four words and aliases within the window.
 
@@ -824,9 +835,12 @@ because a second copy of the same author's assumptions proves less than an
 independent reading of the spec. It covers the register map, that the
 open-drain tie-off actually drives and releases, a write reaching the right
 slave with the right byte, a read bringing one back, and an address nothing
-answers being reported as a missed ACK rather than hanging. Two mutants were
-run against it: swapping `scl` and `sda` hangs the bus, and inverting the
-tri-state polarity fails at the first address phase.
+answers being reported as a missed ACK rather than hanging. Three mutants are run
+against it: swapping the two `IOBUF`s' pins and inverting a `T` both fail at
+the first address phase, and changing `IOBUF_stub.v` to drive rather than
+release reproduces 8-5799's effect and fails on a missed ACK. That third one is
+the regression check for the bug above — the bench could not catch it while the
+tri-state was an expression, because the expression always simulated right.
 
 `axis_fifo`'s optional `tid`/`tdest`/`tuser` fields select past the end of the
 packed register when those features are disabled — dead code behind

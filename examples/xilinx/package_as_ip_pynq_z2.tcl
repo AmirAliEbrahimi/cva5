@@ -34,6 +34,33 @@ set soc_files {
 }
 add_files -norecurse $soc_files
 
+# ---- The main memory's preload image
+# tdp_ram does $readmemh(PRELOAD_FILE, ...) with cva5_top's LOCAL_MEM, which is
+# the bare name "ram.mif", so the file has to be IN the packaged IP: an
+# out-of-context synthesis run resolves it against its own run directory and
+# nowhere else.
+#
+# This used to arrive by accident. The line above was once
+# `add_files -force {core examples/xilinx examples/sw}`, and examples/sw
+# carried ram.mif along with the C sources; narrowing that list to stop
+# twenty-one unreferenced-file warnings took the .mif with it, and synthesis
+# reported
+#
+#   WARNING: [Synth 8-4445] could not open $readmem data file 'ram.mif'
+#
+# and carried on with an uninitialised memory. That is almost invisible on the
+# board: the core executes zeros from RAM, traps, and parks -- which is what
+# the preload image does on purpose anyway, so a silent board looks correct
+# either way. Programs loaded over JTAG are unaffected, which is everything
+# except what runs before the first `make load`.
+#
+# Hence the check rather than just the add: a missing image should stop the
+# build, not produce an IP that is wrong in a way nothing downstream notices.
+if {![file exists examples/sw/ram.mif]} {
+    error "examples/sw/ram.mif is missing -- run 'make -C examples/sw ram' first"
+}
+add_files -norecurse {examples/sw/ram.mif}
+
 # ---- Debug subsystem: pulp-platform riscv-dbg v0.9.0 + common_cells v1.24.0
 # Explicit list: riscv-dbg ships two dmi_jtag_tap variants; only the BSCANE2
 # one is used here (debug over the board's own USB-JTAG).

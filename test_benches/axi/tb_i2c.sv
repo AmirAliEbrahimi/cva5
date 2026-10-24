@@ -77,6 +77,10 @@ module tb_i2c;
 
     //A prescale of 4 keeps SCL fast enough for a short simulation; the board
     //uses 250 for 100 kHz.
+    //The DUT instantiates IOBUFs, which test_benches/axi/IOBUF_stub.v models
+    //for Verilator -- so the open-drain behaviour checked below goes through
+    //the same structure synthesis builds, rather than a second expression of
+    //it written for simulation.
     cva5_i2c_axi #(
         .ADDR_WIDTH (12),
         .DEFAULT_PRESCALE (4),
