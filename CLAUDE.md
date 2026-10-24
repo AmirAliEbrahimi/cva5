@@ -198,6 +198,29 @@ priority still 0, returned 0, and drained nothing — and the preamble written t
 clear a stale interrupt left it pending. The symptom looked like an interrupt
 stuck on, i.e. like a hardware fault in the thing the test was checking.
 
+## A Tcl proc does not see a global unless it says so
+
+OpenOCD configs are all procedures, and Tcl does not complain about an
+undeclared global until the line runs:
+
+```tcl
+proc p1_diag {} {
+    global RAM_BASE UART_BASE
+    ...
+    set a [expr {$CLINT_BASE + $CLINT_MTIME_OFF}]   ;# never declared
+}
+```
+
+That shipped. The Debug Module, RAM and UART checks above it all passed and the
+failure came on a board, from the diagnostic whose job is to be trustworthy
+when something else is broken.
+
+It is not a typo-class mistake, it is a reachability one: these configs are
+entirely procedures, several branches only run when hardware misbehaves, and
+nothing simulates OpenOCD. `tools/check-openocd-globals.py` reads the lines
+that have not run yet — run it after touching anything in
+`examples/xilinx/openocd/`.
+
 ## An inferred tri-state does not survive a packaged IP
 
 A block design synthesises each IP **out of context**: in that run the IP is

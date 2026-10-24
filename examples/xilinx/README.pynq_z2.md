@@ -332,6 +332,7 @@ inside 0.6 ns of each other:
 | + I2C on the bus | load queue index → RAM address | 8.990 | **+0.103** |
 | + synthesis warning fixes | crossbar R FIFO → core AXI data_out | 9.775 | **+0.076** |
 | + crossbar DemuxR | crossbar AR spill → crossbar R spill | 9.733 | **+0.153** |
+| + crossbar MuxAr/MuxR | local memory → branch predictor address RAM | 8.980 | **+0.365** |
 
 #### The limiter is a cluster, not a path
 
@@ -1119,7 +1120,8 @@ something.
 | debugger bus split | `sh test_benches/debug/run_sba_split.sh` | 73 checks: `dm_sba_axil` → `cva5_sba_split` → the real RAM port and `tdp_ram` on one side, a peripheral on the other. Routing, window edges, error propagation, byte strobes, and collisions with the core's port |
 | silent boot | program the board | the preload prints nothing |
 | debugger load | `make -C examples/sw load` | SBA block write, verify, release |
-| DM bring-up | `openocd … -c "init; p1_diag; shutdown"` | DM, SBA, RAM read/write over JTAG |
+| DM bring-up | `openocd … -c "init; p1_diag; shutdown"` | DM, SBA, then every peripheral on the bus with the core still in reset: RAM, UART, the CLINT's `mtime` advancing, a PLIC write/read-back, the SPI reporting idle, and the I2C's prescale reading its non-zero reset value — the one identity check here a bus returning zeros cannot fake |
+| OpenOCD config scoping | `python3 tools/check-openocd-globals.py examples/xilinx/openocd/*.cfg` | procs that read a global without declaring it. Tcl does not complain until the line runs, and in a diagnostic that can be never |
 | **all of main memory** | `make -C examples/sw memtest` | **the only thing that addresses all 128 KB**, so the only thing that reaches cascade rows above the first. Prints on the serial console, not the terminal |
 | QEMU parity | `tools/cva5-qemu` | same reset vector and map as the board. `csrs` is the known exception: QEMU implements `time` |
 
