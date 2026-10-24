@@ -29,7 +29,7 @@ all-Xilinx baseline of **WNS +0.107** at 100 MHz on the `xc7z020clg400-1`:
 | `axi_interconnect`   | `cva5_axi_xbar` (pulp `axi_lite_xbar`) | Solderpad 0.51 | same build |
 | `axi_uartlite`       | `cva5_uart` (lowRISC `uart`) | Apache-2.0 | see below |
 | `axi_bram_ctrl` + `blk_mem_gen` | *removed* — main memory is `tdp_ram` inside the core | — | — |
-| `axi_quad_spi` | `cva5_spi_axi` (pulp `axi_spi_master`) | Solderpad 0.51 | packaged, not yet in the BD |
+| `axi_quad_spi` | `cva5_spi_axi` (pulp `axi_spi_master`) | Solderpad 0.51 | present, on the Arduino header |
 | `clk_wiz` | *kept* — the MMCM is a hard block | — | — |
 
 `clk_wiz` is the only Xilinx IP left in the block design.
@@ -49,7 +49,7 @@ for it.
 | PLIC | `0x0C00_0000` | 64 MB | present (one source: the UART) |
 | UART | `0x1000_0000` | 4 KB | present |
 | timer | `0x1800_0000` | 4 KB | reserved |
-| SPI | `0x2000_0000` | 8 MB | reserved |
+| SPI | `0x2000_0000` | 8 MB | present (4 KB decoded, on the Arduino header) |
 | main RAM | `0x8000_0000` | 128 KB | present |
 
 "Reserved" means the window is spoken for and nothing is there yet, so adding
@@ -246,9 +246,10 @@ over system bus access with zero errors, a deliberate unmapped read returning
 single step, register and memory access, asynchronous halt), and `make
 memtest` passing -- the only test that addresses all 128 KB.
 
-Run `./test_benches/axi/run_xbar.sh`, `bash test_benches/axi/run_plic.sh` and
-`sh test_benches/debug/run_sba_split.sh` before spending a synthesis run — 47
-checks across three port-width configurations, 103 and 57 across two source counts, and 73. The first two take
+Run `./test_benches/axi/run_xbar.sh`, `bash test_benches/axi/run_plic.sh`,
+`bash test_benches/axi/run_spi.sh` and
+`sh test_benches/debug/run_sba_split.sh` before spending a synthesis run — 57
+checks across three port-width configurations, 103 and 57 across two PLIC source counts, 73 for the SPI, and 73 for the debugger's bus split. The first two take
 their file lists from `package_openhw_ips.tcl` via `tools/ip-filelist.py`, so
 what is simulated is exactly what is synthesised.
 
@@ -312,6 +313,19 @@ inside 0.6 ns of each other:
 | + lowRISC UART | load queue index → RAM enable | 8.832 | **+0.551** |
 | + CLINT as a peripheral | — | — | **—** (not built alone) |
 | + SBA split, Lite-only bus, `time` unimplemented | load queue index → RAM address | 8.665 | **+0.414** |
+| + PLIC on the bus | register file → divider CLZ | 8.917 | **+0.430** |
+
+The PLIC row is the first build with four peripherals and three interrupt lines
+into the core. Its worst path left the memory system entirely and went back to
+the register file feeding the divider's count-leading-zeros carry chain -- 15
+levels of logic, 8 of them CARRY4, and 36% logic rather than the 80% routing
+the recent limiters have been. The twenty worst spanned 0.430 to 0.703 ns.
+
+The PLIC itself cost 68 LUTs and 22 flops at one source. **Its crossbar port
+cost 184 LUTs and 107 flops** -- a demux leg, a mux leg, their spill registers
+and a decode rule -- so a peripheral's bus port is nearly three times the
+peripheral here. Budget around 190 LUTs per port when adding the next one;
+that is what the SPI's cost too.
 
 Which one reports as WNS is decided by placement, so fixing any one of them
 promotes the next. A change that re-places a few hundred registers re-deals
@@ -624,8 +638,17 @@ the CLINT and PLIC needed were forced by `tools/compile_order` compiling the
 `apu/` originals into the core simulation, and nothing in this tree collides
 with these names.
 
-**Packaged but not yet in the block design**, same split as the PLIC: this is
-the IP and its testbench, the crossbar port and the pins are the next patch.
+It sits on the crossbar's fourth master port at `0x2000_0000` and brings seven
+pins out to the **Arduino shield header**: clock, MOSI and MISO on the board's
+dedicated SPI nets, chip select 0 on the Arduino slave-select net, and chip
+selects 1–3 on D9, D8 and D7 — which is how a shield with several devices is
+normally wired. The XDC lists the package pins.
+
+Its `irq` is deliberately left unconnected. Routing it to the PLIC means two
+interrupt sources, and a block design cannot drive a 2-bit vector pin from two
+separate nets without `xlconcat` — a Xilinx IP, which is the thing this
+exercise removes. A ten-line concat of our own is the fix, and it belongs in
+the patch that needs it rather than smuggled into this one.
 
 Two things about it are worth writing down.
 
@@ -651,6 +674,17 @@ falling edge and the receiver samples on the rising one
 `spi_rise`). The divider gives a period of `2·(CLKDIV+1)` core clocks — 6 at
 CLKDIV 2, 18 at 8, both measured in the bench.
 
+**A loopback cannot hand back the word you sent**, because the controller is
+half duplex: a transfer is a command phase and then data in one direction. What
+it *can* do is hold a known level on MOSI through the data phase — after an
+8-bit command the transmitter is left driving bit 23 of `SPICMD` — so with MOSI
+jumpered to MISO, `cmd 0x00800000` reads back `0xFFFFFFFF` and `cmd 0x00000000`
+reads `0x00000000`. A full 32-bit command leaves the shifter empty and reads
+zeros. Those three numbers are measured in `run_spi.sh` rather than reasoned
+about, and `examples/sw/spi.c` asserts the first two on hardware with one
+jumper on the ICSP header. All zeros where ones were expected means either the
+jumper is missing or MISO is on `sdi0`.
+
 `STATUS` bit 0 reads as **idle**, not busy, which is the opposite of the guess
 and cost one bench iteration. The FIFO levels are at `[28:24]` for TX and
 `[20:16]` for RX. `examples/sw/soc.h` carries the whole map, including the
@@ -669,6 +703,7 @@ cva5_top/m_axi_dbg  -> s_axi_dbg    the debugger, for anything outside the RAM
 m_axi_uart  -> cva5_uart/s_axi      0x1000_0000
 m_axi_clint -> cva5_clint_0/s_axi   0x0200_0000
 m_axi_plic  -> cva5_plic_0/s_axi    0x0C00_0000
+m_axi_spi   -> cva5_spi_0/s_axi     0x2000_0000
 ```
 
 It got there in two steps. First the peripheral window was one AXI4 master port
@@ -815,15 +850,16 @@ something.
 
 | check | command | covers |
 |-------|---------|--------|
-| crossbar | `test_benches/axi/run_xbar.sh` | 47 checks × 3 port-width configurations: decode to all three slaves, both masters to each, cross-contamination, address truncation per master port, window boundaries including the PLIC/UART abutment, DECERR |
+| crossbar | `test_benches/axi/run_xbar.sh` | 57 checks × 3 port-width configurations: decode to all four slaves, both masters to each, cross-contamination, address truncation per master port, window boundaries including the PLIC/UART abutment, DECERR |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
 | CLINT | `sh test_benches/debug/run_clint.sh` | mtime tick rate, writes, mtimecmp→mtip at the boundary, msip |
-| SPI | `bash test_benches/axi/run_spi.sh` | 56 checks against a mode-0 slave model: the register map, FIFO levels, a command-then-data write seen bit by bit on MOSI, chip-select selection, a read coming back through `sdi1`, the clock divider, and the soft reset |
+| SPI | `bash test_benches/axi/run_spi.sh` | 73 checks against a mode-0 slave model: the register map, FIFO levels, a command-then-data write seen bit by bit on MOSI, chip-select selection, a read coming back through `sdi1`, the clock divider, and the soft reset |
 | PLIC | `bash test_benches/axi/run_plic.sh` | 103 checks at `NUM_SOURCES` 8 and 57 at 1 — the configuration the board deploys, which takes different widths inside the PLIC: the register map, pending versus eip, claim/complete including an unserviced level source, edge latching, priority order and ties, threshold suppression. Also checks the vendored copies still match `apu/plic` |
 | CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
 | counter CSRs, in the core sim | `make -C examples/sw run-csrs` | `rdcycle`/`rdinstret`/`mcycle` readable and advancing, `rdtime` and `rdtimeh` taking an illegal-instruction trap. The only place both polarities of `INCLUDE_TIME_CSR` can be run: the sim takes upstream's `EXAMPLE_CONFIG`, so with the bit set the three trap checks are *expected* to fail |
+| SPI on hardware | `make -C examples/sw spi` | the register file and FIFO levels with nothing attached, a transfer running to completion, then — with MOSI jumpered to MISO on the ICSP header — a held 1 reading back as all ones and a held 0 as all zeros, on two chip selects |
 | PLIC on hardware | `make -C examples/sw plic` | the register file over the bus, then **one keypress on the console** reaching `mip.MEIP`, and every filtering check made against that one asserted source: the threshold holding it down and letting it back, priority 0 doing the same, claim naming the UART, and complete leaving it quiet. Interactive, because the UART's receive interrupt is the only source wired and software cannot raise it. Waits 30 s, measured with `mtime` |
 | counter CSRs, on hardware | `make -C examples/sw csrs` | the same checks plus the CLINT's `mtime` advancing over the bus. Prints on the serial console. Fails under QEMU on purpose |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |

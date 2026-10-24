@@ -49,16 +49,16 @@ verilator --lint-only -Wall $THIRD_PARTY_NOISE --top-module cva5_axi_xbar $DESIG
 # the crossbar performs is exercised, not because the hardware narrows them.
 rm -rf "$BUILD"
 status=0
-for cfg in "12 16 26" "32 32 32" "4 6 8"; do
+for cfg in "12 16 26 12" "32 32 32 32" "4 6 8 5"; do
     set -- $cfg
-    uart_aw=$1; clint_aw=$2; plic_aw=$3
-    dir="$BUILD/aw${uart_aw}_${clint_aw}_${plic_aw}"
-    echo "== build (UART_AW=$uart_aw CLINT_AW=$clint_aw PLIC_AW=$plic_aw) =="
+    uart_aw=$1; clint_aw=$2; plic_aw=$3; spi_aw=$4
+    dir="$BUILD/aw${uart_aw}_${clint_aw}_${plic_aw}_${spi_aw}"
+    echo "== build (UART_AW=$uart_aw CLINT_AW=$clint_aw PLIC_AW=$plic_aw SPI_AW=$spi_aw) =="
     mkdir -p "$dir"
     verilator --binary -j 0 --timing \
         $THIRD_PARTY_NOISE -Wno-BLKSEQ -Wno-INITIALDLY \
         --top-module tb_axi_xbar \
-        -GUART_AW=$uart_aw -GCLINT_AW=$clint_aw -GPLIC_AW=$plic_aw \
+        -GUART_AW=$uart_aw -GCLINT_AW=$clint_aw -GPLIC_AW=$plic_aw -GSPI_AW=$spi_aw \
         -Mdir "$dir" -o tb_axi_xbar \
         $DESIGN test_benches/axi/tb_axi_xbar.sv
     echo "== run =="

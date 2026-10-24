@@ -16,12 +16,14 @@
 module tb_axi_xbar #(
     parameter int unsigned UART_AW  = 32'd12,
     parameter int unsigned CLINT_AW = 32'd16,
-    parameter int unsigned PLIC_AW  = 32'd26
+    parameter int unsigned PLIC_AW  = 32'd26,
+    parameter int unsigned SPI_AW   = 32'd12
 );
 
     localparam logic [31:0] PERIPH_BASE = 32'h1000_0000;
     localparam logic [31:0] CLINT_BASE  = 32'h0200_0000;
     localparam logic [31:0] PLIC_BASE   = 32'h0C00_0000;
+    localparam logic [31:0] SPI_BASE    = 32'h2000_0000;
     localparam logic [1:0]  RESP_OKAY   = 2'b00;
     localparam logic [1:0]  RESP_DECERR = 2'b11;
 
@@ -89,6 +91,15 @@ module tb_axi_xbar #(
     logic        plic_rvalid, plic_rready;
     logic [1:0]  plic_bresp, plic_rresp;
 
+    logic [SPI_AW-1:0] spi_awaddr, spi_araddr;
+    logic [2:0]  spi_awprot, spi_arprot;
+    logic        spi_awvalid, spi_awready, spi_wvalid, spi_wready;
+    logic [31:0] spi_wdata, spi_rdata;
+    logic [3:0]  spi_wstrb;
+    logic        spi_bvalid, spi_bready, spi_arvalid, spi_arready;
+    logic        spi_rvalid, spi_rready;
+    logic [1:0]  spi_bresp, spi_rresp;
+
     cva5_axi_xbar #(
         .PERIPH_BASE         (PERIPH_BASE),
         .PERIPH_SIZE         (32'h0001_0000),
@@ -98,7 +109,10 @@ module tb_axi_xbar #(
         .M_CLINT_ADDR_WIDTH  (CLINT_AW),
         .PLIC_BASE           (PLIC_BASE),
         .PLIC_SIZE           (32'h0400_0000),
-        .M_PLIC_ADDR_WIDTH   (PLIC_AW)
+        .M_PLIC_ADDR_WIDTH   (PLIC_AW),
+        .SPI_BASE            (SPI_BASE),
+        .SPI_SIZE            (32'h0080_0000),
+        .M_SPI_ADDR_WIDTH    (SPI_AW)
     ) dut (
         .clk(clk), .rstn(rstn),
 
@@ -155,7 +169,18 @@ module tb_axi_xbar #(
         .m_axi_plic_araddr(plic_araddr), .m_axi_plic_arprot(plic_arprot),
         .m_axi_plic_arvalid(plic_arvalid), .m_axi_plic_arready(plic_arready),
         .m_axi_plic_rdata(plic_rdata), .m_axi_plic_rresp(plic_rresp),
-        .m_axi_plic_rvalid(plic_rvalid), .m_axi_plic_rready(plic_rready)
+        .m_axi_plic_rvalid(plic_rvalid), .m_axi_plic_rready(plic_rready),
+
+        .m_axi_spi_awaddr(spi_awaddr), .m_axi_spi_awprot(spi_awprot),
+        .m_axi_spi_awvalid(spi_awvalid), .m_axi_spi_awready(spi_awready),
+        .m_axi_spi_wdata(spi_wdata), .m_axi_spi_wstrb(spi_wstrb),
+        .m_axi_spi_wvalid(spi_wvalid), .m_axi_spi_wready(spi_wready),
+        .m_axi_spi_bresp(spi_bresp), .m_axi_spi_bvalid(spi_bvalid),
+        .m_axi_spi_bready(spi_bready),
+        .m_axi_spi_araddr(spi_araddr), .m_axi_spi_arprot(spi_arprot),
+        .m_axi_spi_arvalid(spi_arvalid), .m_axi_spi_arready(spi_arready),
+        .m_axi_spi_rdata(spi_rdata), .m_axi_spi_rresp(spi_rresp),
+        .m_axi_spi_rvalid(spi_rvalid), .m_axi_spi_rready(spi_rready)
     );
 
     //==================================================================
@@ -278,12 +303,52 @@ module tb_axi_xbar #(
         end
     end
 
+    logic [31:0] spi_regs [4];
+    logic [SPI_AW-1:0] sw_addr;
+    logic sw_have_addr = 0, sw_have_data = 0;
+    logic [31:0] sw_data;
+
+    assign spi_awready = !sw_have_addr;
+    assign spi_wready  = !sw_have_data;
+    assign spi_arready = !spi_rvalid;
+
+    always_ff @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            sw_have_addr <= 0; sw_have_data <= 0; spi_bvalid <= 0;
+        end else begin
+            if (spi_awvalid && spi_awready) begin
+                sw_addr <= spi_awaddr; sw_have_addr <= 1;
+            end
+            if (spi_wvalid && spi_wready) begin
+                sw_data <= spi_wdata; sw_have_data <= 1;
+            end
+            if (sw_have_addr && sw_have_data && !spi_bvalid) begin
+                spi_regs[sw_addr[3:2]] <= sw_data;
+                sw_have_addr <= 0; sw_have_data <= 0;
+                spi_bvalid <= 1; spi_bresp <= RESP_OKAY;
+            end
+            if (spi_bvalid && spi_bready) spi_bvalid <= 0;
+        end
+    end
+
+    always_ff @(posedge clk or negedge rstn) begin
+        if (!rstn) spi_rvalid <= 0;
+        else begin
+            if (spi_arvalid && spi_arready) begin
+                spi_rvalid <= 1;
+                spi_rdata  <= spi_regs[spi_araddr[3:2]];
+                spi_rresp  <= RESP_OKAY;
+            end else if (spi_rvalid && spi_rready) spi_rvalid <= 0;
+        end
+    end
+
     // What each master port last presented, latched at the handshake rather
     // than sampled afterwards: once the transaction has completed the port's
     // address and strobes are whatever the crossbar happens to leave driven.
     logic [UART_AW-1:0]  seen_uart_awaddr, seen_uart_araddr;
     logic [CLINT_AW-1:0] seen_clint_awaddr, seen_clint_araddr;
     logic [PLIC_AW-1:0]  seen_plic_araddr;
+    logic [SPI_AW-1:0]   seen_spi_araddr;
     logic [3:0]          seen_uart_wstrb;
     always_ff @(posedge clk) begin
         if (uart_awvalid && uart_awready)   seen_uart_awaddr  <= uart_awaddr;
@@ -292,6 +357,7 @@ module tb_axi_xbar #(
         if (clint_awvalid && clint_awready) seen_clint_awaddr <= clint_awaddr;
         if (clint_arvalid && clint_arready) seen_clint_araddr <= clint_araddr;
         if (plic_arvalid  && plic_arready)  seen_plic_araddr  <= plic_araddr;
+        if (spi_arvalid   && spi_arready)   seen_spi_araddr   <= spi_araddr;
     end
 
     //==================================================================
@@ -371,6 +437,7 @@ module tb_axi_xbar #(
             uart_regs[i] = 32'h0;
             clint_regs[i] = 32'h0;
             plic_regs[i] = 32'h0;
+            spi_regs[i] = 32'h0;
         end
 
         repeat (4) step();
@@ -400,6 +467,13 @@ module tb_axi_xbar #(
         expect_eq("...and not in the CLINT", clint_regs[1], 32'h0);
         lite_read(PORT_CPU, PLIC_BASE + 32'h4, rdata, resp);
         expect_eq("cpu read from the PLIC", rdata, 32'h0F1C_0001);
+
+        lite_write(PORT_CPU, SPI_BASE + 32'h8, 32'h5010_0001, resp);
+        expect_eq("cpu write to the SPI resp", 32'(resp), 32'(RESP_OKAY));
+        expect_eq("cpu write landed in the SPI", spi_regs[2], 32'h5010_0001);
+        expect_eq("...and not in the PLIC", plic_regs[2], 32'h0);
+        lite_read(PORT_CPU, SPI_BASE + 32'h8, rdata, resp);
+        expect_eq("cpu read from the SPI", rdata, 32'h5010_0001);
 
         //--- the debugger reaches both slaves
         $display("-- debugger port");
@@ -431,6 +505,9 @@ module tb_axi_xbar #(
         expect_eq("CLINT saw its offset, truncated",
                   32'(seen_clint_araddr),
                   (CLINT_BASE + 32'h0) & ((32'd1 << CLINT_AW) - 1));
+        expect_eq("SPI saw its offset, truncated",
+                  32'(seen_spi_araddr),
+                  (SPI_BASE + 32'h8) & ((32'd1 << SPI_AW) - 1));
         expect_eq("PLIC saw its offset, truncated",
                   32'(seen_plic_araddr),
                   (PLIC_BASE + 32'h200004) & ((32'd1 << PLIC_AW) - 1));
@@ -448,6 +525,7 @@ module tb_axi_xbar #(
         expect_eq("the UART is untouched by those", uart_regs[0], 32'h0);
         expect_eq("the CLINT is untouched by those", clint_regs[1], 32'h0);
         expect_eq("the PLIC is untouched by those", plic_regs[0], 32'h0);
+        expect_eq("the SPI is untouched by those", spi_regs[0], 32'h0);
 
         //--- just below and just above each window
         //The PLIC's 64 MB window ends exactly where the UART's begins --
@@ -475,6 +553,12 @@ module tb_axi_xbar #(
         lite_read(PORT_CPU, PLIC_BASE - 32'h4, rdata, resp);
         expect_eq("one word below the PLIC window DECERRs",
                   32'(resp), 32'(RESP_DECERR));
+        lite_read(PORT_CPU, SPI_BASE - 32'h4, rdata, resp);
+        expect_eq("one word below the SPI window DECERRs",
+                  32'(resp), 32'(RESP_DECERR));
+        lite_read(PORT_CPU, SPI_BASE + 32'h0080_0000, rdata, resp);
+        expect_eq("one word past the SPI window DECERRs",
+                  32'(resp), 32'(RESP_DECERR));
         //The same abutment seen from the other side: the first word past the
         //PLIC's window is the UART's first register.
         lite_read(PORT_CPU, PLIC_BASE + 32'h0400_0000, rdata, resp);
@@ -497,6 +581,12 @@ module tb_axi_xbar #(
             lite_write(PORT_CPU, PLIC_BASE + 32'h8, 32'h5555_6666, resp);
             lite_write(PORT_DBG, PERIPH_BASE + 32'h4, 32'h7777_8888, resp);
         join
+        fork
+            lite_write(PORT_CPU, SPI_BASE + 32'hC, 32'h9999_AAAA, resp);
+            lite_write(PORT_DBG, CLINT_BASE + 32'h8, 32'hBBBB_CCCC, resp);
+        join
+        expect_eq("concurrent CPU write to the SPI", spi_regs[3], 32'h9999_AAAA);
+        expect_eq("concurrent debugger write to the CLINT", clint_regs[2], 32'hBBBB_CCCC);
         expect_eq("concurrent CPU write to the PLIC", plic_regs[2], 32'h5555_6666);
         expect_eq("concurrent debugger write to the UART", uart_regs[1], 32'h7777_8888);
 
@@ -515,8 +605,8 @@ module tb_axi_xbar #(
         expect_eq("a strobed write still completes", 32'(resp), 32'(RESP_OKAY));
 
         if (errors == 0)
-            $display("PASS tb_axi_xbar: %0d checks (UART_AW=%0d CLINT_AW=%0d PLIC_AW=%0d)",
-                     checks, UART_AW, CLINT_AW, PLIC_AW);
+            $display("PASS tb_axi_xbar: %0d checks (UART_AW=%0d CLINT_AW=%0d PLIC_AW=%0d SPI_AW=%0d)",
+                     checks, UART_AW, CLINT_AW, PLIC_AW, SPI_AW);
         else
             $display("FAIL tb_axi_xbar: %0d of %0d checks failed", errors, checks);
         $finish;

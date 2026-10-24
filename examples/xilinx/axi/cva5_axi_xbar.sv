@@ -7,6 +7,7 @@
  *   M0  m_axi_uart   UART at PERIPH_BASE    AXI4-Lite
  *   M1  m_axi_clint  CLINT at CLINT_BASE     AXI4-Lite
  *   M2  m_axi_plic   PLIC at PLIC_BASE       AXI4-Lite
+ *   M3  m_axi_spi    SPI at SPI_BASE         AXI4-Lite
  *
  * Every port is AXI4-Lite, which is the whole of what this SoC's bus carries.
  * It was not always: the crossbar used to be full AXI4 with a RAM master port,
@@ -27,9 +28,12 @@
  * decode. An address no rule claims gets a DECERR from the Lite crossbar's own
  * error slave, rather than landing somewhere unexpected or hanging.
  *
- * Adding a peripheral -- the timer at 0x1800_0000, the SPI at 0x2000_0000 --
- * is a rule, a port and a line in the block design. The PLIC was the first one
- * added that way, which is the whole of what it cost here.
+ * Adding a peripheral is a rule, a port and a line in the block design -- the
+ * PLIC and the SPI both arrived that way. It is not free: a port costs around
+ * 190 LUTs and 110 flops here, measured when the PLIC's was added, which is
+ * nearly three times what the PLIC itself costs at one source. The next one is
+ * an I2C master; a timer window is reserved at 0x1800_0000 and unused, since
+ * the CLINT provides the timer this core needs.
  *
  * Copyright © 2024 Chris Keilbart
  * SPDX-License-Identifier: Apache-2.0
@@ -44,6 +48,8 @@ module cva5_axi_xbar #(
     parameter logic [31:0] CLINT_SIZE  = 32'h0001_0000,  // 64 KB
     parameter logic [31:0] PLIC_BASE   = 32'h0C00_0000,
     parameter logic [31:0] PLIC_SIZE   = 32'h0400_0000,  // 64 MB, CVA6's window
+    parameter logic [31:0] SPI_BASE    = 32'h2000_0000,
+    parameter logic [31:0] SPI_SIZE    = 32'h0080_0000,  // 8 MB, CVA6's window
 
     // Width of each master port's address bus.
     //
@@ -63,6 +69,7 @@ module cva5_axi_xbar #(
     parameter int unsigned M_UART_ADDR_WIDTH  = 32,
     parameter int unsigned M_CLINT_ADDR_WIDTH = 32,
     parameter int unsigned M_PLIC_ADDR_WIDTH  = 32,
+    parameter int unsigned M_SPI_ADDR_WIDTH   = 32,
 
     // Outstanding transactions allowed per port. Two: every master here issues
     // single register accesses and none of them pipeline.
@@ -184,11 +191,34 @@ module cva5_axi_xbar #(
         input logic [31:0] m_axi_plic_rdata,
         input logic [1:0] m_axi_plic_rresp,
         input logic m_axi_plic_rvalid,
-        output logic m_axi_plic_rready
+        output logic m_axi_plic_rready,
+
+        //----------------------------------------------------------------
+        // M3: SPI (AXI4-Lite)
+        //----------------------------------------------------------------
+        output logic [M_SPI_ADDR_WIDTH-1:0] m_axi_spi_awaddr,
+        output logic [2:0] m_axi_spi_awprot,
+        output logic m_axi_spi_awvalid,
+        input logic m_axi_spi_awready,
+        output logic [31:0] m_axi_spi_wdata,
+        output logic [3:0] m_axi_spi_wstrb,
+        output logic m_axi_spi_wvalid,
+        input logic m_axi_spi_wready,
+        input logic [1:0] m_axi_spi_bresp,
+        input logic m_axi_spi_bvalid,
+        output logic m_axi_spi_bready,
+        output logic [M_SPI_ADDR_WIDTH-1:0] m_axi_spi_araddr,
+        output logic [2:0] m_axi_spi_arprot,
+        output logic m_axi_spi_arvalid,
+        input logic m_axi_spi_arready,
+        input logic [31:0] m_axi_spi_rdata,
+        input logic [1:0] m_axi_spi_rresp,
+        input logic m_axi_spi_rvalid,
+        output logic m_axi_spi_rready
     );
 
     localparam int unsigned NUM_SLV = 32'd2;
-    localparam int unsigned NUM_MST = 32'd3;
+    localparam int unsigned NUM_MST = 32'd4;
 
     //------------------------------------------------------------------
     // AXI4-Lite channel and request/response types. Field order and names
@@ -289,6 +319,9 @@ module cva5_axi_xbar #(
         addr_map[2] = '{idx: 32'd2,
                         start_addr: PLIC_BASE,
                         end_addr:   PLIC_BASE + PLIC_SIZE};
+        addr_map[3] = '{idx: 32'd3,
+                        start_addr: SPI_BASE,
+                        end_addr:   SPI_BASE + SPI_SIZE};
     end
 
     //------------------------------------------------------------------
@@ -450,6 +483,33 @@ module cva5_axi_xbar #(
         mst_resp[2].r.data   = m_axi_plic_rdata;
         mst_resp[2].r.resp   = m_axi_plic_rresp;
         mst_resp[2].r_valid  = m_axi_plic_rvalid;
+    end
+
+    //------------------------------------------------------------------
+    // M3: SPI
+    //------------------------------------------------------------------
+    assign m_axi_spi_awaddr  = mst_req[3].aw.addr[M_SPI_ADDR_WIDTH-1:0];
+    assign m_axi_spi_awprot  = mst_req[3].aw.prot;
+    assign m_axi_spi_awvalid = mst_req[3].aw_valid;
+    assign m_axi_spi_wdata   = mst_req[3].w.data;
+    assign m_axi_spi_wstrb   = mst_req[3].w.strb;
+    assign m_axi_spi_wvalid  = mst_req[3].w_valid;
+    assign m_axi_spi_bready  = mst_req[3].b_ready;
+    assign m_axi_spi_araddr  = mst_req[3].ar.addr[M_SPI_ADDR_WIDTH-1:0];
+    assign m_axi_spi_arprot  = mst_req[3].ar.prot;
+    assign m_axi_spi_arvalid = mst_req[3].ar_valid;
+    assign m_axi_spi_rready  = mst_req[3].r_ready;
+
+    always_comb begin
+        mst_resp[3] = '0;
+        mst_resp[3].aw_ready = m_axi_spi_awready;
+        mst_resp[3].w_ready  = m_axi_spi_wready;
+        mst_resp[3].b.resp   = m_axi_spi_bresp;
+        mst_resp[3].b_valid  = m_axi_spi_bvalid;
+        mst_resp[3].ar_ready = m_axi_spi_arready;
+        mst_resp[3].r.data   = m_axi_spi_rdata;
+        mst_resp[3].r.resp   = m_axi_spi_rresp;
+        mst_resp[3].r_valid  = m_axi_spi_rvalid;
     end
 
 endmodule

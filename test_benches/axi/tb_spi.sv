@@ -85,6 +85,8 @@ module tb_spi;
     logic        spi_clk;
     logic [3:0]  spi_csn;
     logic        spi_mosi, spi_miso;
+    logic        miso_reg;
+    logic        loopback_mode = 0;   //a wire from MOSI to MISO, as on the board
     logic        irq;
 
     cva5_spi_axi #(
@@ -146,6 +148,8 @@ module tb_spi;
     logic [63:0] miso_pattern;         //what the model will send, MSB first
     int unsigned miso_bits;
 
+    assign spi_miso = loopback_mode ? spi_mosi : miso_reg;
+
     //One driver for the whole model, clocked on the core clock with edge
     //detection on spi_clk -- several always blocks writing the same signals
     //from different clocks is what Verilator's MULTIDRIVEN is for.
@@ -160,7 +164,7 @@ module tb_spi;
             //slave does, before the first clock edge.
             mosi_bits <= 0;
             miso_bits <= 0;
-            spi_miso  <= miso_pattern[63];
+            miso_reg  <= miso_pattern[63];
         end
         else if (cs_active) begin
             if (spi_clk && !spi_clk_q) begin
@@ -170,12 +174,12 @@ module tb_spi;
             end
             if (!spi_clk && spi_clk_q) begin
                 //falling edge: the slave moves MISO
-                spi_miso  <= miso_pattern[62 - miso_bits];
+                miso_reg  <= miso_pattern[62 - miso_bits];
                 miso_bits <= miso_bits + 1;
             end
         end
         else if (!cs_active && cs_q) begin
-            spi_miso <= 1'b0;   //idle, so a missing CS shows as a stuck value
+            miso_reg <= 1'b0;   //idle, so a missing CS shows as a stuck value
         end
     end
 
@@ -206,7 +210,7 @@ module tb_spi;
         awaddr = 0; araddr = 0; wdata = 0;
         mosi_seen = '0; mosi_bits = 0; miso_bits = 0; saw_irq = 0;
         miso_pattern = '0;
-        spi_miso = 0;
+        miso_reg = 0;
 
         repeat (4) @(negedge clk);
         rstn = 1;
@@ -337,6 +341,50 @@ module tb_spi;
         reg_read(REG_STATUS, v);
         expect_eq("idle after a soft reset", v & ST_IDLE, ST_IDLE);
         expect_eq("and the chip selects are high", 32'(spi_csn), 32'hF);
+
+        //---- what a wire from MOSI to MISO actually returns.
+        //
+        //This controller is half duplex: a transfer is a command phase, then
+        //data in one direction. So a loopback cannot hand back the word that
+        //was sent -- during a read's data phase the transmitter is idle and
+        //MOSI holds whatever it was left driving. What that level is decides
+        //what examples/sw/spi.c can assert on the board, so it is measured
+        //here rather than assumed.
+        $display("-- loopback, measured");
+        loopback_mode = 1;
+
+        reg_write(REG_CLKDIV, 32'd2);
+        reg_write(REG_SPIDUM, 32'd0);
+
+        //After an 8-bit command, bit 23 of SPICMD is what the transmitter is
+        //left holding, so this asks for a held 1 during the data phase.
+        reg_write(REG_SPICMD, 32'h0080_0000);
+        reg_write(REG_SPILEN, 32'h0020_0008);
+        reg_write(REG_STATUS, ST_RD | cs_onehot(0));
+        await_transfer(40);
+        reg_read(RX_FIFO, v);
+        $display("   cmd 0x00800000, 8 command bits, 32 read: 0x%08x", v);
+        expect_eq("a held 1 on MOSI reads back as all ones", v, 32'hFFFF_FFFF);
+
+        reg_write(REG_SPICMD, 32'h0000_0000);
+        reg_write(REG_SPILEN, 32'h0020_0008);
+        reg_write(REG_STATUS, ST_RD | cs_onehot(0));
+        await_transfer(40);
+        reg_read(RX_FIFO, v);
+        $display("   cmd 0x00000000, 8 command bits, 32 read: 0x%08x", v);
+        expect_eq("and a held 0 as all zeros", v, 32'h0);
+
+        //And a 32-bit command with the data phase right behind it.
+        reg_write(REG_SPICMD, 32'hA5A5_5A5A);
+        reg_write(REG_SPILEN, 32'h0020_0020);
+        reg_write(REG_STATUS, ST_RD | cs_onehot(0));
+        await_transfer(64);
+        reg_read(RX_FIFO, v);
+        $display("   cmd 0xa5a55a5a, 32 command bits, 32 read: 0x%08x", v);
+        expect_eq("a 32-bit command leaves the shifter empty, so zeros",
+                  v, 32'h0);
+
+        loopback_mode = 0;
 
         if (errors == 0)
             $display("PASS tb_spi: %0d checks", checks);

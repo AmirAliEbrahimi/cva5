@@ -116,6 +116,25 @@ connect_bd_net $sys_rstn [get_bd_pins cva5_plic_0/rstn]
 connect_bd_net [get_bd_pins cva5_uart_0/irq] [get_bd_pins cva5_plic_0/irq_srcs]
 connect_bd_net [get_bd_pins cva5_plic_0/eip] [get_bd_pins cva5_top_0/external]
 
+# ---- SPI --------------------------------------------------------------------
+# pulp-platform's axi_spi_master, in place of axi_quad_spi. Four chip selects
+# out to the Arduino shield header; see the XDC for the pins and for the
+# loopback jumper the software test uses.
+#
+# Its irq (end of transfer, or a FIFO watermark) is deliberately left
+# unconnected. Routing it to the PLIC means two interrupt sources, and a block
+# design cannot drive a 2-bit vector pin from two separate nets without
+# xlconcat -- a Xilinx IP, which is the thing this exercise removes. A ten-line
+# concat of our own is the fix, and it belongs in the patch that needs it.
+create_bd_cell -type ip -vlnv xilinx.com:user:cva5_spi_axi:1.0 cva5_spi_0
+connect_bd_net $sys_clk  [get_bd_pins cva5_spi_0/clk]
+connect_bd_net $sys_rstn [get_bd_pins cva5_spi_0/rstn]
+
+make_bd_pins_external -name spi_clk  [get_bd_pins cva5_spi_0/spi_clk]
+make_bd_pins_external -name spi_mosi [get_bd_pins cva5_spi_0/spi_mosi]
+make_bd_pins_external -name spi_miso [get_bd_pins cva5_spi_0/spi_miso]
+make_bd_pins_external -name spi_csn  [get_bd_pins cva5_spi_0/spi_csn]
+
 # ---- Main RAM ---------------------------------------------------------------
 # There is no memory IP here any more. Main memory is a 128 KB true dual-port
 # block RAM inside cva5_top, inferred from RTL -- no axi_bram_ctrl, no
@@ -170,6 +189,7 @@ connect_bd_intf_net [get_bd_intf_pins cva5_top_0/m_axi_dbg] [get_bd_intf_pins ax
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_uart]  [get_bd_intf_pins cva5_uart_0/s_axi]
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_clint] [get_bd_intf_pins cva5_clint_0/s_axi]
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_plic]  [get_bd_intf_pins cva5_plic_0/s_axi]
+connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_spi]   [get_bd_intf_pins cva5_spi_0/s_axi]
 
 # ---- Address map ----------------------------------------------------------
 # Every link here is point to point, so nothing in the block design decodes
@@ -216,6 +236,17 @@ set plic_seg [cva5_seg {axi_xbar_0/m_axi_plic/SEG_cva5_plic_0_reg0} \
 if {$plic_seg eq ""} { error "the crossbar's PLIC port has no address segment" }
 set_property offset 0x0C000000 $plic_seg
 set_property range  64M        $plic_seg
+
+# 4K, the floor a Vivado address segment can be given and what cva5_spi_axi's
+# 12-bit slave port offers. The device itself decodes 128 bytes and aliases
+# within the window; the crossbar decodes the full 8 MB CVA6 reserves to this
+# port.
+set spi_seg [cva5_seg {axi_xbar_0/m_axi_spi/SEG_cva5_spi_0_reg0} \
+                      {axi_xbar_0/m_axi_spi/SEG_cva5_spi_0_Reg} \
+                      {axi_xbar_0/m_axi_spi/SEG_cva5_spi_0_s_axi}]
+if {$spi_seg eq ""} { error "the crossbar's SPI port has no address segment" }
+set_property offset 0x20000000 $spi_seg
+set_property range  4K         $spi_seg
 
 # ---- Finalise -------------------------------------------------------------
 regenerate_bd_layout
