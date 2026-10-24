@@ -70,17 +70,8 @@ static unsigned long long mtime_read(void) {
 static int fails;
 
 static void check(const char *what, int ok) {
-    char line[56];
-    const char *tag = ok ? "PASS " : "FAIL ";
-    unsigned n = 0;
-
-    while (*tag)
-        line[n++] = *tag++;
-    while (*what && n < sizeof(line) - 1)
-        line[n++] = *what++;
-    line[n] = '\0';
-
-    puts(line);
+    putstr(ok ? "PASS " : "FAIL ");
+    puts(what);
     if (!ok)
         fails++;
 }
@@ -89,16 +80,18 @@ static void check(const char *what, int ok) {
  * rather than as nothing at all. */
 static void put_hex(const char *label, unsigned int v) {
     static const char digits[] = "0123456789abcdef";
-    char buf[32];
+    char buf[11];
     unsigned n = 0;
 
-    while (*label && n < sizeof(buf) - 11)
-        buf[n++] = *label++;
+    /* Only the value is buffered. The label goes straight out, so there is no
+     * length to get wrong -- the fixed buffer this replaced truncated a long
+     * one into the middle of the number. */
     buf[n++] = '0';
     buf[n++] = 'x';
     for (int i = 0; i < 8; i++)
         buf[n++] = digits[(v >> (28 - 4 * i)) & 0xFu];
     buf[n] = '\0';
+    putstr(label);
     puts(buf);
 }
 

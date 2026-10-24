@@ -12,6 +12,7 @@
  *   0x1000_0000   4 KB    UART
  *   0x1800_0000   4 KB    timer                                 [reserved]
  *   0x2000_0000   8 MB    SPI                                   [reserved]
+ *   0x2800_0000   4 KB    I2C                                   [ours]
  *   0x3000_0000  64 KB    Ethernet                              [not planned]
  *   0x4000_0000   4 KB    GPIO                                  [not planned]
  *   0x8000_0000 128 KB    main RAM -- programs run here
@@ -154,6 +155,62 @@ static inline void dev_fence(void) {
 #define SPI_LEN(cmd_bits, addr_bits, data_bits) \
     (((cmd_bits) & 0xFFu) | (((addr_bits) & 0xFFu) << 8) | \
      (((data_bits) & 0xFFFFu) << 16))
+
+#define I2C_BASE    0x28000000u
+/* Alex Forencich's i2c_master_axil. CVA6 reserves no I2C window, so unlike
+ * every other address here this one is ours: the next 4 KB-aligned address
+ * clear of the SPI's 8 MB and well short of the Ethernet window.
+ *
+ * Four registers. The device decodes those sixteen bytes and aliases through
+ * the rest of the 4 KB, which is the floor a Vivado address segment can be
+ * given rather than anything the hardware needs. */
+#define I2C_STATUS_OFF    0x00u
+#define I2C_COMMAND_OFF   0x04u
+#define I2C_DATA_OFF      0x08u
+#define I2C_PRESCALE_OFF  0x0Cu
+
+/* STATUS, read. Bit numbers taken from i2c_master_axil.v's read mux rather
+ * than from its README, which does not spell them out.
+ *
+ * Three of these are sticky and write-1-to-clear -- missed-ack and the two
+ * FIFO overflows -- and the rest are live. Note the strobe: the clear for
+ * missed-ack is in byte 0 and the clears for the two overflows are in byte 1,
+ * so a byte-strobed write reaches only its own. A 32-bit store carries both. */
+#define I2C_BUSY           (1u << 0)
+#define I2C_BUS_CONTROL    (1u << 1)   /* this master holds the bus */
+#define I2C_BUS_ACTIVE     (1u << 2)   /* a transfer is in progress, by anyone */
+#define I2C_MISSED_ACK     (1u << 3)   /* sticky: nobody answered */
+#define I2C_CMD_EMPTY      (1u << 8)
+#define I2C_CMD_FULL       (1u << 9)
+#define I2C_CMD_OVERFLOW   (1u << 10)  /* sticky */
+#define I2C_WR_EMPTY       (1u << 11)
+#define I2C_WR_FULL        (1u << 12)
+#define I2C_WR_OVERFLOW    (1u << 13)  /* sticky */
+#define I2C_RD_EMPTY       (1u << 14)
+#define I2C_RD_FULL        (1u << 15)
+#define I2C_STICKY (I2C_MISSED_ACK | I2C_CMD_OVERFLOW | I2C_WR_OVERFLOW)
+
+/* COMMAND: a 7-bit slave address in the low bits, plus what to do with it.
+ * START is implied by READ and WRITE when the bus is idle; give it explicitly
+ * to force a repeated start. */
+#define I2C_CMD_ADDR(a)    ((a) & 0x7Fu)
+#define I2C_CMD_START      (1u << 8)
+#define I2C_CMD_READ       (1u << 9)
+#define I2C_CMD_WRITE      (1u << 10)
+#define I2C_CMD_WRITE_MULTI (1u << 11)
+#define I2C_CMD_STOP       (1u << 12)
+
+/* DATA: a byte out, or a byte in -- reading pops the read FIFO. Bit 8 marks a
+ * read byte as valid, so a read of an empty FIFO is distinguishable from a
+ * byte of 0x00. */
+#define I2C_DATA_VALID     (1u << 8)
+#define I2C_DATA_LAST      (1u << 9)
+
+/* PRESCALE is clk / (4 x SCL): 250 for 100 kHz at 100 MHz, 62 for 400 kHz.
+ * cva5_i2c_axi's DEFAULT_PRESCALE is 250, so software only writes this to
+ * change speed. */
+#define I2C_PRESCALE_100K  250u
+#define I2C_PRESCALE_400K  62u
 
 #define RAM_BASE    0x80000000u
 #define RAM_SIZE    0x00020000u   /* 128 KB on the board; 4 KB in the sim */

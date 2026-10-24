@@ -8,6 +8,7 @@
  *   M1  m_axi_clint  CLINT at CLINT_BASE     AXI4-Lite
  *   M2  m_axi_plic   PLIC at PLIC_BASE       AXI4-Lite
  *   M3  m_axi_spi    SPI at SPI_BASE         AXI4-Lite
+ *   M4  m_axi_i2c    I2C at I2C_BASE         AXI4-Lite
  *
  * Every port is AXI4-Lite, which is the whole of what this SoC's bus carries.
  * It was not always: the crossbar used to be full AXI4 with a RAM master port,
@@ -29,11 +30,15 @@
  * error slave, rather than landing somewhere unexpected or hanging.
  *
  * Adding a peripheral is a rule, a port and a line in the block design -- the
- * PLIC and the SPI both arrived that way. It is not free: a port costs around
- * 190 LUTs and 110 flops here, measured when the PLIC's was added, which is
- * nearly three times what the PLIC itself costs at one source. The next one is
- * an I2C master; a timer window is reserved at 0x1800_0000 and unused, since
- * the CLINT provides the timer this core needs.
+ * PLIC, the SPI and the I2C all arrived that way. It is not free: a port costs
+ * around 190 LUTs and 110 flops here, measured when the PLIC's was added,
+ * which is nearly three times what the PLIC itself costs at one source. The
+ * cost is on the master side and it is the cheap side: the measured split puts
+ * the two slave-port demuxes at 264 and 354 LUTs against 71/67/77 for the
+ * master-port muxes, so ports scale cheaply and masters do not.
+ *
+ * A timer window is reserved at 0x1800_0000 and unused, since the CLINT
+ * provides the timer this core needs.
  *
  * Copyright © 2024 Chris Keilbart
  * SPDX-License-Identifier: Apache-2.0
@@ -50,6 +55,11 @@ module cva5_axi_xbar #(
     parameter logic [31:0] PLIC_SIZE   = 32'h0400_0000,  // 64 MB, CVA6's window
     parameter logic [31:0] SPI_BASE    = 32'h2000_0000,
     parameter logic [31:0] SPI_SIZE    = 32'h0080_0000,  // 8 MB, CVA6's window
+    // CVA6 reserves no I2C window, so this one is ours: the next 4 KB-aligned
+    // address clear of the SPI's 8 MB and well short of the 0x3000_0000
+    // Ethernet window the map reserves.
+    parameter logic [31:0] I2C_BASE    = 32'h2800_0000,
+    parameter logic [31:0] I2C_SIZE    = 32'h0000_1000,  // 4 KB
 
     // Width of each master port's address bus.
     //
@@ -70,6 +80,7 @@ module cva5_axi_xbar #(
     parameter int unsigned M_CLINT_ADDR_WIDTH = 32,
     parameter int unsigned M_PLIC_ADDR_WIDTH  = 32,
     parameter int unsigned M_SPI_ADDR_WIDTH   = 32,
+    parameter int unsigned M_I2C_ADDR_WIDTH   = 32,
 
     // Outstanding transactions allowed per port. Two: every master here issues
     // single register accesses and none of them pipeline.
@@ -214,11 +225,31 @@ module cva5_axi_xbar #(
         input logic [31:0] m_axi_spi_rdata,
         input logic [1:0] m_axi_spi_rresp,
         input logic m_axi_spi_rvalid,
-        output logic m_axi_spi_rready
+        output logic m_axi_spi_rready,
+
+        output logic [M_I2C_ADDR_WIDTH-1:0] m_axi_i2c_awaddr,
+        output logic [2:0] m_axi_i2c_awprot,
+        output logic m_axi_i2c_awvalid,
+        input logic m_axi_i2c_awready,
+        output logic [31:0] m_axi_i2c_wdata,
+        output logic [3:0] m_axi_i2c_wstrb,
+        output logic m_axi_i2c_wvalid,
+        input logic m_axi_i2c_wready,
+        input logic [1:0] m_axi_i2c_bresp,
+        input logic m_axi_i2c_bvalid,
+        output logic m_axi_i2c_bready,
+        output logic [M_I2C_ADDR_WIDTH-1:0] m_axi_i2c_araddr,
+        output logic [2:0] m_axi_i2c_arprot,
+        output logic m_axi_i2c_arvalid,
+        input logic m_axi_i2c_arready,
+        input logic [31:0] m_axi_i2c_rdata,
+        input logic [1:0] m_axi_i2c_rresp,
+        input logic m_axi_i2c_rvalid,
+        output logic m_axi_i2c_rready
     );
 
     localparam int unsigned NUM_SLV = 32'd2;
-    localparam int unsigned NUM_MST = 32'd4;
+    localparam int unsigned NUM_MST = 32'd5;
 
     //------------------------------------------------------------------
     // AXI4-Lite channel and request/response types. Field order and names
@@ -322,6 +353,9 @@ module cva5_axi_xbar #(
         addr_map[3] = '{idx: 32'd3,
                         start_addr: SPI_BASE,
                         end_addr:   SPI_BASE + SPI_SIZE};
+        addr_map[4] = '{idx: 32'd4,
+                        start_addr: I2C_BASE,
+                        end_addr:   I2C_BASE + I2C_SIZE};
     end
 
     //------------------------------------------------------------------
@@ -510,6 +544,33 @@ module cva5_axi_xbar #(
         mst_resp[3].r.data   = m_axi_spi_rdata;
         mst_resp[3].r.resp   = m_axi_spi_rresp;
         mst_resp[3].r_valid  = m_axi_spi_rvalid;
+    end
+
+    //------------------------------------------------------------------
+    // M4: I2C
+    //------------------------------------------------------------------
+    assign m_axi_i2c_awaddr  = mst_req[4].aw.addr[M_I2C_ADDR_WIDTH-1:0];
+    assign m_axi_i2c_awprot  = mst_req[4].aw.prot;
+    assign m_axi_i2c_awvalid = mst_req[4].aw_valid;
+    assign m_axi_i2c_wdata   = mst_req[4].w.data;
+    assign m_axi_i2c_wstrb   = mst_req[4].w.strb;
+    assign m_axi_i2c_wvalid  = mst_req[4].w_valid;
+    assign m_axi_i2c_bready  = mst_req[4].b_ready;
+    assign m_axi_i2c_araddr  = mst_req[4].ar.addr[M_I2C_ADDR_WIDTH-1:0];
+    assign m_axi_i2c_arprot  = mst_req[4].ar.prot;
+    assign m_axi_i2c_arvalid = mst_req[4].ar_valid;
+    assign m_axi_i2c_rready  = mst_req[4].r_ready;
+
+    always_comb begin
+        mst_resp[4] = '0;
+        mst_resp[4].aw_ready = m_axi_i2c_awready;
+        mst_resp[4].w_ready  = m_axi_i2c_wready;
+        mst_resp[4].b.resp   = m_axi_i2c_bresp;
+        mst_resp[4].b_valid  = m_axi_i2c_bvalid;
+        mst_resp[4].ar_ready = m_axi_i2c_arready;
+        mst_resp[4].r.data   = m_axi_i2c_rdata;
+        mst_resp[4].r.resp   = m_axi_i2c_rresp;
+        mst_resp[4].r_valid  = m_axi_i2c_rvalid;
     end
 
 endmodule

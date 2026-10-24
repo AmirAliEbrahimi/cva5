@@ -31,7 +31,7 @@ all-Xilinx baseline of **WNS +0.107** at 100 MHz on the `xc7z020clg400-1`:
 | `axi_bram_ctrl` + `blk_mem_gen` | *removed* — main memory is `tdp_ram` inside the core | — | — |
 | `axi_quad_spi` | `cva5_spi_axi` (pulp `axi_spi_master`) | Solderpad 0.51 | present, on the Arduino header |
 | `axi_intc` | `cva5_plic_axi` (upstream CVA5 `apu/plic`) | Apache-2.0 | present, two sources |
-| `axi_iic` | `cva5_i2c_axi` (Forencich `verilog-i2c`) | **MIT** | packaged; not yet on the bus |
+| `axi_iic` | `cva5_i2c_axi` (Forencich `verilog-i2c`) | **MIT** | present, on the Arduino header |
 | `xlconcat` | `cva5_irq_concat` | Apache-2.0 | present, one assignment |
 | `clk_wiz` | *kept* — the MMCM is a hard block | — | — |
 | `proc_sys_reset` | *kept for now* — see below | — | — |
@@ -61,6 +61,7 @@ for it.
 | UART | `0x1000_0000` | 4 KB | present |
 | timer | `0x1800_0000` | 4 KB | reserved |
 | SPI | `0x2000_0000` | 8 MB | present (4 KB decoded, on the Arduino header) |
+| I2C | `0x2800_0000` | 4 KB | present (16 bytes decoded, on the Arduino header) |
 | main RAM | `0x8000_0000` | 128 KB | present |
 
 "Reserved" means the window is spoken for and nothing is there yet, so adding
@@ -1000,6 +1001,7 @@ something.
 | PLIC | `bash test_benches/axi/run_plic.sh` | 103 checks at `NUM_SOURCES` 8 and 57 each at 2 — the configuration the board deploys — and at 1, the narrowest the PLIC builds, which takes different widths inside it: the register map, pending versus eip, claim/complete including an unserviced level source, edge latching, priority order and ties, threshold suppression. Also checks the vendored copies still match `apu/plic` |
 | interrupt wiring | `bash test_benches/axi/run_irq_concat.sh` | 62 checks: `cva5_irq_concat` driving a real two-source PLIC — which port becomes which source number, claimed by number, and a one-cycle pulse latching with the source level sensitive |
 | I2C | `bash test_benches/axi/run_i2c.sh` | 139 checks against a hand-written behavioural slave: the register map, the open-drain tie-off driving and releasing, a write reaching the right slave with the right byte, a read coming back, and an unanswered address reported as a missed ACK rather than hanging |
+| I2C on hardware | `make -C examples/sw i2c` | the register file, the bus coming up idle with both lines released, an unanswered address reported rather than hanging — then a scan of 0x08–0x77. **The scan is the only part that proves the pins**: with nothing attached every address misses its ACK, and so does a bus wired to the wrong balls, so one device answering is what says the wiring is right |
 | CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
 | counter CSRs, in the core sim | `make -C examples/sw run-csrs` | `rdcycle`/`rdinstret`/`mcycle` readable and advancing, `rdtime` and `rdtimeh` taking an illegal-instruction trap. The only place both polarities of `INCLUDE_TIME_CSR` can be run: the sim takes upstream's `EXAMPLE_CONFIG`, so with the bit set the three trap checks are *expected* to fail |
 | SPI on hardware | `make -C examples/sw spi` | the register file and FIFO levels with nothing attached, a transfer running to completion, then — with MOSI jumpered to MISO on the ICSP header — a held 1 reading back as all ones and a held 0 as all zeros, on two chip selects |

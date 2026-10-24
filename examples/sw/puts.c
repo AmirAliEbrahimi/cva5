@@ -13,8 +13,18 @@ static void uart_putc(char c) {
     UART_TX = (unsigned char)c;
 }
 
-int puts(const char *s) {
+/* Like puts, without the newline. Exists so that a caller printing a label and
+ * then a value does not have to assemble the two in a buffer of its own: the
+ * fixed-size buffers that replaced it in plic.c and spi.c silently truncated
+ * the label, and a 49-character one came out of the board as
+ * "draining a source lef0x00000001". */
+int putstr(const char *s) {
     while (*s) uart_putc(*s++);
+    return 0;
+}
+
+int puts(const char *s) {
+    putstr(s);
     uart_putc('\n');
     return 0;
 }

@@ -161,6 +161,26 @@ make_bd_pins_external -name spi_mosi [get_bd_pins cva5_spi_0/spi_mosi]
 make_bd_pins_external -name spi_miso [get_bd_pins cva5_spi_0/spi_miso]
 make_bd_pins_external -name spi_csn  [get_bd_pins cva5_spi_0/spi_csn]
 
+# ---- I2C --------------------------------------------------------------------
+# Alex Forencich's i2c_master_axil, in place of Xilinx's axi_iic. The only
+# peripheral here whose slave port is already AXI4-Lite, so cva5_i2c_axi is a
+# reset inversion, two open-drain pins and a wider address port and nothing
+# else.
+#
+# scl and sda are inout and leave as inout: Vivado infers an IOBUF per pin at
+# the top level, the core drives them open-drain -- low drives, high releases
+# -- and the bus needs external pull-ups, which the PYNQ-Z2 has on the Arduino
+# header (R49/R50, 2.2k to 3V3 on AR_SCL/AR_SDA).
+#
+# No interrupt: this master has no irq output at all, so unlike the SPI there
+# is nothing to add to cva5_irq_concat. It is polled through STATUS.
+create_bd_cell -type ip -vlnv xilinx.com:user:cva5_i2c_axi:1.0 cva5_i2c_0
+connect_bd_net $sys_clk  [get_bd_pins cva5_i2c_0/clk]
+connect_bd_net $sys_rstn [get_bd_pins cva5_i2c_0/rstn]
+
+make_bd_pins_external -name i2c_scl [get_bd_pins cva5_i2c_0/scl]
+make_bd_pins_external -name i2c_sda [get_bd_pins cva5_i2c_0/sda]
+
 # ---- Interrupt sources ------------------------------------------------------
 # cva5_plic_axi takes its sources as one vector, and a block design connects a
 # net to a whole pin, so two devices cannot be attached to two bits of it
@@ -243,6 +263,7 @@ connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_uart]  [get_bd_intf_pins 
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_clint] [get_bd_intf_pins cva5_clint_0/s_axi]
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_plic]  [get_bd_intf_pins cva5_plic_0/s_axi]
 connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_spi]   [get_bd_intf_pins cva5_spi_0/s_axi]
+connect_bd_intf_net [get_bd_intf_pins axi_xbar_0/m_axi_i2c]   [get_bd_intf_pins cva5_i2c_0/s_axi]
 
 # ---- Address map ----------------------------------------------------------
 # Every link here is point to point, so nothing in the block design decodes
@@ -300,6 +321,18 @@ set spi_seg [cva5_seg {axi_xbar_0/m_axi_spi/SEG_cva5_spi_0_reg0} \
 if {$spi_seg eq ""} { error "the crossbar's SPI port has no address segment" }
 set_property offset 0x20000000 $spi_seg
 set_property range  4K         $spi_seg
+
+# 4K, which is both what cva5_i2c_axi's 12-bit slave port offers and the whole
+# window the crossbar decodes to this port -- the I2C is the one peripheral
+# here with no CVA6 window to inherit, so examples/sw/soc.h gives it the
+# minimum rather than reserving megabytes it will never use. The device decodes
+# sixteen bytes and aliases through the rest.
+set i2c_seg [cva5_seg {axi_xbar_0/m_axi_i2c/SEG_cva5_i2c_0_reg0} \
+                      {axi_xbar_0/m_axi_i2c/SEG_cva5_i2c_0_Reg} \
+                      {axi_xbar_0/m_axi_i2c/SEG_cva5_i2c_0_s_axi}]
+if {$i2c_seg eq ""} { error "the crossbar's I2C port has no address segment" }
+set_property offset 0x28000000 $i2c_seg
+set_property range  4K         $i2c_seg
 
 # ---- Finalise -------------------------------------------------------------
 regenerate_bd_layout

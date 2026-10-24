@@ -46,6 +46,25 @@ set_property -dict { PACKAGE_PIN V18 IOSTANDARD LVCMOS33 } [get_ports {spi_csn[1
 set_property -dict { PACKAGE_PIN V17 IOSTANDARD LVCMOS33 } [get_ports {spi_csn[2]}]
 set_property -dict { PACKAGE_PIN U17 IOSTANDARD LVCMOS33 } [get_ports {spi_csn[3]}]
 
+# ---- I2C on the Arduino shield header --------------------------------------
+# Balls read off the TUL R12 schematic rather than a master XDC, because the
+# SPI's comments were copied from another board's naming and that cost an
+# evening:
+#
+#   i2c_scl   AR_SCL   P16   IO_L24N_T3_34   sheet 11; J3 pin 9
+#   i2c_sda   AR_SDA   P15   IO_L24P_T3_34   sheet 11; J3 pin 10
+#
+# Both are open drain and both need pull-ups. The board has them -- R49 and
+# R50, 2.2k to VCC3V3 on sheet 4 -- so no PULLUP property is wanted here: an
+# internal weak pull-up alongside a 2.2k external one does nothing useful and
+# would hide the external one going missing on a future board revision.
+#
+# No bus-contention risk from leaving these driven: the IOBUF Vivado infers for
+# each inout is driven by the core's t/o pair, which releases the line (drives
+# the T pin high) whenever it is not pulling it low.
+set_property -dict { PACKAGE_PIN P16 IOSTANDARD LVCMOS33 } [get_ports i2c_scl]
+set_property -dict { PACKAGE_PIN P15 IOSTANDARD LVCMOS33 } [get_ports i2c_sda]
+
 # The SPI clock is generated inside the fabric by a divider off the 100 MHz
 # system clock, so it is a data path as far as timing is concerned, not a
 # clock. Nothing is clocked by it in this design -- the controller samples on

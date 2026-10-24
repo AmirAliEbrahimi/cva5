@@ -53,6 +53,7 @@ TIMER_SRCS := crt0.S trap.S timer.c puts.c
 CSRS_SRCS := crt0.S trap.S csrs.c puts.c
 PLIC_SRCS := crt0.S trap.S plic.c puts.c
 SPI_SRCS  := crt0.S trap.S spi.c puts.c
+I2C_SRCS  := crt0.S trap.S i2c.c puts.c
 # Headers, as prerequisites. soc.h carries the memory map and the PLIC source
 # numbers, so an image built against a stale copy of it talks to the wrong
 # address or attributes an interrupt to the wrong device -- and nothing about
@@ -194,6 +195,19 @@ spi: spi.tcl
 	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
 	           -f spi.tcl -c "init; load_program; shutdown"
 
+# The I2C on hardware. The register checks need nothing attached; the bus scan
+# is the only part that proves the pins, and it needs a device on the Arduino
+# header's SCL/SDA. It says so when it finds nothing.
+i2c.elf: $(I2C_SRCS) $(HDRS) $(APP_LDSCRIPT)
+	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(I2C_SRCS) -lgcc -o $@
+
+i2c.tcl: i2c.elf
+	python3 $(ELF2TCL) $(CROSS) $(APP_BASE) $< $@
+
+i2c: i2c.tcl
+	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
+	           -f i2c.tcl -c "init; load_program; shutdown"
+
 # The same test in the Verilator core sim, which is the only place the core's
 # CSR behaviour can be checked without a bitstream -- and the only place both
 # polarities of INCLUDE_TIME_CSR can be run, since the sim takes upstream's
@@ -228,7 +242,7 @@ clean:
 	      memtest.elf memtest.tcl \
 	      timer.elf timer.tcl \
 	      csrs.elf csrs.tcl csrs_sim.elf csrs.hex csrs.sim csrs_log.txt csrs_sig.txt csrs_trace.fst \
-	      plic.elf plic.tcl spi.elf spi.tcl \
+	      plic.elf plic.tcl spi.elf spi.tcl i2c.elf i2c.tcl \
 	      main.elf.rawbinary main.elf.dissasembled \
 	      idle.elf.rawbinary idle.elf.dissasembled \
 		  trace.fst.hier \

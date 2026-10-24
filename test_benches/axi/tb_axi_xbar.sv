@@ -17,13 +17,15 @@ module tb_axi_xbar #(
     parameter int unsigned UART_AW  = 32'd12,
     parameter int unsigned CLINT_AW = 32'd16,
     parameter int unsigned PLIC_AW  = 32'd26,
-    parameter int unsigned SPI_AW   = 32'd12
+    parameter int unsigned SPI_AW   = 32'd12,
+    parameter int unsigned I2C_AW   = 32'd12
 );
 
     localparam logic [31:0] PERIPH_BASE = 32'h1000_0000;
     localparam logic [31:0] CLINT_BASE  = 32'h0200_0000;
     localparam logic [31:0] PLIC_BASE   = 32'h0C00_0000;
     localparam logic [31:0] SPI_BASE    = 32'h2000_0000;
+    localparam logic [31:0] I2C_BASE    = 32'h2800_0000;
     localparam logic [1:0]  RESP_OKAY   = 2'b00;
     localparam logic [1:0]  RESP_DECERR = 2'b11;
 
@@ -100,6 +102,15 @@ module tb_axi_xbar #(
     logic        spi_rvalid, spi_rready;
     logic [1:0]  spi_bresp, spi_rresp;
 
+    logic [I2C_AW-1:0] i2c_awaddr, i2c_araddr;
+    logic [2:0]  i2c_awprot, i2c_arprot;
+    logic        i2c_awvalid, i2c_awready, i2c_wvalid, i2c_wready;
+    logic [31:0] i2c_wdata, i2c_rdata;
+    logic [3:0]  i2c_wstrb;
+    logic        i2c_bvalid, i2c_bready, i2c_arvalid, i2c_arready;
+    logic        i2c_rvalid, i2c_rready;
+    logic [1:0]  i2c_bresp, i2c_rresp;
+
     cva5_axi_xbar #(
         .PERIPH_BASE         (PERIPH_BASE),
         .PERIPH_SIZE         (32'h0001_0000),
@@ -112,7 +123,10 @@ module tb_axi_xbar #(
         .M_PLIC_ADDR_WIDTH   (PLIC_AW),
         .SPI_BASE            (SPI_BASE),
         .SPI_SIZE            (32'h0080_0000),
-        .M_SPI_ADDR_WIDTH    (SPI_AW)
+        .M_SPI_ADDR_WIDTH    (SPI_AW),
+        .I2C_BASE            (I2C_BASE),
+        .I2C_SIZE            (32'h0000_1000),
+        .M_I2C_ADDR_WIDTH    (I2C_AW)
     ) dut (
         .clk(clk), .rstn(rstn),
 
@@ -180,7 +194,18 @@ module tb_axi_xbar #(
         .m_axi_spi_araddr(spi_araddr), .m_axi_spi_arprot(spi_arprot),
         .m_axi_spi_arvalid(spi_arvalid), .m_axi_spi_arready(spi_arready),
         .m_axi_spi_rdata(spi_rdata), .m_axi_spi_rresp(spi_rresp),
-        .m_axi_spi_rvalid(spi_rvalid), .m_axi_spi_rready(spi_rready)
+        .m_axi_spi_rvalid(spi_rvalid), .m_axi_spi_rready(spi_rready),
+
+        .m_axi_i2c_awaddr(i2c_awaddr), .m_axi_i2c_awprot(i2c_awprot),
+        .m_axi_i2c_awvalid(i2c_awvalid), .m_axi_i2c_awready(i2c_awready),
+        .m_axi_i2c_wdata(i2c_wdata), .m_axi_i2c_wstrb(i2c_wstrb),
+        .m_axi_i2c_wvalid(i2c_wvalid), .m_axi_i2c_wready(i2c_wready),
+        .m_axi_i2c_bresp(i2c_bresp), .m_axi_i2c_bvalid(i2c_bvalid),
+        .m_axi_i2c_bready(i2c_bready),
+        .m_axi_i2c_araddr(i2c_araddr), .m_axi_i2c_arprot(i2c_arprot),
+        .m_axi_i2c_arvalid(i2c_arvalid), .m_axi_i2c_arready(i2c_arready),
+        .m_axi_i2c_rdata(i2c_rdata), .m_axi_i2c_rresp(i2c_rresp),
+        .m_axi_i2c_rvalid(i2c_rvalid), .m_axi_i2c_rready(i2c_rready)
     );
 
     //==================================================================
@@ -342,6 +367,45 @@ module tb_axi_xbar #(
         end
     end
 
+    logic [31:0] i2c_regs [4];
+    logic [I2C_AW-1:0] iw_addr;
+    logic iw_have_addr = 0, iw_have_data = 0;
+    logic [31:0] iw_data;
+
+    assign i2c_awready = !iw_have_addr;
+    assign i2c_wready  = !iw_have_data;
+    assign i2c_arready = !i2c_rvalid;
+
+    always_ff @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            iw_have_addr <= 0; iw_have_data <= 0; i2c_bvalid <= 0;
+        end else begin
+            if (i2c_awvalid && i2c_awready) begin
+                iw_addr <= i2c_awaddr; iw_have_addr <= 1;
+            end
+            if (i2c_wvalid && i2c_wready) begin
+                iw_data <= i2c_wdata; iw_have_data <= 1;
+            end
+            if (iw_have_addr && iw_have_data && !i2c_bvalid) begin
+                i2c_regs[iw_addr[3:2]] <= iw_data;
+                iw_have_addr <= 0; iw_have_data <= 0;
+                i2c_bvalid <= 1; i2c_bresp <= RESP_OKAY;
+            end
+            if (i2c_bvalid && i2c_bready) i2c_bvalid <= 0;
+        end
+    end
+
+    always_ff @(posedge clk or negedge rstn) begin
+        if (!rstn) i2c_rvalid <= 0;
+        else begin
+            if (i2c_arvalid && i2c_arready) begin
+                i2c_rvalid <= 1;
+                i2c_rdata  <= i2c_regs[i2c_araddr[3:2]];
+                i2c_rresp  <= RESP_OKAY;
+            end else if (i2c_rvalid && i2c_rready) i2c_rvalid <= 0;
+        end
+    end
+
     // What each master port last presented, latched at the handshake rather
     // than sampled afterwards: once the transaction has completed the port's
     // address and strobes are whatever the crossbar happens to leave driven.
@@ -349,6 +413,7 @@ module tb_axi_xbar #(
     logic [CLINT_AW-1:0] seen_clint_awaddr, seen_clint_araddr;
     logic [PLIC_AW-1:0]  seen_plic_araddr;
     logic [SPI_AW-1:0]   seen_spi_araddr;
+    logic [I2C_AW-1:0]   seen_i2c_araddr;
     logic [3:0]          seen_uart_wstrb;
     always_ff @(posedge clk) begin
         if (uart_awvalid && uart_awready)   seen_uart_awaddr  <= uart_awaddr;
@@ -358,6 +423,7 @@ module tb_axi_xbar #(
         if (clint_arvalid && clint_arready) seen_clint_araddr <= clint_araddr;
         if (plic_arvalid  && plic_arready)  seen_plic_araddr  <= plic_araddr;
         if (spi_arvalid   && spi_arready)   seen_spi_araddr   <= spi_araddr;
+        if (i2c_arvalid   && i2c_arready)   seen_i2c_araddr   <= i2c_araddr;
     end
 
     //==================================================================
@@ -438,6 +504,7 @@ module tb_axi_xbar #(
             clint_regs[i] = 32'h0;
             plic_regs[i] = 32'h0;
             spi_regs[i] = 32'h0;
+            i2c_regs[i] = 32'h0;
         end
 
         repeat (4) step();
@@ -475,6 +542,13 @@ module tb_axi_xbar #(
         lite_read(PORT_CPU, SPI_BASE + 32'h8, rdata, resp);
         expect_eq("cpu read from the SPI", rdata, 32'h5010_0001);
 
+        lite_write(PORT_CPU, I2C_BASE + 32'h4, 32'h12C0_0001, resp);
+        expect_eq("cpu write to the I2C resp", 32'(resp), 32'(RESP_OKAY));
+        expect_eq("cpu write landed in the I2C", i2c_regs[1], 32'h12C0_0001);
+        expect_eq("...and not in the SPI", spi_regs[1], 32'h0);
+        lite_read(PORT_CPU, I2C_BASE + 32'h4, rdata, resp);
+        expect_eq("cpu read from the I2C", rdata, 32'h12C0_0001);
+
         //--- the debugger reaches both slaves
         $display("-- debugger port");
         lite_write(PORT_DBG, PERIPH_BASE + 32'hC, 32'hCAFE_0001, resp);
@@ -497,6 +571,13 @@ module tb_axi_xbar #(
         expect_eq("dbg read from the PLIC's claim/complete",
                   rdata, 32'h0000_0003);
 
+        lite_write(PORT_DBG, I2C_BASE + 32'hC, 32'h0000_00FA, resp);
+        expect_eq("dbg write to the I2C's prescale resp",
+                  32'(resp), 32'(RESP_OKAY));
+        expect_eq("...landed in the I2C", i2c_regs[3], 32'h0000_00FA);
+        lite_read(PORT_DBG, I2C_BASE + 32'hC, rdata, resp);
+        expect_eq("dbg read from the I2C's prescale", rdata, 32'h0000_00FA);
+
         //--- each master port sees only the bits it carries
         $display("-- address truncation");
         expect_eq("UART saw its offset, truncated",
@@ -511,6 +592,9 @@ module tb_axi_xbar #(
         expect_eq("PLIC saw its offset, truncated",
                   32'(seen_plic_araddr),
                   (PLIC_BASE + 32'h200004) & ((32'd1 << PLIC_AW) - 1));
+        expect_eq("I2C saw its offset, truncated",
+                  32'(seen_i2c_araddr),
+                  (I2C_BASE + 32'hC) & ((32'd1 << I2C_AW) - 1));
 
         //--- an address no rule claims
         $display("-- unclaimed addresses");
@@ -526,6 +610,7 @@ module tb_axi_xbar #(
         expect_eq("the CLINT is untouched by those", clint_regs[1], 32'h0);
         expect_eq("the PLIC is untouched by those", plic_regs[0], 32'h0);
         expect_eq("the SPI is untouched by those", spi_regs[0], 32'h0);
+        expect_eq("the I2C is untouched by those", i2c_regs[0], 32'h0);
 
         //--- just below and just above each window
         //The PLIC's 64 MB window ends exactly where the UART's begins --
@@ -559,6 +644,15 @@ module tb_axi_xbar #(
         lite_read(PORT_CPU, SPI_BASE + 32'h0080_0000, rdata, resp);
         expect_eq("one word past the SPI window DECERRs",
                   32'(resp), 32'(RESP_DECERR));
+        //The I2C's 4 KB sits alone between the SPI's 8 MB and the Ethernet
+        //window the map reserves at 0x3000_0000, so unlike the PLIC/UART pair
+        //it has a hole on both sides and both are asserted.
+        lite_read(PORT_CPU, I2C_BASE - 32'h4, rdata, resp);
+        expect_eq("one word below the I2C window DECERRs",
+                  32'(resp), 32'(RESP_DECERR));
+        lite_read(PORT_CPU, I2C_BASE + 32'h0000_1000, rdata, resp);
+        expect_eq("one word past the I2C window DECERRs",
+                  32'(resp), 32'(RESP_DECERR));
         //The same abutment seen from the other side: the first word past the
         //PLIC's window is the UART's first register.
         lite_read(PORT_CPU, PLIC_BASE + 32'h0400_0000, rdata, resp);
@@ -585,6 +679,12 @@ module tb_axi_xbar #(
             lite_write(PORT_CPU, SPI_BASE + 32'hC, 32'h9999_AAAA, resp);
             lite_write(PORT_DBG, CLINT_BASE + 32'h8, 32'hBBBB_CCCC, resp);
         join
+        fork
+            lite_write(PORT_CPU, I2C_BASE + 32'h0, 32'hEEEE_FFFF, resp);
+            lite_write(PORT_DBG, SPI_BASE + 32'h4, 32'hDDDD_EEEE, resp);
+        join
+        expect_eq("concurrent CPU write to the I2C", i2c_regs[0], 32'hEEEE_FFFF);
+        expect_eq("concurrent debugger write to the SPI", spi_regs[1], 32'hDDDD_EEEE);
         expect_eq("concurrent CPU write to the SPI", spi_regs[3], 32'h9999_AAAA);
         expect_eq("concurrent debugger write to the CLINT", clint_regs[2], 32'hBBBB_CCCC);
         expect_eq("concurrent CPU write to the PLIC", plic_regs[2], 32'h5555_6666);
@@ -605,8 +705,8 @@ module tb_axi_xbar #(
         expect_eq("a strobed write still completes", 32'(resp), 32'(RESP_OKAY));
 
         if (errors == 0)
-            $display("PASS tb_axi_xbar: %0d checks (UART_AW=%0d CLINT_AW=%0d PLIC_AW=%0d SPI_AW=%0d)",
-                     checks, UART_AW, CLINT_AW, PLIC_AW, SPI_AW);
+            $display("PASS tb_axi_xbar: %0d checks (UART_AW=%0d CLINT_AW=%0d PLIC_AW=%0d SPI_AW=%0d I2C_AW=%0d)",
+                     checks, UART_AW, CLINT_AW, PLIC_AW, SPI_AW, I2C_AW);
         else
             $display("FAIL tb_axi_xbar: %0d of %0d checks failed", errors, checks);
         $finish;
