@@ -139,7 +139,21 @@ apply_bd_automation -rule xilinx.com:bd_rule:processing_system7 \
 # the DDR, the MIO and the clocks; overriding more of it here would be guessing
 # at property names for no gain, and anything left at its preset default that
 # does not reach a pin costs nothing.
+#
+# PCW_USE_M_AXI_GP0 is set to 0 explicitly. The board preset turns GP0 on, and
+# enabling GP1 does not turn it off, so both ports appear and the unused one is
+# left dangling -- which validate_bd_design catches, not elaboration:
+#
+#   WARNING: [BD 41-2670] Found an incomplete address path from address space
+#            '/ps7_0/Data' to master interface '/ps7_0/M_AXI_GP0'.
+#   ERROR: [BD 41-758] The following clock pins are not connected to a valid
+#          clock source: /ps7_0/M_AXI_GP0_ACLK
+#
+# This is the one preset default overridden rather than left alone, because it
+# is the one that costs something: a second PS master into the PL that nothing
+# drives.
 set_property -dict [list \
+    CONFIG.PCW_USE_M_AXI_GP0 {0} \
     CONFIG.PCW_USE_M_AXI_GP1 {1} \
     CONFIG.PCW_GPIO_EMIO_GPIO_ENABLE {1} \
     CONFIG.PCW_GPIO_EMIO_GPIO_IO {1} \
@@ -156,6 +170,12 @@ foreach pin {M_AXI_GP1_ACLK GPIO_O} {
 }
 if {[llength [get_bd_intf_pins -quiet ps7_0/M_AXI_GP1]] == 0} {
     error "ps7_0 has no M_AXI_GP1 interface. PCW_USE_M_AXI_GP1 did not take."
+}
+# And the other way round: GP0 must be gone, or validate_bd_design fails much
+# later on a dangling M_AXI_GP0_ACLK rather than here.
+if {[llength [get_bd_intf_pins -quiet ps7_0/M_AXI_GP0]] != 0} {
+    error "ps7_0 still has an M_AXI_GP0 interface. PCW_USE_M_AXI_GP0 0 did not\
+ take, and an unconnected PS master will fail validate_bd_design."
 }
 
 # The PS's AXI port runs on OUR clock, not on FCLK_CLK0. That is the whole

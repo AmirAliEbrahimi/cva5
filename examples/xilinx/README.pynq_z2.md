@@ -286,6 +286,11 @@ different address for the same memory, and that is a second number for one
 thing: `soc.h` would no longer describe the PS's view, `check-soc-map.py` could
 not check it, and every loader would carry the offset. The ports are otherwise
 identical — same AXI3, same 12-bit IDs, same width — so this costs nothing.
+`GP0` is then switched *off* explicitly, because the board preset turns it on
+and enabling `GP1` does not turn it off. Left on, it is a second PS master
+nothing drives, and that surfaces only at `validate_bd_design` as a dangling
+`M_AXI_GP0_ACLK`. It is the one preset default this design overrides rather
+than leaves alone.
 
 **Its address bus is `$clog2(WORDS)+2` bits, not 32.** Vivado infers a packaged
 IP's address block from the width of its AXI address port, so this offers
