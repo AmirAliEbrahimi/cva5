@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Check that the three copies of the memory map agree.
+"""Check that the four copies of the memory map agree.
 
     python3 tools/check-soc-map.py
 
 `examples/sw/soc.h` calls itself "the one place software gets an address from",
-and for software it is. The hardware and the debugger cannot include it:
+and for CVA5's software it is. Three others cannot include it:
 
     examples/xilinx/axi/cva5_axi_xbar.sv        parameters, because the decode
                                                 lives in the crossbar rather
@@ -13,18 +13,22 @@ and for software it is. The hardware and the debugger cannot include it:
     examples/xilinx/openocd/cva5-pynq-z2-p1.cfg Tcl, because p1_diag probes
                                                 every peripheral over JTAG
                                                 before any software runs
+    examples/ps/cva5_ps.h                       the Zynq PS's side, compiled
+                                                by an ARM toolchain -- soc.h
+                                                has RISC-V inline assembly in
+                                                it
 
-So there are three copies and nothing but a comment keeping them together. A
+So there are four copies and nothing but a comment keeping them together. A
 disagreement is not a build error in any of them: the crossbar would decode a
 window software never uses, and the debugger would read an address that
 returns a decode error -- which arrives as "SBA error 2" and looks exactly like
 a broken bus, which is the failure this tool exists to prevent being
 misdiagnosed.
 
-Checked here: every *_BASE that appears in more than one of the three files
+Checked here: every *_BASE that appears in more than one of the four files
 holds the same value. Names absent from a file are not an error -- the
-debugger has no reason to know about the timer window, and the crossbar has no
-port for the Debug Module.
+debugger has no reason to know about the timer window, the crossbar has no
+port for the Debug Module, and the PS reaches main memory and nothing else.
 """
 
 import re
@@ -33,6 +37,7 @@ import sys
 SOC = "examples/sw/soc.h"
 XBAR = "examples/xilinx/axi/cva5_axi_xbar.sv"
 OCD = "examples/xilinx/openocd/cva5-pynq-z2-p1.cfg"
+PS = "examples/ps/cva5_ps.h"
 
 # The crossbar calls the UART's window PERIPH_BASE, for the historical reason
 # that it was the only peripheral when the port was named.
@@ -66,7 +71,8 @@ def main():
     try:
         maps = [("soc.h", from_soc(SOC)),
                 ("cva5_axi_xbar.sv", from_xbar(XBAR)),
-                ("p1 openocd cfg", from_ocd(OCD))]
+                ("p1 openocd cfg", from_ocd(OCD)),
+                ("cva5_ps.h", from_soc(PS))]
     except FileNotFoundError as e:
         print(f"check-soc-map: {e}", file=sys.stderr)
         return 2

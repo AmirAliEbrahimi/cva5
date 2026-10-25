@@ -40,6 +40,7 @@ import sys
 UPSTREAM = {
     "fstapi.h",         # Verilator's FST writer, in the Verilator install
     "prim_assert.sv",   # lowRISC, pulled in by the opentitan-derived sources
+    "xil_printf.h",     # Xilinx BSP, in the Vitis platform the PS app builds against
 }
 
 # Build products. Named in the docs because that is what you are told to
@@ -48,6 +49,7 @@ GENERATED = {
     "ram.mif",              # make -C examples/sw ram
     "examples/sw/ram.mif",
     "soc_wrapper.v",        # Vivado's make_wrapper, in pynq_z2_sys.tcl
+    "cva5_image.c",         # make -C examples/sw ps-image
 }
 
 # Submodule-resident files the docs mention by bare name. These have to be

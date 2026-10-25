@@ -89,10 +89,15 @@ RAM_WORDS   ?= 32768
 APP_BASE    ?= 0x80000000
 APP_LDSCRIPT := fpga_link.ld
 ELF2TCL     := $(CVA5_DIR)/tools/elf-to-load-tcl.py
+ELF2C       := $(CVA5_DIR)/tools/elf-to-c-array.py
+PS_DIR      := $(CVA5_DIR)/examples/ps
+# Which program the Zynq PS's loader carries. Any of the examples works:
+# they all link at APP_BASE as one contiguous image.
+PS_APP      ?= timer.elf
 OPENOCD     ?= openocd
 OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 
-.PHONY: all program ram app load memtest timer csrs run-csrs plic spi sim run clean lint lint-full clean-cva5-sim
+.PHONY: all program ram app load memtest timer csrs run-csrs plic spi sim run clean lint lint-full clean-cva5-sim ps-image
 all: program
 program: program.hex
 
@@ -236,9 +241,16 @@ lint lint-full clean-cva5-sim:
 run: program.hex sim
 	$(SIM_BIN) $(LOG) $(SIG) program.hex $(TRACE)
 
+# The image examples/ps/cva5_load.c carries, as a C word array. The PS writes
+# it into main memory over M_AXI_GP1 -- the same thing 'make load' does over
+# JTAG, from the other side of the board.
+ps-image: $(PS_APP)
+	python3 $(ELF2C) $(CROSS) $< $(PS_DIR)/cva5_image.c
+
 clean:
 	rm -f main.elf program.hex program.sim \
-	      app.elf app.elf.bin load.tcl idle.elf ram.sim \
+	      app.elf load.tcl idle.elf ram.sim \
+	      *.elf.bin \
 	      memtest.elf memtest.tcl \
 	      timer.elf timer.tcl \
 	      csrs.elf csrs.tcl csrs_sim.elf csrs.hex csrs.sim csrs_log.txt csrs_sig.txt csrs_trace.fst \
@@ -246,6 +258,6 @@ clean:
 	      main.elf.rawbinary main.elf.dissasembled \
 	      idle.elf.rawbinary idle.elf.dissasembled \
 		  trace.fst.hier \
-	      $(LOG) $(SIG) $(TRACE)
+	      $(LOG) $(SIG) $(TRACE) $(PS_DIR)/cva5_image.c
 # Note: ram.mif is NOT removed here — the bitstream is built from it, so
 # losing it would mean a Vivado rebuild. `make ram` regenerates it.

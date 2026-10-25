@@ -321,6 +321,63 @@ lives in means there is no clock-domain crossing anywhere in this. Using
 `FCLK_CLK0` instead would need an `axi_cdc` and a second clock group in the
 XDC, for nothing.
 
+#### The loader on the PS
+
+`examples/ps/` is the bare-metal counterpart to `make -C examples/sw load`:
+what OpenOCD does over JTAG, done by the ARM core over `M_AXI_GP1` instead.
+
+| file | |
+|---|---|
+| `cva5_load.c` | hold the core, write the image, read it back, release |
+| `cva5_ps.h` | `RAM_BASE`, the EMIO GPIO registers, the SLCR level-shifter registers |
+| `cva5_image.h` | declares the image; `cva5_image.c` is generated and not in git |
+
+Build it as a Vitis application on `ps7_cortexa9_0` against this design's XSA,
+after generating the image:
+
+```sh
+make -C examples/sw timer.elf
+make -C examples/sw ps-image PS_APP=timer.elf
+```
+
+Any of the examples works as `PS_APP`. They all link at `RAM_BASE` as one
+contiguous image (`fpga_link.ld`), so `objcopy -O binary` *is* the program and
+it is written at offset zero — which is why neither this flow nor the OpenOCD
+one contains an ELF parser. `tools/elf-to-c-array.py` is
+`tools/elf-to-load-tcl.py` with a different output format, and the two produce
+word-for-word identical images from the same ELF.
+
+Three things in that code are not obvious:
+
+**The only BSP dependency is `xil_printf.h`.** Everything else is register
+writes. A loader that needs a stack and a UART and nothing more can go into an
+FSBL hook or a second-stage boot image without dragging a BSP along.
+
+**It enables the PS–PL level shifters itself.** `ps7_post_config()` normally
+has already done it, and doing it twice costs four register writes. The reason
+to repeat it is the failure it prevents: with the shifters off, every PS write
+into the PL is swallowed silently, so a loader without the read-back reports
+success and the core runs whatever was in memory before. That is also why the
+verify loop is there and why its failure message names the level shifters
+first.
+
+**The PL's AXI window is device memory, not cacheable.** The standard
+Zynq-7000 translation table maps `0x8000_0000`–`0xBFFF_FFFF` with `C=0`, so
+the stores reach the PL in order and nothing needs flushing. If you remap that
+range cacheable, every write needs `Xil_DCacheFlushRange` after it — and worse,
+the read-back verify would be checking the cache rather than the RAM, which
+passes while the core executes the old image.
+
+`cva5_ps.h` is a fourth copy of `RAM_BASE`, for the same reason the OpenOCD
+config is a third: it is compiled by an ARM toolchain and `soc.h` has RISC-V
+inline assembly in it. `check-soc-map.py` now reads all four.
+
+The PS reaches main memory and nothing else. `M_AXI_GP1` goes to `s_axi_ext`,
+which is behind the mux and lands on the RAM port; the peripherals are on the
+crossbar on the other side of the core. So the PS can load and start a program
+but cannot, say, print to CVA5's UART — the program's own output comes out of
+CVA5's UART, not the PS's.
+
 #### Holding the core while the PS writes
 
 A program loaded into a running core is a program loaded into a core executing
@@ -1344,6 +1401,8 @@ something.
 | SPI on hardware | `make -C examples/sw spi` | the register file and FIFO levels with nothing attached, a transfer running to completion, then — with MOSI jumpered to MISO on the ICSP header — a held 1 reading back as all ones and a held 0 as all zeros, on two chip selects |
 | PLIC on hardware | `make -C examples/sw plic` | the register file over the bus, then **one keypress on the console** reaching `mip.MEIP`, and every filtering check made against that one asserted source: the threshold holding it down and letting it back, priority 0 doing the same, claim naming the UART, and complete leaving it quiet. Interactive, because the UART's receive interrupt is the only source wired and software cannot raise it. Waits 30 s, measured with `mtime` |
 | counter CSRs, on hardware | `make -C examples/sw csrs` | the same checks plus the CLINT's `mtime` advancing over the bus. Prints on the serial console |
+| PS loader image | `make -C examples/sw ps-image PS_APP=timer.elf` | that `tools/elf-to-c-array.py` produces the same words `tools/elf-to-load-tcl.py` writes over JTAG — the two loaders carry the same image or one of them is wrong |
+| PS loader, on hardware | run the Vitis app | **the whole of the PS path at once**: level shifters, `cpu_halt` through EMIO, `M_AXI_GP1` → protocol converter → `s_axi_ext` → mux S1 → RAM port, read-back verify, then release and the program's output on CVA5's UART |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |
 | debugger bus split | `sh test_benches/debug/run_sba_split.sh` | 73 checks: `dm_sba_axil` → `cva5_sba_split` → the real RAM port and `tdp_ram` on one side, a peripheral on the other. Routing, window edges, error propagation, byte strobes, and collisions with the core's port |
 | silent boot | program the board | the preload prints nothing |
