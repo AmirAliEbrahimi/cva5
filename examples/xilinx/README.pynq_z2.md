@@ -441,6 +441,21 @@ exactly one page.
 That test found a real bug before it ever ran: both headers used the same
 include guard, so including them together expanded the second to nothing.
 
+**The drop path is not exercised on hardware, and cannot be by anything in
+this tree.** The ring is 4080 bytes and the PS drains it continuously, while
+the chattiest example prints about a kilobyte over a whole run:
+
+| `memtest` | `timer` | `csrs` | `i2c` | `plic` | `spi` |
+|---|---|---|---|---|---|
+| ~80 B | ~400 B | ~800 B | ~950 B | ~1040 B | ~1060 B |
+
+`memtest` is the quietest of them, not the loudest — it walks 88 KB and prints
+one line unless something fails. So a board run that shows no
+`[N characters dropped]` has not demonstrated that dropping works; it has
+demonstrated that nothing here comes close to needing it. `tb_mbox.c` is where
+that behaviour is actually checked, by overfilling the ring deliberately and
+by deleting the drop branch to confirm the check catches it.
+
 #### Holding the core while the PS writes
 
 A program loaded into a running core is a program loaded into a core executing
@@ -614,8 +629,14 @@ inside 0.6 ns of each other:
 | + crossbar MuxAr/MuxR | local memory → branch predictor address RAM | 8.980 | **+0.365** |
 | + I2C pins as a declared IIC interface | register file → load queue FIFO | — | **+0.511** |
 | + RAM mux and the PS on it | core AXI address → SBA bridge state enable | 9.329 | **+0.335** |
+| + USB and the FCLKs switched off | unchanged | 9.329 | **+0.335** |
 
-The last row is the PS going in, and it moved the limiter again. The worst
+The last two rows are the same number, and that is the point of the second
+one: switching off USB0 and the two FCLK ports removed cells from the PS, and
+nothing the PS contains was ever on a PL timing path. A change that cannot
+move the number is worth one build to confirm it did not.
+
+The row before them is the PS going in, and it moved the limiter again. The worst
 path is now `cpu/.../axi_bus/addr_reg[15]` → `debug/i_sba_axil`'s state
 register clock enable: 14 logic levels and 6.81 ns of the 9.33 in routing. The
 `d_tlb` → `local_mem` cluster that had been the limiter sits just behind it at
@@ -1491,6 +1512,15 @@ the interrupt, and `plic` including the keypress. The I2C's bus scan found
 nothing, which is the expected result with nothing attached and is the one
 thing in this design still unproven on hardware — the pins can only be
 demonstrated by a device answering.
+
+The PS path was proven separately, at the `+0.335` build: the bare-metal
+loader holds the core, writes `timer` into main memory over `M_AXI_GP1`,
+verifies it, releases, and `timer`'s own output comes back through the
+mailbox onto the PS console. That one run covers the level shifters,
+`cpu_halt` through EMIO, the protocol converter, `s_axi_ext`, S1 of the mux,
+the RAM port, and both halves of the mailbox. No characters were dropped,
+which — see above — says more about how little these programs print than
+about the ring.
 
 ## Pin map (`xc7z020clg400-1`)
 
