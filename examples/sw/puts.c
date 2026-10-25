@@ -5,12 +5,30 @@
  * as in the testbench. */
 #include "soc.h"
 
+#ifdef CVA5_MBOX
+#include "mbox.h"
+#endif
+
 #define UART_TX   (*(volatile unsigned int *)(UART_BASE + UART_TX_OFF))
 #define UART_STAT (*(volatile unsigned int *)(UART_BASE + UART_STAT_OFF))
 
+/*
+ * Every character goes to the UART, and with -DCVA5_MBOX to the mailbox as
+ * well -- see soc.h for what that is and why the board needs it.
+ *
+ * Both, not either. The UART transmits whether or not an adapter is listening
+ * (nothing gates the Tx FIFO on a receiver, so the wait below always
+ * completes), so a mailbox build still works on a bench with the FTDI
+ * attached, and one binary covers both setups. The cost is a handful of
+ * instructions per character on a path that is already waiting on a 115200
+ * baud FIFO.
+ */
 static void uart_putc(char c) {
     while (UART_STAT & UART_TX_FULL) ;   /* wait for room in the Tx FIFO */
     UART_TX = (unsigned char)c;
+#ifdef CVA5_MBOX
+    mbox_putc(c);
+#endif
 }
 
 /* Like puts, without the newline. Exists so that a caller printing a label and

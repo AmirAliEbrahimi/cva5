@@ -375,8 +375,71 @@ inline assembly in it. `check-soc-map.py` now reads all four.
 The PS reaches main memory and nothing else. `M_AXI_GP1` goes to `s_axi_ext`,
 which is behind the mux and lands on the RAM port; the peripherals are on the
 crossbar on the other side of the core. So the PS can load and start a program
-but cannot, say, print to CVA5's UART — the program's own output comes out of
-CVA5's UART, not the PS's.
+but cannot touch CVA5's UART — which is what the mailbox below is for.
+
+#### The mailbox — CVA5's console without a second adapter
+
+The PYNQ-Z2 has **one** USB-UART and it belongs to the PS (MIO 14/15, on the
+FT2232's channel B; channel A is the JTAG this design already uses). CVA5's
+UART is on PMOD JA and wants an FTDI adapter of its own. The mailbox is the
+way round that, and it costs no hardware: CVA5 writes characters into the top
+of its own main memory and the PS reads them out over the port it loaded the
+program through, then prints them on the PS console.
+
+```sh
+make -C examples/sw timer.elf MBOX=1
+make -C examples/sw ps-image PS_APP=timer.elf
+```
+
+`MBOX=1` is a `-D` and nothing else. The producer is static inlines in
+`examples/sw/mbox.h`, which `puts.c` includes, so no target's source list
+changes and every example — `timer`, `plic`, `memtest`, `spi`, `i2c`, `csrs` —
+gets it. Characters go to the UART **and** the mailbox, not one or the other:
+the Tx FIFO drains whether or not an adapter is listening, so one binary works
+on a bench with the FTDI attached and on a board without it.
+
+It lives in the top 4 KB of RAM, **outside** `fpga_link.ld`'s region:
+
+```
+0x8000_0000  program, growing up      the linker's 124 KB region
+0x8001_E000  stack, growing down      from _stack_top = MBOX_BASE
+0x8001_F000  the mailbox              not linked, not loaded
+```
+
+Nothing is linked there, so `objcopy -O binary` of any image stops short of it
+and neither loader writes over it. `check-soc-map.py` checks that the region
+still ends exactly at `MBOX_BASE` — raise it and the stack grows into the
+mailbox, lower it and `memtest`'s `TEST_END` stops covering memory that is
+really there, and neither is a build error in anything.
+
+A single-producer, single-consumer ring. `head` and `tail` are byte **indices**
+rather than counters, so the wrap is a compare — no division on either side and
+no power-of-two constraint on the size. Empty is `head == tail`; full is "the
+next head would be tail", which costs one byte of the ring and is what makes
+the two states distinguishable. A producer that finds it full increments
+`dropped` and discards the character: a console must not change the timing of
+the thing it is reporting on, and `timer.c` reports microseconds.
+
+The PS reads the data area a **word** at a time and picks the byte out itself.
+CVA5 stores single bytes, which is ordinary memory to it, but a byte read from
+the PS would be a narrow AXI transfer through the converter and the mux for
+nothing. A word read can catch neighbouring bytes mid-write, which does not
+matter — the only byte used is one below `head`, and CVA5 publishes `head`
+after the store.
+
+The two halves are the one place in this design that must agree on a layout
+with no compiler able to check it: `examples/sw/mbox.h` is built by a RISC-V
+toolchain against `soc.h`, `examples/ps/cva5_mbox.h` by an ARM one against
+`cva5_ps.h`, and those two headers are separate copies. So
+`test_benches/sw/tb_mbox.c` compiles **both, unmodified**, and runs them
+against each other on the host — the consumer takes its sink as a function
+pointer for exactly that reason. It maps a page at `MBOX_BASE` with
+`MAP_FIXED` rather than parameterising the production code for the test's
+benefit; `0x8001_F000` is an ordinary user address on Linux and the mailbox is
+exactly one page.
+
+That test found a real bug before it ever ran: both headers used the same
+include guard, so including them together expanded the second to nothing.
 
 #### Holding the core while the PS writes
 
@@ -1401,6 +1464,7 @@ something.
 | SPI on hardware | `make -C examples/sw spi` | the register file and FIFO levels with nothing attached, a transfer running to completion, then — with MOSI jumpered to MISO on the ICSP header — a held 1 reading back as all ones and a held 0 as all zeros, on two chip selects |
 | PLIC on hardware | `make -C examples/sw plic` | the register file over the bus, then **one keypress on the console** reaching `mip.MEIP`, and every filtering check made against that one asserted source: the threshold holding it down and letting it back, priority 0 doing the same, claim naming the UART, and complete leaving it quiet. Interactive, because the UART's receive interrupt is the only source wired and software cannot raise it. Waits 30 s, measured with `mtime` |
 | counter CSRs, on hardware | `make -C examples/sw csrs` | the same checks plus the CLINT's `mtime` advancing over the bus. Prints on the serial console |
+| mailbox | `sh test_benches/sw/run_mbox.sh` | 19 checks: CVA5's producer and the PS's consumer, both compiled unmodified, run against each other — layout agreement by name, round trip, interleaved writing and draining four times through the ring, the wrap as an invariant checked on every character and from **both** headers' view of it, a full ring dropping rather than overwriting, and a garbage header initialised on first use the way a JTAG load leaves it |
 | PS loader image | `make -C examples/sw ps-image PS_APP=timer.elf` | that `tools/elf-to-c-array.py` produces the same words `tools/elf-to-load-tcl.py` writes over JTAG — the two loaders carry the same image or one of them is wrong |
 | PS loader, on hardware | run the Vitis app | **the whole of the PS path at once**: level shifters, `cpu_halt` through EMIO, `M_AXI_GP1` → protocol converter → `s_axi_ext` → mux S1 → RAM port, read-back verify, then release and the program's output on CVA5's UART |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |

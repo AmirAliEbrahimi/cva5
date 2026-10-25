@@ -58,7 +58,7 @@ I2C_SRCS  := crt0.S trap.S i2c.c puts.c
 # numbers, so an image built against a stale copy of it talks to the wrong
 # address or attributes an interrupt to the wrong device -- and nothing about
 # the result says it was built before the header changed.
-HDRS      := soc.h stdio.h mip.h
+HDRS      := soc.h stdio.h mip.h mbox.h
 LDSCRIPT  := link.ld
 CFLAGS    := -march=$(ARCH) -mabi=$(ABI) -Os -g -ffreestanding -nostdlib -I. -Wl,--build-id=none
 
@@ -94,6 +94,16 @@ PS_DIR      := $(CVA5_DIR)/examples/ps
 # Which program the Zynq PS's loader carries. Any of the examples works:
 # they all link at APP_BASE as one contiguous image.
 PS_APP      ?= timer.elf
+# MBOX=1 tees every character puts.c writes into the mailbox in the top of
+# main memory as well as to the UART, so the Zynq PS can print CVA5's output
+# on the PS console. The board has one USB-UART and it belongs to the PS;
+# without this, seeing CVA5's output needs an FTDI adapter on PMOD JA. It is a
+# -D and nothing else -- the producer is static inlines in mbox.h, which
+# puts.c includes, so no target's source list changes.
+MBOX        ?=
+ifeq ($(MBOX),1)
+CFLAGS      += -DCVA5_MBOX
+endif
 OPENOCD     ?= openocd
 OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 

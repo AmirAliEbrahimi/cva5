@@ -285,4 +285,58 @@ static inline void dev_fence(void) {
 #define TRAP_ENTRY  RAM_BASE
 #define APP_ENTRY   (RAM_BASE + 0x40u)
 
+/*
+ * The mailbox: CVA5's console, for when nothing is listening to its UART.
+ *
+ * The PYNQ-Z2 has one USB-UART and it belongs to the PS (MIO 14/15). CVA5's
+ * UART is on PMOD JA and needs an FTDI adapter of its own. Without one, this
+ * is how a program's output reaches a terminal: CVA5 writes characters into
+ * the top of its own main memory, and the Zynq PS -- which can reach main
+ * memory and nothing else -- reads them out over M_AXI_GP1 and prints them on
+ * the PS console. The same port the loader writes the program through, read
+ * back the other way while the program runs.
+ *
+ * The top 4 KB of RAM, which is OUTSIDE the linker's region:
+ *
+ *   0x8000_0000  program, growing up          fpga_link.ld's RAM region
+ *   0x8001_E000  stack, growing down from _stack_top = MBOX_BASE
+ *   0x8001_F000  the mailbox                  not linked, not loaded
+ *
+ * fpga_link.ld's RAM region is 124 KB and ends exactly at MBOX_BASE, so
+ * nothing is ever linked here and `objcopy -O binary` of any example stops
+ * short of it -- the mailbox is not part of the image either loader writes.
+ * tools/check-soc-map.py checks that the region still ends here.
+ *
+ * A single-producer, single-consumer ring. head and tail are byte INDICES,
+ * not counters, so the wrap is a compare and there is no division on either
+ * side and no power-of-two constraint on the size. Empty is head == tail;
+ * full is "the next head would be tail", which costs one byte of the ring and
+ * removes the ambiguity. A producer that finds it full increments `dropped`
+ * and discards the character -- output is never worth stalling the program
+ * being measured.
+ *
+ * Layout, as words:
+ *
+ *   +0x0  magic    MBOX_MAGIC once initialised
+ *   +0x4  head     write index, owned by CVA5
+ *   +0x8  tail     read index, owned by the PS
+ *   +0xC  dropped  characters lost to a full ring, owned by CVA5
+ *   +0x10 data     MBOX_DATA_SIZE bytes
+ *
+ * examples/ps/cva5_ps.h repeats this layout, because it is compiled by an ARM
+ * toolchain and cannot include this file. Both sides are little-endian, and
+ * the PS reads the data area a WORD at a time and picks the byte out itself:
+ * CVA5 stores single bytes into block RAM, which is ordinary memory to it,
+ * but a byte read from the PS would be a narrow AXI transfer for no reason.
+ */
+#define MBOX_BASE      0x8001F000u
+#define MBOX_SIZE      0x1000u
+#define MBOX_MAGIC     0x43564135u   /* "CVA5" */
+#define MBOX_DATA_OFF  0x10u
+#define MBOX_DATA_SIZE (MBOX_SIZE - MBOX_DATA_OFF)
+
+/* Between _stack_top and the top of what memtest may write. The stack starts
+ * at MBOX_BASE and grows down; this is how much of it is left alone. */
+#define STACK_RESERVE  0x1000u
+
 #endif /* CVA5_SOC_H */

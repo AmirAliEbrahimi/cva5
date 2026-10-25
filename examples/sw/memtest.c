@@ -24,8 +24,10 @@
  *      accesses land in different cascade rows rather than marching through
  *      one of them.
  *
- * The region is RAM_BASE+0x8000 to RAM_BASE+0x1F000: clear of the program at
- * the base of RAM, and 4 KB below _stack_top at the top of the 128 KB.
+ * The region runs from RAM_BASE+0x8000 to STACK_RESERVE below _stack_top:
+ * clear of the program at the base of RAM, clear of the stack above it, and
+ * clear of the mailbox above that. Those bounds come from soc.h rather than
+ * from literals here, so the three move together.
  *
  * Build and run with:  make memtest
  *
@@ -35,9 +37,10 @@
 #include <stdio.h>
 #include "soc.h"
 
-/* Clear of the program at the base of RAM, and 4 KB below _stack_top. */
+/* Clear of the program at the base of RAM, and STACK_RESERVE below
+ * _stack_top -- which is MBOX_BASE, because fpga_link.ld's region ends there. */
 #define TEST_BASE (RAM_BASE + 0x8000u)
-#define TEST_END  (RAM_BASE + 0x1F000u)
+#define TEST_END  (MBOX_BASE - STACK_RESERVE)
 
 static void puthex(unsigned v) {
     char b[11];

@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include "xil_printf.h"
 #include "cva5_ps.h"
+#include "cva5_mbox.h"
 #include "cva5_image.h"
 
 /* The PL's AXI windows are mapped device, non-cacheable, by the standard
@@ -78,8 +79,18 @@ static uint32_t load_image(void) {
     return bad;
 }
 
+/* The drain's sink. CVA5's puts() ends a line with '\n' alone; a terminal on
+ * this side wants both. */
+static void console_put(char c) {
+    if (c == '\n')
+        xil_printf("\r\n");
+    else
+        xil_printf("%c", c);
+}
+
 int main(void) {
     uint32_t bad;
+    uint32_t dropped_seen = 0;
 
     xil_printf("\r\nCVA5 loader\r\n");
 
@@ -100,6 +111,7 @@ int main(void) {
      * reset and is absent from the RAM path's, so this stops the core without
      * touching the memory the next lines are about to write. */
     cpu_halt_set(1);
+    mbox_reset();
     xil_printf("cpu held, loading %u words to 0x%08x ...\r\n",
                (unsigned)cva5_image_words, (unsigned)RAM_BASE);
 
@@ -116,6 +128,33 @@ int main(void) {
                (unsigned)APP_ENTRY);
     cpu_halt_set(0);
 
-    xil_printf("done -- the program's own output is on CVA5's UART, not this one\r\n");
-    return 0;
+    /*
+     * Then be its console.
+     *
+     * This is the mailbox's whole point: CVA5's UART is on PMOD JA and the
+     * board's one USB-UART belongs to this processor, so without this the
+     * program's output has nowhere to go unless an FTDI adapter is attached.
+     * A program built WITHOUT -DCVA5_MBOX never sets the magic and nothing is
+     * printed below -- which is not an error, just a program whose output is
+     * going to the UART only.
+     *
+     * No exit condition, because a console does not have one. The PS reads
+     * main memory while the core runs it; cva5_ram_mux arbitrates the two,
+     * one owner at a time, and a read here costs the core one transaction.
+     */
+    xil_printf("draining CVA5's output:\r\n");
+    for (;;) {
+        uint32_t drop;
+
+        mbox_drain(console_put);
+
+        /* Reported rather than hidden: a full ring means CVA5 outran this
+         * loop and the output on screen has a hole in it. */
+        drop = ps_rd(MBOX_MAGIC_A) == MBOX_MAGIC ? ps_rd(MBOX_DROP_A) : 0u;
+        if (drop != dropped_seen) {
+            xil_printf("\r\n[%u characters dropped -- the ring filled]\r\n",
+                       (unsigned)drop);
+            dropped_seen = drop;
+        }
+    }
 }

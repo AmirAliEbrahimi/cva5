@@ -36,6 +36,43 @@
 #define APP_ENTRY   (RAM_BASE + 0x40u)
 
 /*
+ * The mailbox, in the top 4 KB of CVA5's main memory.
+ *
+ * CVA5's console. The board has one USB-UART and it is the PS's (MIO 14/15);
+ * CVA5's own UART is on PMOD JA and needs an adapter. This is the way round
+ * that: CVA5 writes characters here, the PS reads them out over the same
+ * M_AXI_GP1 it loaded the program through, and prints them on the PS console.
+ *
+ * Single producer (CVA5), single consumer (the PS). head and tail are byte
+ * INDICES into the data area, not counters, so wrapping is a compare -- no
+ * division on either side and no power-of-two constraint on the size. Empty
+ * is head == tail. Full is "the next head would be tail", which costs one
+ * byte and makes the two states distinguishable; CVA5 drops characters and
+ * counts them rather than stalling, because a console must not change the
+ * timing of what it is reporting on.
+ *
+ * This layout is also in examples/sw/soc.h, which is the copy CVA5 compiles
+ * against. check-soc-map.py holds MBOX_BASE together across the two; the
+ * offsets below are four words and are written out in both places.
+ *
+ * Read the data area a WORD at a time and pick the byte out here. CVA5 stores
+ * single bytes, which is ordinary memory to it, but a byte read from this
+ * side would be a narrow AXI transfer through the converter and the mux for
+ * no reason. Both sides are little-endian.
+ */
+#define MBOX_BASE      0x8001F000u
+#define MBOX_SIZE      0x1000u
+#define MBOX_MAGIC     0x43564135u   /* "CVA5" */
+#define MBOX_DATA_OFF  0x10u
+#define MBOX_DATA_SIZE (MBOX_SIZE - MBOX_DATA_OFF)
+
+#define MBOX_MAGIC_A  (MBOX_BASE + 0x0u)
+#define MBOX_HEAD_A   (MBOX_BASE + 0x4u)
+#define MBOX_TAIL_A   (MBOX_BASE + 0x8u)
+#define MBOX_DROP_A   (MBOX_BASE + 0xCu)
+#define MBOX_DATA_A   (MBOX_BASE + MBOX_DATA_OFF)
+
+/*
  * cpu_halt, on EMIO GPIO bit 0.
  *
  * The PS GPIO controller has four banks. Banks 0 and 1 are the 54 MIO pins;
