@@ -1,6 +1,6 @@
-From fa3265b288fad335915a273ae567fcec48477444 Mon Sep 17 00:00:00 2001
+From 89914cdd9b0224e48f1c5b3568f562031125f3b0 Mon Sep 17 00:00:00 2001
 From: Amirali Ebrahimi <amirebrahimi97@gmail.com>
-Date: Sun, 25 Oct 2026 11:24:18 -0400
+Date: Sun, 25 Oct 2026 11:38:00 -0400
 Subject: [PATCH] hw/riscv: add the CVA5 PYNQ-Z2 machine
 
 Models the SoC in the CVA5 repository's examples/xilinx/cva5_wrapper.sv and
@@ -34,19 +34,91 @@ set, and sifive_plic_update would then consider a source that can never
 be raised.
 
 Masking bit 0 of the first enable word makes the device consistent with
-its own treatment of priorities. It is also what hardware does: the CVA5
-PLIC pins source 0's priority and enable bit to zero, which is checked
-in that project's test_benches/axi/tb_plic.sv, and the divergence showed
-up as the one failing check when its plic test was run against this
-machine.
+its own treatment of priorities, and matches hardware: the CVA5 PLIC pins
+source 0's priority and enable bit to zero.
+
+hw/char: make the uartlite interrupt follow the receive FIFO
+
+The interrupt was latched and could not be cleared. STATUS_IE served as
+a pending flag: uart_update_irq ORed it in whenever the receive FIFO was
+non-empty, uart_update_status never cleared it -- it masks only bits 0
+to 2 -- and the transmit path set it on every character written, under a
+comment reading "hax".
+
+So the interrupt asserted on the first byte received or the first
+character printed, and then stayed asserted for the life of the machine.
+A guest that enabled it saw an interrupt it had no way to quiet, and
+could not distinguish "a byte is waiting" from "a byte arrived at some
+point". Printing from the handler was enough to re-raise it.
+
+In the device being modelled, STATUS bit 4 reports whether the interrupt
+is enabled -- it mirrors the control register's bit -- and the interrupt
+itself follows the receive FIFO. This makes the model do both: the irq is
+now rx_fifo_len && (CTRL & IE), draining the FIFO lowers it, and
+uart_update_status presents bit 4 as the mirror it is.
+
+Found by running a PLIC test against the CVA5 machine. The test drains
+the FIFO before enabling interrupts, printed its own progress, and was
+then interrupted by its own output.
 ---
- hw/intc/sifive_plic.c |  10 ++
- hw/riscv/Kconfig      |   9 ++
- hw/riscv/cva5_pynq.c  | 301 ++++++++++++++++++++++++++++++++++++++++++
- hw/riscv/meson.build  |   1 +
- 4 files changed, 321 insertions(+)
+ hw/char/xilinx_uartlite.c |  25 +++-
+ hw/intc/sifive_plic.c     |  10 ++
+ hw/riscv/Kconfig          |   9 ++
+ hw/riscv/cva5_pynq.c      | 301 ++++++++++++++++++++++++++++++++++++++
+ hw/riscv/meson.build      |   1 +
+ 5 files changed, 339 insertions(+), 7 deletions(-)
  create mode 100644 hw/riscv/cva5_pynq.c
 
+diff --git a/hw/char/xilinx_uartlite.c b/hw/char/xilinx_uartlite.c
+index 3ef99ad..c55b0c0 100644
+--- a/hw/char/xilinx_uartlite.c
++++ b/hw/char/xilinx_uartlite.c
+@@ -74,10 +74,21 @@ static void uart_update_irq(XilinxUARTLite *s)
+ {
+     unsigned int irq;
+ 
+-    if (s->rx_fifo_len)
+-        s->regs[R_STATUS] |= STATUS_IE;
+-
+-    irq = (s->regs[R_STATUS] & STATUS_IE) && (s->regs[R_CTRL] & CONTROL_IE);
++    /*
++     * The interrupt follows the receive FIFO, gated by the control register's
++     * enable bit. It is not latched: draining the FIFO lowers it again.
++     *
++     * STATUS_IE used to serve as a pending flag here -- it was ORed in
++     * whenever the FIFO was non-empty and never cleared, and the transmit
++     * path set it on every character written, with a comment saying "hax".
++     * Between them the interrupt asserted after the first byte or the first
++     * character of output and then stayed asserted for the life of the
++     * machine, so a guest could neither tell why it had been interrupted nor
++     * make the interrupt stop. In the device being modelled STATUS bit 4 is
++     * "interrupt enabled", a mirror of the control bit, not a pending flag;
++     * uart_update_status now presents it that way.
++     */
++    irq = !!s->rx_fifo_len && (s->regs[R_CTRL] & CONTROL_IE);
+     qemu_set_irq(s->irq, irq);
+ }
+ 
+@@ -90,6 +101,9 @@ static void uart_update_status(XilinxUARTLite *s)
+     r |= 1 << 2; /* Tx fifo is always empty. We are fast :) */
+     r |= (s->rx_fifo_len == sizeof (s->rx_fifo)) << 1;
+     r |= (!!s->rx_fifo_len);
++    /* Bit 4 reports whether the interrupt is enabled, and nothing else. */
++    r &= ~STATUS_IE;
++    r |= (s->regs[R_CTRL] & CONTROL_IE) ? STATUS_IE : 0;
+     s->regs[R_STATUS] = r;
+ }
+ 
+@@ -153,9 +167,6 @@ uart_write(void *opaque, hwaddr addr,
+              * qemu_chr_fe_write and background I/O callbacks */
+             qemu_chr_fe_write_all(&s->chr, &ch, 1);
+             s->regs[addr] = value;
+-
+-            /* hax.  */
+-            s->regs[R_STATUS] |= STATUS_IE;
+             break;
+ 
+         default:
 diff --git a/hw/intc/sifive_plic.c b/hw/intc/sifive_plic.c
 index 9c84ff0..d9ff071 100644
 --- a/hw/intc/sifive_plic.c

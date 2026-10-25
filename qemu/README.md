@@ -63,10 +63,36 @@ So `PLIC_ENABLE = 0xFFFFFFFF` left bit 0 set and read it back set, where the
 CVA5 PLIC pins it low (checked in `test_benches/axi/tb_plic.sv`). That was the
 one failing check when `examples/sw/plic.c` was first run against this machine.
 
-It is the only part of this patch that touches a file outside `hw/riscv/`, which
-matters on a version bump: that file changes more often than the machine does,
-so it is the hunk most likely to need rebasing. Dropping it costs one check in
-`plic.c` and nothing else.
+### And the uartlite's interrupt
+
+`xilinx_uartlite`'s interrupt was latched and could not be cleared.
+`STATUS_IE` was used as a pending flag: `uart_update_irq` ORed it in whenever
+the receive FIFO was non-empty, `uart_update_status` never cleared it — it
+masks only bits 0 to 2 — and the transmit path set it on **every character
+written**, under a comment reading `/* hax. */`.
+
+So the interrupt asserted on the first byte received or the first character
+printed and then stayed asserted for good. `plic.c` was interrupted by its own
+`PASS` lines: it drains the FIFO, enables the interrupt, and finds `MEIP`
+already set with nothing behind it — which is exactly what it reported.
+
+In the real device STATUS bit 4 reports whether the interrupt is *enabled*, a
+mirror of the control bit, and the interrupt follows the receive FIFO. The
+patch makes the model do both, so draining the FIFO lowers the interrupt and
+bit 4 means what the datasheet says.
+
+### Both of those are outside hw/riscv/
+
+`hw/intc/sifive_plic.c` and `hw/char/xilinx_uartlite.c` are shared with other
+machines, and they change more often than a machine file does — so they are the
+hunks most likely to need rebasing on a version bump. The PLIC one masks a
+reserved bit and is hard to argue with; the uartlite one changes behaviour, and
+although the behaviour it replaces is self-described as a hack, it is the hunk
+to drop first if a rebase gets ugly.
+
+Dropping the PLIC hunk costs one check in `plic.c`. Dropping the uartlite hunk
+costs the whole interrupt half of `plic.c` under QEMU — the register half still
+passes, and the board remains the place that half is really tested.
 
 
 The CPU is RV32IM, machine mode only, matching the wrapper's `CPU_CONFIG`
