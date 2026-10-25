@@ -31,7 +31,13 @@ module cva5_wrapper
         //before anything is loaded over JTAG.
         parameter string LOCAL_MEM = "ram.mif",
         parameter int unsigned WORDS = 32768,
-        parameter int unsigned RAM_ADDR_W = $clog2(WORDS)
+        parameter int unsigned RAM_ADDR_W = $clog2(WORDS),
+
+        //AXI ID width on the external slave port and the RAM path behind it.
+        //12 is what a Zynq-7000 PS master carries on M_AXI_GP; the mux adds
+        //no width of its own. Nothing on this path issues an ID, they only
+        //echo it, so this is register bits and no logic.
+        parameter int unsigned RAM_ID_W = 12
     )
     (
         input logic clk,
@@ -104,6 +110,55 @@ module cva5_wrapper
 
         //Non-debug-module reset, for peripherals that should reset with the CPU
         output logic ndmreset, //Debugger reset request (active high). Resets the CPU only, as in Ibex.
+
+        //Hold the CPU, from outside. Active high, and it resets the CPU ONLY:
+        //it joins ndmreset in `rst` below and is deliberately absent from
+        //ram_rstn, so whoever asserts it can write main memory through the
+        //RAM port while the core is held -- which is the whole point of it,
+        //and exactly what OpenOCD's cpu_hold does over ndmreset.
+        //
+        //Tie it low if nothing drives it. It is synchronous to clk like every
+        //other reset here; a PS driving it from an EMIO GPIO is changing it
+        //far more slowly than this clock, so no synchroniser is wanted.
+        input logic cpu_halt,
+
+        //External AXI4 slave into main memory, shared with the debugger by
+        //cva5_ram_mux. For a PS writing a program, or a DMA feeding an
+        //accelerator.
+        //
+        //The address bus is RAM_ADDR_W+2 bits, not 32: Vivado infers a
+        //packaged IP's address block from the width of its AXI address port,
+        //so this offers exactly the 128 KB the RAM is and nothing wider.
+        //Master ports obey the opposite rule -- see README.pynq_z2.md.
+        input  logic [RAM_ID_W-1:0]    s_axi_ext_awid,
+        input  logic [RAM_ADDR_W+1:0]  s_axi_ext_awaddr,
+        input  logic [7:0]             s_axi_ext_awlen,
+        input  logic [2:0]             s_axi_ext_awsize,
+        input  logic [1:0]             s_axi_ext_awburst,
+        input  logic                   s_axi_ext_awvalid,
+        output logic                   s_axi_ext_awready,
+        input  logic [31:0]            s_axi_ext_wdata,
+        input  logic [3:0]             s_axi_ext_wstrb,
+        input  logic                   s_axi_ext_wlast,
+        input  logic                   s_axi_ext_wvalid,
+        output logic                   s_axi_ext_wready,
+        output logic [RAM_ID_W-1:0]    s_axi_ext_bid,
+        output logic [1:0]             s_axi_ext_bresp,
+        output logic                   s_axi_ext_bvalid,
+        input  logic                   s_axi_ext_bready,
+        input  logic [RAM_ID_W-1:0]    s_axi_ext_arid,
+        input  logic [RAM_ADDR_W+1:0]  s_axi_ext_araddr,
+        input  logic [7:0]             s_axi_ext_arlen,
+        input  logic [2:0]             s_axi_ext_arsize,
+        input  logic [1:0]             s_axi_ext_arburst,
+        input  logic                   s_axi_ext_arvalid,
+        output logic                   s_axi_ext_arready,
+        output logic [RAM_ID_W-1:0]    s_axi_ext_rid,
+        output logic [31:0]            s_axi_ext_rdata,
+        output logic [1:0]             s_axi_ext_rresp,
+        output logic                   s_axi_ext_rlast,
+        output logic                   s_axi_ext_rvalid,
+        input  logic                   s_axi_ext_rready,
 
         //External JTAG. Tied off on the board, where the DTM sits on the FPGA's
         //own TAP (BSCANE2) and ignores these; driven by the simulation harness,
@@ -364,8 +419,11 @@ module cva5_wrapper
         .m_axi_rready (sba_rready)
     );
 
+    //The CPU's reset: the board reset, the debugger's, and cpu_halt. Note what
+    //is NOT here -- ram_rstn below takes rstn alone, so all three of these
+    //hold the core without touching the path main memory is reached by.
     logic rst = 1'b1; //Held in reset at configuration
-    always_ff @(posedge clk) rst <= ~rstn | ndmreset; //Registered: ndmreset comes from DM logic
+    always_ff @(posedge clk) rst <= ~rstn | ndmreset | cpu_halt; //Registered: ndmreset comes from DM logic
 
 
     cva5 #(.CONFIG(CPU_CONFIG), .INCLUDE_DEBUG(1), .DM_BASE(DM_BASE)) cpu(.mem(mem[0]), .*);
@@ -547,9 +605,10 @@ module cva5_wrapper
     logic [1:0]  sba_bresp, sba_rresp;
 
     //Three AXI4 bundles now, where there used to be one. cva5_sba_split's RAM
-    //leg (dbg_*) and an external master (ext_*) are cva5_ram_mux's two slave
-    //ports; rp_* is the mux's master port and the only one cva5_ram_port sees.
-    logic [7:0]  dbg_awid, dbg_arid, dbg_bid, dbg_rid;
+    //leg (dbg_*) and the external slave port (ext_*) are cva5_ram_mux's two
+    //slave ports; rp_* is the mux's master port and the only one
+    //cva5_ram_port sees.
+    logic [RAM_ID_W-1:0] dbg_awid, dbg_arid, dbg_bid, dbg_rid;
     logic [RAM_ADDR_W+1:0] dbg_awaddr, dbg_araddr;
     logic [7:0]  dbg_awlen, dbg_arlen;
     logic [2:0]  dbg_awsize, dbg_arsize;
@@ -560,18 +619,7 @@ module cva5_wrapper
     logic        dbg_bvalid, dbg_bready, dbg_arvalid, dbg_arready;
     logic        dbg_rvalid, dbg_rready, dbg_rlast;
 
-    logic [7:0]  ext_awid, ext_arid, ext_bid, ext_rid;
-    logic [RAM_ADDR_W+1:0] ext_awaddr, ext_araddr;
-    logic [7:0]  ext_awlen, ext_arlen;
-    logic [2:0]  ext_awsize, ext_arsize;
-    logic [1:0]  ext_awburst, ext_arburst, ext_bresp, ext_rresp;
-    logic        ext_awvalid, ext_awready, ext_wvalid, ext_wready, ext_wlast;
-    logic [31:0] ext_wdata, ext_rdata;
-    logic [3:0]  ext_wstrb;
-    logic        ext_bvalid, ext_bready, ext_arvalid, ext_arready;
-    logic        ext_rvalid, ext_rready, ext_rlast;
-
-    logic [7:0]  rp_awid, rp_arid, rp_bid, rp_rid;  //ram_port defaults ID_WIDTH to 8
+    logic [RAM_ID_W-1:0] rp_awid, rp_arid, rp_bid, rp_rid;
     logic [RAM_ADDR_W+1:0] rp_awaddr, rp_araddr;
     logic [7:0]  rp_awlen, rp_arlen;
     logic [2:0]  rp_awsize, rp_arsize;
@@ -596,7 +644,7 @@ module cva5_wrapper
     cva5_sba_split #(
         .RAM_BASE (RAM_BASE),
         .RAM_ADDR_W (RAM_ADDR_W),
-        .ID_WIDTH (8)
+        .ID_WIDTH (RAM_ID_W)
     ) sba_split (
         .clk (clk),
         .rstn (ram_rstn),
@@ -676,40 +724,18 @@ module cva5_wrapper
     //cva5_sba_split above; S1 is for something outside this module -- the PS
     //programming the core, or a DMA feeding an accelerator.
     //
-    //S1 is tied off here, and is the only part of this not yet wired out.
-    //Exposing it means an AXI4 slave on cva5_wrapper and cva5_top and a port
-    //on the packaged IP, which a block design has to connect to something:
-    //there is no master to connect yet, and what Vivado does with an
-    //unconnected AXI slave interface on an IP is not something to find out by
-    //guessing. The mux, its arbitration and its reset behaviour are verified
-    //in simulation now (test_benches/debug/run_ram_mux.sh, 315 checks);
-    //routing S1 out is a change to these tie-offs and nothing else.
+    //S1 is cva5_top's external AXI4 slave port, brought in above. Nothing
+    //here resolves or arbitrates it -- cva5_ram_mux does, and its header is
+    //where the arbitration and the two things worth knowing about a held
+    //grant are written down.
     //
-    //ram_rstn, not rst: the owner register must not reset on ndmreset, for
-    //the same reason cva5_sba_split's select register must not. See the header
-    //of cva5_ram_mux.sv.
-    assign ext_awid    = '0;
-    assign ext_awaddr  = '0;
-    assign ext_awlen   = '0;
-    assign ext_awsize  = 3'd2;
-    assign ext_awburst = 2'b01;
-    assign ext_awvalid = 1'b0;
-    assign ext_wdata   = '0;
-    assign ext_wstrb   = '0;
-    assign ext_wlast   = 1'b0;
-    assign ext_wvalid  = 1'b0;
-    assign ext_bready  = 1'b0;
-    assign ext_arid    = '0;
-    assign ext_araddr  = '0;
-    assign ext_arlen   = '0;
-    assign ext_arsize  = 3'd2;
-    assign ext_arburst = 2'b01;
-    assign ext_arvalid = 1'b0;
-    assign ext_rready  = 1'b0;
-
+    //ram_rstn, not rst: the mux's owner register must not reset on ndmreset
+    //or on cpu_halt, for the same reason cva5_sba_split's select register
+    //must not. A master holding the core and then writing memory is the
+    //normal case, not an edge case. See the header of cva5_ram_mux.sv.
     cva5_ram_mux #(
         .ADDR_WIDTH (RAM_ADDR_W),
-        .ID_WIDTH (8)
+        .ID_WIDTH (RAM_ID_W)
     ) ram_mux (
         .clk (clk),
         .rstn (ram_rstn),
@@ -744,35 +770,35 @@ module cva5_wrapper
         .s0_rvalid (dbg_rvalid),
         .s0_rready (dbg_rready),
 
-        .s1_awid (ext_awid),
-        .s1_awaddr (ext_awaddr),
-        .s1_awlen (ext_awlen),
-        .s1_awsize (ext_awsize),
-        .s1_awburst (ext_awburst),
-        .s1_awvalid (ext_awvalid),
-        .s1_awready (ext_awready),
-        .s1_wdata (ext_wdata),
-        .s1_wstrb (ext_wstrb),
-        .s1_wlast (ext_wlast),
-        .s1_wvalid (ext_wvalid),
-        .s1_wready (ext_wready),
-        .s1_bid (ext_bid),
-        .s1_bresp (ext_bresp),
-        .s1_bvalid (ext_bvalid),
-        .s1_bready (ext_bready),
-        .s1_arid (ext_arid),
-        .s1_araddr (ext_araddr),
-        .s1_arlen (ext_arlen),
-        .s1_arsize (ext_arsize),
-        .s1_arburst (ext_arburst),
-        .s1_arvalid (ext_arvalid),
-        .s1_arready (ext_arready),
-        .s1_rid (ext_rid),
-        .s1_rdata (ext_rdata),
-        .s1_rresp (ext_rresp),
-        .s1_rlast (ext_rlast),
-        .s1_rvalid (ext_rvalid),
-        .s1_rready (ext_rready),
+        .s1_awid (s_axi_ext_awid),
+        .s1_awaddr (s_axi_ext_awaddr),
+        .s1_awlen (s_axi_ext_awlen),
+        .s1_awsize (s_axi_ext_awsize),
+        .s1_awburst (s_axi_ext_awburst),
+        .s1_awvalid (s_axi_ext_awvalid),
+        .s1_awready (s_axi_ext_awready),
+        .s1_wdata (s_axi_ext_wdata),
+        .s1_wstrb (s_axi_ext_wstrb),
+        .s1_wlast (s_axi_ext_wlast),
+        .s1_wvalid (s_axi_ext_wvalid),
+        .s1_wready (s_axi_ext_wready),
+        .s1_bid (s_axi_ext_bid),
+        .s1_bresp (s_axi_ext_bresp),
+        .s1_bvalid (s_axi_ext_bvalid),
+        .s1_bready (s_axi_ext_bready),
+        .s1_arid (s_axi_ext_arid),
+        .s1_araddr (s_axi_ext_araddr),
+        .s1_arlen (s_axi_ext_arlen),
+        .s1_arsize (s_axi_ext_arsize),
+        .s1_arburst (s_axi_ext_arburst),
+        .s1_arvalid (s_axi_ext_arvalid),
+        .s1_arready (s_axi_ext_arready),
+        .s1_rid (s_axi_ext_rid),
+        .s1_rdata (s_axi_ext_rdata),
+        .s1_rresp (s_axi_ext_rresp),
+        .s1_rlast (s_axi_ext_rlast),
+        .s1_rvalid (s_axi_ext_rvalid),
+        .s1_rready (s_axi_ext_rready),
 
         .m_awid (rp_awid),
         .m_awaddr (rp_awaddr),
@@ -805,7 +831,7 @@ module cva5_wrapper
         .m_rready (rp_rready)
     );
 
-    cva5_ram_port #(.ADDR_WIDTH(RAM_ADDR_W)) ram_port (
+    cva5_ram_port #(.ADDR_WIDTH(RAM_ADDR_W), .ID_WIDTH(RAM_ID_W)) ram_port (
         .clk (clk),
         .rstn (ram_rstn),
         .core_en (data_bram.en),

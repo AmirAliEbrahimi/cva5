@@ -96,6 +96,104 @@ connect_bd_net [get_bd_pins cva5_top_0/rstn] [get_bd_pins proc_sys_reset_0/perip
 set sys_clk  [get_bd_pins clk_wiz_0/clk_out1]
 set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
 
+# ---- The PS, as a master into CVA5's main memory ---------------------------
+# This is the first Xilinx IP here that is not replaceable and not a PLL: it is
+# the hard processor system, so there is nothing to swap it for. Adding it also
+# means this stops being a PL-only design, and the board is programmed by PYNQ
+# Linux rather than by a JTAG bitstream load alone.
+#
+# What it buys: the PS can write a program into CVA5's main memory and release
+# the core, which is what OpenOCD does over JTAG today but without the JTAG.
+# The same port is what a DMA feeding an accelerator would use later --
+# cva5_ram_mux arbitrates the two of them against the debugger.
+#
+# M_AXI_GP0 and not an HP port: HP ports are PS *slaves*, for PL masters
+# reaching DDR. This is the PS mastering into the PL, which is what GP is for.
+# 32 bits wide, which matches, so no data-width conversion.
+#
+# Only GP0 is enabled. Everything else the preset turns on is left alone --
+# this design has no use for the PS's own peripherals, and every one of them
+# that reaches a pin is a pin CVA5 cannot have.
+create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7:5.5 ps7_0
+apply_bd_automation -rule xilinx.com:bd_rule:processing_system7 \
+  -config {make_external "FIXED_IO, DDR" apply_board_preset "1" \
+           Master "Disable" Slave "Disable"} [get_bd_cells ps7_0]
+# Only what this design needs is set. The board preset has already configured
+# the DDR, the MIO and the clocks; overriding more of it here would be guessing
+# at property names for no gain, and anything left at its preset default that
+# does not reach a pin costs nothing.
+set_property -dict [list \
+    CONFIG.PCW_USE_M_AXI_GP0 {1} \
+    CONFIG.PCW_GPIO_EMIO_GPIO_ENABLE {1} \
+    CONFIG.PCW_GPIO_EMIO_GPIO_IO {1} \
+] [get_bd_cells ps7_0]
+
+# Fail here, with the pin list in hand, rather than later with a dangling net.
+# These three are what the properties above are for, and a property name that
+# a future Vivado renames would otherwise leave them silently absent.
+foreach pin {M_AXI_GP0_ACLK GPIO_O} {
+    if {[llength [get_bd_pins -quiet ps7_0/$pin]] == 0} {
+        error "ps7_0 has no $pin pin. The PS configuration above did not take\
+ -- check the property names with: report_property \[get_bd_cells ps7_0\]"
+    }
+}
+if {[llength [get_bd_intf_pins -quiet ps7_0/M_AXI_GP0]] == 0} {
+    error "ps7_0 has no M_AXI_GP0 interface. PCW_USE_M_AXI_GP0 did not take."
+}
+
+# The PS's AXI port runs on OUR clock, not on FCLK_CLK0. That is the whole
+# reason there is no clock-domain crossing anywhere in this: M_AXI_GP0_ACLK is
+# an input, so feeding it clk_out1 puts the port in the 100 MHz domain the rest
+# of the design already lives in. Using FCLK_CLK0 instead would mean an axi_cdc
+# and a second clock group in the XDC, for nothing.
+connect_bd_net $sys_clk [get_bd_pins ps7_0/M_AXI_GP0_ACLK]
+
+# AXI3 to AXI4. A Zynq-7000 PS master is AXI3: 4-bit burst length, WID on the
+# write channel, no QOS or REGION. cva5_top's slave port is AXI4. The converter
+# is instantiated here rather than left to apply_bd_automation because this
+# script runs on every build and a conversion that automation inserts is
+# invisible in it -- and if a future Vivado stops inserting one, the failure is
+# a protocol violation at run time rather than an error here.
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_protocol_converter:2.1 ps_axi4_0
+set_property -dict [list \
+    CONFIG.SI_PROTOCOL {AXI3} \
+    CONFIG.MI_PROTOCOL {AXI4} \
+] [get_bd_cells ps_axi4_0]
+connect_bd_net $sys_clk  [get_bd_pins ps_axi4_0/aclk]
+connect_bd_net $sys_rstn [get_bd_pins ps_axi4_0/aresetn]
+connect_bd_intf_net [get_bd_intf_pins ps7_0/M_AXI_GP0] \
+                    [get_bd_intf_pins ps_axi4_0/S_AXI]
+
+# ---- cpu_halt, from the PS's EMIO GPIO ------------------------------------
+# The PS has to hold the core while it writes a program, or the core runs off
+# into a half-written image. cpu_halt joins ndmreset in cva5_wrapper's CPU
+# reset and is deliberately absent from the RAM path's reset, so the PS can
+# hold the core and write memory at the same time -- the same thing OpenOCD's
+# cpu_hold does with ndmreset.
+#
+# EMIO rather than an AXI4-Lite control register: it is one bit that changes
+# twice per program load, so a register would cost a seventh crossbar port and
+# a software driver to set one bit. EMIO costs a GPIO bank the PS already has.
+#
+# Bank 2 is the EMIO bank; bit 0 of it is cpu_halt. From Linux this is a
+# gpiochip line, not an AXI write.
+create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 cpu_halt_slice
+set_property -dict [list CONFIG.DIN_WIDTH {1} CONFIG.DIN_FROM {0} \
+                         CONFIG.DIN_TO {0} CONFIG.DOUT_WIDTH {1}] \
+    [get_bd_cells cpu_halt_slice]
+connect_bd_net [get_bd_pins ps7_0/GPIO_O] [get_bd_pins cpu_halt_slice/Din]
+connect_bd_net [get_bd_pins cpu_halt_slice/Dout] \
+               [get_bd_pins cva5_top_0/cpu_halt]
+
+# ---- The PS into main memory ----------------------------------------------
+# cva5_ram_mux is behind this port and arbitrates it against the debugger's
+# system bus. One owner at a time, alternating priority, and the owner is held
+# until its response completes -- see the header of cva5_ram_mux.sv, in
+# particular the note on what a master that stops accepting read data does to
+# the other master.
+connect_bd_intf_net [get_bd_intf_pins ps_axi4_0/M_AXI] \
+                    [get_bd_intf_pins cva5_top_0/s_axi_ext]
+
 # No AXI automation: there is no Xilinx interconnect in this design, and no
 # Xilinx UART either. The UART hangs off cva5_axi_xbar's peripheral port,
 # wired explicitly below, so its clock and reset are connected here rather
@@ -351,6 +449,27 @@ set i2c_seg [cva5_seg {axi_xbar_0/m_axi_i2c/SEG_cva5_i2c_0_reg0} \
 if {$i2c_seg eq ""} { error "the crossbar's I2C port has no address segment" }
 set_property offset 0x28000000 $i2c_seg
 set_property range  4K         $i2c_seg
+
+# ---- Where the PS sees CVA5's main memory ---------------------------------
+# The same 0x8000_0000 the core sees it at. There is no reason for the PS's
+# view to differ, and an identical map means a loader on the PS uses the
+# addresses in examples/sw/soc.h unchanged, and that tools/check-soc-map.py
+# keeps covering the whole thing.
+#
+# 128 KB, which is what the slave port offers: cva5_top's s_axi_ext address
+# bus is $clog2(WORDS)+2 bits wide for exactly this reason, so Vivado infers
+# an address block of the right size instead of a 4 GB aperture it would then
+# refuse to place anywhere but zero.
+set ps_ram_seg [cva5_seg {ps7_0/Data/SEG_cva5_top_0_reg0} \
+                         {ps7_0/Data/SEG_cva5_top_0_Reg} \
+                         {ps7_0/Data/SEG_cva5_top_0_s_axi_ext}]
+if {$ps_ram_seg eq ""} {
+    error "the PS has no address segment for cva5_top's external port. List\
+ what it does have with: get_bd_addr_segs -of \[get_bd_addr_spaces\
+ ps7_0/Data\]"
+}
+set_property offset 0x80000000 $ps_ram_seg
+set_property range  128K       $ps_ram_seg
 
 # ---- Finalise -------------------------------------------------------------
 regenerate_bd_layout

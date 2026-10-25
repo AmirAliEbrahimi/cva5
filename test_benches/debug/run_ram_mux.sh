@@ -11,9 +11,17 @@ verilator --lint-only -Wall --timing -Wno-TIMESCALEMOD \
   --top-module cva5_ram_mux \
   examples/xilinx/debug/cva5_ram_mux.sv
 
-verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style -Wno-TIMESCALEMOD \
-  examples/xilinx/debug/cva5_ram_mux.sv \
-  examples/xilinx/debug/cva5_ram_port.sv \
-  test_benches/debug/tb_ram_mux.sv \
-  --top-module tb_ram_mux -Mdir build/tb_ram_mux
-./build/tb_ram_mux/Vtb_ram_mux
+# Two ID widths: 8, and the 12 the design uses so a Zynq PS master's IDs fit.
+# The mux adds no width of its own, so this is checking that the echo path is
+# width-clean rather than that the arbitration changed.
+for idw in 8 12; do
+    echo "== ID width $idw =="
+    rm -rf "build/tb_ram_mux_$idw"
+    verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style \
+      -Wno-TIMESCALEMOD -DIDW_OVERRIDE=$idw \
+      examples/xilinx/debug/cva5_ram_mux.sv \
+      examples/xilinx/debug/cva5_ram_port.sv \
+      test_benches/debug/tb_ram_mux.sv \
+      --top-module tb_ram_mux -Mdir "build/tb_ram_mux_$idw"
+    "./build/tb_ram_mux_$idw/Vtb_ram_mux"
+done

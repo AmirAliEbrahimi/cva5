@@ -25,7 +25,7 @@ The RTL, by subsystem:
 | `cva5_top.v` | a plain-Verilog, port-for-port shim around it, because the IP packager will not analyse a SystemVerilog top. **A port added to one must be added to the other**, which `tools/check-port-parity.py` checks |
 | `debug/cva5_debug_subsys.sv` | riscv-dbg's Debug Module, DMI and JTAG TAP |
 | `debug/cva5_sba_split.sv` | routes the debugger's system bus: RAM window straight to the RAM's second port, everything else out to the crossbar |
-| `debug/cva5_ram_mux.sv` | two AXI4 masters sharing that second port: the debugger, and one for something outside the core |
+| `debug/cva5_ram_mux.sv` | two AXI4 masters sharing that second port: the debugger, and the PS |
 | `debug/cva5_ram_port.sv`, `debug/dm_mem_port.sv`, `debug/dm_sba_axil.sv` | the rest of the debugger's path to memory |
 | `axi/cva5_axi_xbar.sv` | the peripheral interconnect: two slave ports, five master ports, address decode from `soc.h` |
 | `axi/cva5_uart.sv` | lowRISC's UART behind AXI4-Lite, keeping `axi_uartlite`'s register map |
@@ -56,14 +56,28 @@ all-Xilinx baseline of **WNS +0.107** at 100 MHz on the `xc7z020clg400-1`:
 | `clk_wiz` | *kept* — the MMCM is a hard block | — | — |
 | `proc_sys_reset` | *kept for now* — see below | — | — |
 
-Two Xilinx IPs are left in the block design. `clk_wiz` stays because the MMCM
-is a hard block and no amount of RTL replaces it. `proc_sys_reset` is a reset
-synchroniser and a counter, which is thirty lines of our own, and it is still
-here only because it has not been worth a build cycle yet; it is the next one
-to go. `axi_intc` and `xlconcat` were never instantiated here — the PLIC
-window was reserved from the memory map onwards and the concat was written
-before it was needed — but they are the IPs a Vivado user would reach for, so
-they belong in the table.
+Four Xilinx IPs are left in the block design, and only one of them is a
+candidate for replacement.
+
+`processing_system7` is the hard processor system — there is nothing to swap it
+for, and adding it is what lets the PS write programs into main memory. It also
+means this is no longer a PL-only design: the board is brought up by PYNQ Linux
+rather than by a bitstream load alone.
+
+`clk_wiz` stays because the MMCM is a hard block and no amount of RTL replaces
+it. `axi_protocol_converter` stays because a Zynq-7000 PS master is AXI3 and
+`cva5_top`'s slave port is AXI4; writing that conversion by hand would be a
+third protocol adapter in a tree that already has two, for a path that is not
+on any critical timing.
+
+`proc_sys_reset` is the one that could still go: a reset synchroniser and a
+counter, thirty lines of our own. It is here because it has not been worth a
+build cycle.
+
+`axi_intc` and `xlconcat` were never instantiated here — the PLIC window was
+reserved from the memory map onwards and the concat was written before it was
+needed — but they are the IPs a Vivado user would reach for, so they belong in
+the table.
 
 ### Memory map
 
@@ -256,12 +270,51 @@ correct, the request is still being made, but it means an aborted transaction
 has to have its valids withdrawn *before* reset is released. `tb_ram_mux`
 deadlocked itself on exactly this while being written.
 
-**S1 is not wired out yet.** The mux is in the design and verified — 315 checks,
-and every one of eight mutants in the arbitration is caught — but S1 is tied off
-inside `cva5_wrapper.sv`. Exposing it means an AXI4 slave on the wrapper, the
-same on `cva5_top.v`, and a port on the packaged IP that a block design has to
-connect to something. There is no master to connect yet. Routing it out is a
-change to those tie-offs and nothing else.
+**S1 is the PS.** `cva5_top` carries an AXI4 slave port, `s_axi_ext`, which the
+block design connects to the PS's `M_AXI_GP0` through an AXI3-to-AXI4
+converter. The PS sees main memory at `0x8000_0000` — the same address the core
+does, so a loader on the PS uses `soc.h`'s numbers unchanged.
+
+Three things about that port are deliberate:
+
+**Its address bus is `$clog2(WORDS)+2` bits, not 32.** Vivado infers a packaged
+IP's address block from the width of its AXI address port, so this offers
+exactly the 128 KB the RAM is. A 32-bit port would offer 4 GB, and a 4 GB
+aperture can only be placed at zero.
+
+**`ID_WIDTH` is 12**, because that is what a Zynq-7000 PS master carries on
+`M_AXI_GP`. The mux adds no width of its own — one transaction in flight, owner
+in a register, rather than prepending a port index the way a general AXI mux
+does — so 12 at the port is 12 all the way to `cva5_ram_port`. Nothing on that
+path issues an ID, they only echo it, so it is register bits and no logic.
+`run_ram_mux.sh` runs the whole suite at 8 and at 12.
+
+**`M_AXI_GP0_ACLK` is driven from `clk_wiz_0/clk_out1`.** The PS's AXI port
+clock is an input, so putting it in the 100 MHz domain the rest of the design
+lives in means there is no clock-domain crossing anywhere in this. Using
+`FCLK_CLK0` instead would need an `axi_cdc` and a second clock group in the
+XDC, for nothing.
+
+#### Holding the core while the PS writes
+
+A program loaded into a running core is a program loaded into a core executing
+whatever was there before. `cpu_halt` is an input on `cva5_top`, driven from the
+PS's EMIO GPIO bank, and it joins `ndmreset` in the CPU's reset:
+
+```systemverilog
+always_ff @(posedge clk) rst      <= ~rstn | ndmreset | cpu_halt;  // the CPU
+always_ff @(posedge clk) ram_rstn <= rstn;                         // the RAM path
+```
+
+What matters is the second line. `cpu_halt` is **absent** from it, so holding
+the core does not reset the RAM port, the mux or the peripherals — the PS can
+hold the core and write memory at the same time. That is exactly what OpenOCD's
+`cpu_hold` does with `ndmreset`, and it is the reason this works at all.
+
+EMIO rather than an AXI4-Lite control register: it is one bit that changes twice
+per program load. A register would cost a seventh crossbar port and a driver to
+set one bit; EMIO costs a GPIO bank the PS already has, and from Linux it is a
+`gpiochip` line rather than an AXI write.
 
 The debugger reaches it without leaving `cva5_top`. `cva5_sba_split` sits
 between `dm_sba_axil` and the rest of the design and routes the system bus by

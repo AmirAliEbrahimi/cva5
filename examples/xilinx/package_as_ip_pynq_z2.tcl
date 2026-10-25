@@ -102,11 +102,19 @@ ipx::package_project -root_dir ./vivado/ip_repo -vendor xilinx.com -library user
 ipx::unload_core ./vivado/ip_repo/component.xml
 ipx::edit_ip_in_project -upgrade true -name tmp_edit_project -directory ./vivado/ip_repo ./vivado/ip_repo/component.xml
 ipx::update_source_project_archive -component [ipx::current_core]
-ipx::associate_bus_interfaces -busif m_axi_dbg -clock clk [ipx::current_core]
+# Vivado auto-associates only the first interface it infers -- the packaging
+# log shows it adding ASSOCIATED_BUSIF with value 'm_axi' and stopping there --
+# so every other one has to say which clock drives it explicitly. Without this
+# the interface still works; it just reports no clock domain, which makes the
+# block design's propagation unable to check it.
+foreach busif {m_axi_dbg s_axi_ext} {
+    ipx::associate_bus_interfaces -busif $busif -clock clk [ipx::current_core]
+}
 
 set cva5_desc "CVA5 RV32IM soft processor: the core, its JTAG debug module and"
-append cva5_desc " its local memory, with an AXI4-Lite master for peripherals"
-append cva5_desc " and a second for the debugger's system bus"
+append cva5_desc " its local memory, an AXI4-Lite master for peripherals, a"
+append cva5_desc " second for the debugger's system bus, and an AXI4 slave"
+append cva5_desc " into main memory for a PS or a DMA"
 cva5_ip_metadata $cva5_desc 100000000
 
 ipx::create_xgui_files [ipx::current_core]

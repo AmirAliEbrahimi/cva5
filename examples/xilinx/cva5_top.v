@@ -24,7 +24,14 @@ module cva5_top
 
     #(
         parameter LOCAL_MEM = "ram.mif", //Preload for main memory
-        parameter WORDS = 32768          //Main memory size in words (128 KB)
+        parameter WORDS = 32768,         //Main memory size in words (128 KB)
+
+        //AXI ID width on the external slave port and the RAM path behind it.
+        //12 is what a Zynq-7000 PS master carries on M_AXI_GP. A parameter
+        //rather than a localparam because the port list needs it, and unlike
+        //RAM_ADDR_W it depends on nothing, so the packager has no dependency
+        //attribute to drop and 19-818 does not apply.
+        parameter RAM_ID_W = 12
     )
     (
         input clk,
@@ -90,7 +97,51 @@ module cva5_top
         input m_axi_dbg_rvalid,
         output m_axi_dbg_rready,
 
-        output ndmreset
+        output ndmreset,
+
+        //Hold the CPU, from outside. Active high, and it resets the CPU only:
+        //whoever asserts it can still write main memory through the slave
+        //port below, which is the point of having both. Tie low if unused.
+        input cpu_halt,
+
+        //External AXI4 slave into main memory, shared with the debugger by
+        //cva5_ram_mux. The address bus is $clog2(WORDS)+2 bits so the
+        //packaged IP offers exactly the 128 KB the RAM is -- see
+        //README.pynq_z2.md on why a slave port is narrow and a master port is
+        //not. It is written from WORDS rather than from the RAM_ADDR_W
+        //localparam below because a port list cannot reference one, and
+        //RAM_ADDR_W must not go back in the parameter list: as a parameter
+        //with a dependency on WORDS it trips IP_Flow 19-818, which is the
+        //whole reason it was moved into the body.
+        input [RAM_ID_W-1:0] s_axi_ext_awid,
+        input [$clog2(WORDS)+1:0] s_axi_ext_awaddr,
+        input [7:0] s_axi_ext_awlen,
+        input [2:0] s_axi_ext_awsize,
+        input [1:0] s_axi_ext_awburst,
+        input s_axi_ext_awvalid,
+        output s_axi_ext_awready,
+        input [31:0] s_axi_ext_wdata,
+        input [3:0] s_axi_ext_wstrb,
+        input s_axi_ext_wlast,
+        input s_axi_ext_wvalid,
+        output s_axi_ext_wready,
+        output [RAM_ID_W-1:0] s_axi_ext_bid,
+        output [1:0] s_axi_ext_bresp,
+        output s_axi_ext_bvalid,
+        input s_axi_ext_bready,
+        input [RAM_ID_W-1:0] s_axi_ext_arid,
+        input [$clog2(WORDS)+1:0] s_axi_ext_araddr,
+        input [7:0] s_axi_ext_arlen,
+        input [2:0] s_axi_ext_arsize,
+        input [1:0] s_axi_ext_arburst,
+        input s_axi_ext_arvalid,
+        output s_axi_ext_arready,
+        output [RAM_ID_W-1:0] s_axi_ext_rid,
+        output [31:0] s_axi_ext_rdata,
+        output [1:0] s_axi_ext_rresp,
+        output s_axi_ext_rlast,
+        output s_axi_ext_rvalid,
+        input s_axi_ext_rready
     );
 
     //Derived, and deliberately not a parameter. As a parameter with a default
@@ -107,7 +158,8 @@ module cva5_top
     //A localparam cannot be overridden, so there is nothing to get out of step.
     localparam RAM_ADDR_W = $clog2(WORDS);
 
-    cva5_wrapper #(.LOCAL_MEM(LOCAL_MEM), .WORDS(WORDS), .RAM_ADDR_W(RAM_ADDR_W)) cva5_inst(
+    cva5_wrapper #(.LOCAL_MEM(LOCAL_MEM), .WORDS(WORDS), .RAM_ADDR_W(RAM_ADDR_W),
+                   .RAM_ID_W(RAM_ID_W)) cva5_inst(
         .clk(clk),
         .rstn(rstn),
         .m_axi_arready(m_axi_arready),
@@ -150,6 +202,36 @@ module cva5_top
         .m_axi_dbg_rvalid(m_axi_dbg_rvalid),
         .m_axi_dbg_rready(m_axi_dbg_rready),
         .ndmreset(ndmreset),
+        .cpu_halt(cpu_halt),
+        .s_axi_ext_awid(s_axi_ext_awid),
+        .s_axi_ext_awaddr(s_axi_ext_awaddr),
+        .s_axi_ext_awlen(s_axi_ext_awlen),
+        .s_axi_ext_awsize(s_axi_ext_awsize),
+        .s_axi_ext_awburst(s_axi_ext_awburst),
+        .s_axi_ext_awvalid(s_axi_ext_awvalid),
+        .s_axi_ext_awready(s_axi_ext_awready),
+        .s_axi_ext_wdata(s_axi_ext_wdata),
+        .s_axi_ext_wstrb(s_axi_ext_wstrb),
+        .s_axi_ext_wlast(s_axi_ext_wlast),
+        .s_axi_ext_wvalid(s_axi_ext_wvalid),
+        .s_axi_ext_wready(s_axi_ext_wready),
+        .s_axi_ext_bid(s_axi_ext_bid),
+        .s_axi_ext_bresp(s_axi_ext_bresp),
+        .s_axi_ext_bvalid(s_axi_ext_bvalid),
+        .s_axi_ext_bready(s_axi_ext_bready),
+        .s_axi_ext_arid(s_axi_ext_arid),
+        .s_axi_ext_araddr(s_axi_ext_araddr),
+        .s_axi_ext_arlen(s_axi_ext_arlen),
+        .s_axi_ext_arsize(s_axi_ext_arsize),
+        .s_axi_ext_arburst(s_axi_ext_arburst),
+        .s_axi_ext_arvalid(s_axi_ext_arvalid),
+        .s_axi_ext_arready(s_axi_ext_arready),
+        .s_axi_ext_rid(s_axi_ext_rid),
+        .s_axi_ext_rdata(s_axi_ext_rdata),
+        .s_axi_ext_rresp(s_axi_ext_rresp),
+        .s_axi_ext_rlast(s_axi_ext_rlast),
+        .s_axi_ext_rvalid(s_axi_ext_rvalid),
+        .s_axi_ext_rready(s_axi_ext_rready),
         //External JTAG unused on the board: the DTM sits on the FPGA's own TAP
         .jtag_tck(1'b0),
         .jtag_tms(1'b0),

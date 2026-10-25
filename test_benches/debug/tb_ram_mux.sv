@@ -25,7 +25,11 @@
 module tb_ram_mux;
 
     localparam int unsigned AW = 10;          //1024 words, enough for this
+`ifdef IDW_OVERRIDE
+    localparam int unsigned IDW = `IDW_OVERRIDE;
+`else
     localparam int unsigned IDW = 8;
+`endif
 
     logic clk = 0;
     logic rstn = 0;
