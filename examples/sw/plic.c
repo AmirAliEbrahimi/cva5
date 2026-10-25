@@ -48,6 +48,7 @@
 
 #define UART_RX    (*(volatile unsigned int *)(UART_BASE + UART_RX_OFF))
 #define UART_STAT  (*(volatile unsigned int *)(UART_BASE + UART_STAT_OFF))
+#define UART_CTRL  (*(volatile unsigned int *)(UART_BASE + UART_CTRL_OFF))
 
 #define UART_SRC_BIT (1u << PLIC_SRC_UART)
 
@@ -177,6 +178,20 @@ int main(void) {
      *   pending 1, meip 0      the PLIC has it, the core does not: eip into
      *                          cva5_top, or enable/priority/threshold
      */
+    /*
+     * Enable the UART's interrupt. cva5_uart drops this write -- it has no
+     * control register and its interrupt follows "receive FIFO not empty"
+     * unconditionally -- so on the board this line does nothing and the
+     * section below passed without it.
+     *
+     * axi_uartlite gates its interrupt on this bit, though, and so does
+     * QEMU's xilinx_uartlite: there the interrupt is (status & IE) &&
+     * (control & IE), so without this the keypress below never reaches the
+     * PLIC and the wait times out. The register map is axi_uartlite's, so
+     * setting it is what the map says to do either way.
+     */
+    UART_CTRL = UART_CTRL_IE;
+
     puts("");
     puts("press a key on this console (waiting 30s)...");
 

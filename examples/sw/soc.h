@@ -251,6 +251,27 @@ static inline void dev_fence(void) {
 #define UART_TX_FULL  (1u << 3)
 
 /*
+ * The control register, and the one bit of it that matters here.
+ *
+ * cva5_uart does not implement this register: it decodes RX, TX and STAT and
+ * drops writes above 0x08, and its interrupt is lowRISC's uart_irq_o, which
+ * follows "receive FIFO not empty" with nothing gating it. So on hardware
+ * setting this changes nothing and the interrupt arrives regardless.
+ *
+ * axi_uartlite, which this layout comes from, does implement it, and so does
+ * QEMU's xilinx_uartlite in the cva5-pynq machine: its interrupt is
+ * (status & IE) && (control & IE), so without this write nothing is ever
+ * raised and software waiting on MEIP waits forever. That is how the
+ * divergence was found.
+ *
+ * Software that wants the UART's interrupt should therefore set it. It is
+ * free on the board and required everywhere else, and it is what the register
+ * map this device claims to implement says to do.
+ */
+#define UART_CTRL_OFF 0x0Cu
+#define UART_CTRL_IE  (1u << 4)
+
+/*
  * Where a trap goes. Nothing in these examples writes mtvec, so this is the
  * core's RESET_TVEC and it is the trap vector for the whole life of the
  * program. It has to be a real address: the Debug Module is at 0x0000_0000

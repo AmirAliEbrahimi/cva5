@@ -37,6 +37,22 @@ PLIC source 2 is the SPI's transfer-complete interrupt on the board. The source
 exists here and stays low, so software that enables it waits rather than
 receiving a fabricated interrupt.
 
+### The UART's interrupt needs enabling here, and not on the board
+
+`xilinx_uartlite` raises its interrupt only when both the status and control
+`IE` bits are set — `(status & IE) && (control & IE)`. `cva5_uart` has no
+control register at all: it decodes RX, TX and STAT, drops writes above
+`0x08`, and its interrupt follows "receive FIFO not empty" unconditionally.
+
+So a program that wants the UART's interrupt must write `UART_CTRL_IE` to
+`UART_BASE + 0x0C`. On hardware that write is dropped and the interrupt would
+have arrived anyway; here it is the difference between an interrupt and a
+timeout. `examples/sw/plic.c` does it, and `soc.h` carries the definitions.
+
+This one is worth keeping in mind in both directions: QEMU is the stricter of
+the two, and matches `axi_uartlite`, so software that works here works on the
+board but not necessarily the other way round.
+
 ## One change outside the machine
 
 The patch also masks bit 0 of the PLIC's first enable word in

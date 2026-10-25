@@ -541,6 +541,22 @@ axi_uartlite's bits instead costs two lines in the vendored file and means
 all work unchanged, with no per-target `#ifdef`. Software written against
 lowRISC's map would need adjusting; this tree has none.
 
+**It does not implement the control register at `+0x0C`.** Offsets above `0x08`
+read as zero and writes to them are dropped, and the interrupt is lowRISC's
+`uart_irq_o` — "receive FIFO not empty", with nothing gating it. So the
+interrupt arrives here whether or not software has enabled it.
+
+`axi_uartlite` is not that lenient, and neither is QEMU's `xilinx_uartlite`:
+its interrupt is `(status & IE) && (control & IE)`, so without a write of
+`UART_CTRL_IE` to `+0x0C` nothing is raised at all. That is how this was found
+— `plic.c`'s keypress section passed on the board and timed out under QEMU,
+having never needed the enable bit. `plic.c` now sets it, which is free on the
+board, required under QEMU, and what the register map this device claims to
+keep says to do.
+
+Worth knowing if an interrupt-driven driver is ever written against this UART:
+it cannot mask its own interrupt. Masking has to happen at the PLIC.
+
 The other divergence from upstream is the FIFOs: `fifo_v3` from pulp's
 `common_cells`, already vendored and packaged here, rather than OpenTitan's
 `prim_fifo_sync`, which would bring `prim_fifo_sync_cnt`, `prim_util_pkg` and
