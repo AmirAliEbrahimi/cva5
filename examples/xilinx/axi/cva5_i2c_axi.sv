@@ -18,12 +18,16 @@
  * registered locally from rstn alone and never ndmreset, because the debugger
  * can reach this peripheral over the system bus -- the rule in CLAUDE.md.
  *
- * It turns the core's open-drain triplets into two `inout` pins. The core
- * drives scl_o/scl_t and sda_o/sda_t with the convention its own header shows
+ * It passes the core's open-drain triplets straight out. scl_o/scl_t and
+ * sda_o/sda_t follow the convention i2c_master.v's own header shows
  * (`assign scl_pin = scl_t ? 1'bz : scl_o`), where t and o are the same
- * signal: low means drive low, high means release. Vivado infers an IOBUF per
- * inout at the top level, and the bus needs external pull-ups -- the PYNQ-Z2
- * has them on the Arduino header's ar_scl/ar_sda, which is where these go.
+ * signal: low means drive low, high means release. The tri-state is NOT
+ * resolved here and no IOBUF is instantiated: the triplets are declared as an
+ * IIC bus interface during packaging and Vivado's block-design wrapper owns
+ * the pad. The long note below the reset is the account of why, and is worth
+ * reading before changing any of it. The bus needs external pull-ups -- the
+ * PYNQ-Z2 has them on the Arduino header's ar_scl/ar_sda, which is where
+ * these go.
  *
  * And it widens the address port. The device decodes four words, so the core's
  * slave address bus is 4 bits; this offers the 4 KB that is the floor for a
@@ -83,10 +87,17 @@ module cva5_i2c_axi #(
     output logic        s_axi_rvalid,
     input  logic        s_axi_rready,
 
-    //I2C, open drain. External pull-ups are required and the PYNQ-Z2's
-    //Arduino header has them.
-    inout  wire         scl,
-    inout  wire         sda
+    //I2C, open drain, as the o/i/t triplets the core produces. There is no
+    //inout here and no tri-state anywhere in this file -- the pad belongs to
+    //Vivado's block-design wrapper, and the note below the reset says why and
+    //what makes that happen. External pull-ups are required and the PYNQ-Z2's
+    //Arduino header has them (R49/R50, 2.2k to 3V3).
+    input  logic        scl_i,
+    output logic        scl_o,
+    output logic        scl_t,
+    input  logic        sda_i,
+    output logic        sda_o,
+    output logic        sda_t
 );
 
     //Active-high and synchronous, which is what Forencich's cores want, and
@@ -101,22 +112,19 @@ module cva5_i2c_axi #(
             rst <= 1'b0;
     end
 
-    logic scl_i, scl_o, scl_t;
-    logic sda_i, sda_o, sda_t;
-
+    //WHY THERE IS NO TRI-STATE AND NO IOBUF IN THIS FILE.
+    //
     //Open drain: t and o carry the same value, low drives the line low and
     //high releases it, which is the convention i2c_master.v's own header
-    //documents.
-    //
-    //The buffers are instantiated rather than inferred, and that is not a
-    //stylistic choice. Written as
+    //documents. The obvious way to finish that here is
     //
     //    assign scl = scl_t ? 1'bz : scl_o;
     //
-    //it simulates correctly and SYNTHESISES WRONG, because a block design
-    //synthesises each IP out of context: in that run this module is the top,
-    //there is no I/O buffer for the high-Z to attach to, and Vivado resolves
-    //it away --
+    //with scl an inout. It simulates correctly and SYNTHESISES WRONG. A block
+    //design synthesises each IP out of context -- SYNTH_CHECKPOINT_MODE
+    //defaults to HIERARCHICAL, one run per IP -- so in that run this module is
+    //the top, the high-Z has no I/O buffer to attach to, and Vivado resolves
+    //it away:
     //
     //  CRITICAL WARNING: [Synth 8-5799] Converted tricell instance 'i_1' to
     //                    logic
@@ -125,17 +133,33 @@ module cva5_i2c_axi #(
     //high instead of let go, so this master fights every slave that pulls the
     //line down to ACK. Everything short of an actual transfer still passes:
     //the registers read back, the controller reports idle, and an addressed
-    //slave never answers -- which is indistinguishable from an empty bus.
+    //slave never answers, which is indistinguishable from an empty bus.
     //
-    //An IOBUF is a real cell rather than an inferred one, so it survives the
-    //out-of-context boundary. Verilator has no UNISIM library, so
-    //test_benches/axi/IOBUF_stub.v models it -- a real model and not a tie-off,
-    //so that what the bench drives through is the structure synthesis builds
-    //rather than a second expression of the same intent. What the bench cannot
-    //check is that Vivado keeps the cell; the packaging log does that, by not
-    //reporting 8-5799.
-    IOBUF scl_buf (.I(scl_o), .O(scl_i), .T(scl_t), .IO(scl));
-    IOBUF sda_buf (.I(sda_o), .O(sda_i), .T(sda_t), .IO(sda));
+    //Four ways out of that were built. An instantiated IOBUF works, being a
+    //real cell rather than an inferred one, but puts a Xilinx primitive in RTL
+    //that is otherwise vendor-neutral and needs a UNISIM stub to simulate.
+    //Resolving the tri-state in a separate module outside the IP works too --
+    //a module reference is not an IP, so it escapes the per-IP OOC run -- at
+    //the cost of a second file. Turning off the IP's own OOC run with
+    //GENERATE_SYNTH_CHECKPOINT false would also do it.
+    //
+    //This is the fourth, and it needs none of those. The triplets leave here
+    //as ordinary directional ports and package_openhw_ips.tcl declares them as
+    //an IIC bus interface with an explicit ipx::add_bus_interface --
+    //explicit because Vivado 2025.1 does NOT infer that interface from these
+    //port names, whatever they are called; packaging reports s_axi, rstn and
+    //clk and nothing else. pynq_z2_sys.tcl then exports the whole interface,
+    //and Vivado's wrapper generator instantiates the buffers, where the ports
+    //are real pins. Same mechanism axi_iic uses, which declares its IIC
+    //interface in its component.xml rather than relying on inference.
+    //
+    //Two consequences. There is no pad logic in this repository, so nothing
+    //here can be mutated to test it; pynq_z2_sys.tcl counts IOBUF instances in
+    //the generated wrapper instead, which is a real check for this
+    //arrangement because a declared interface puts them there textually.
+    //And waiving 8-5799 is never the answer if it reappears: create_waiver
+    //filters reports, not synthesis, so it would hide the message and ship the
+    //broken netlist.
 
     i2c_master_axil #(
         .DEFAULT_PRESCALE (DEFAULT_PRESCALE),

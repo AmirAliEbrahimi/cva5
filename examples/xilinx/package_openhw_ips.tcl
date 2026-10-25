@@ -244,6 +244,50 @@ foreach ip [dict keys $openhw_ips] {
         ipx::associate_bus_interfaces -busif $busif -clock clk [ipx::current_core]
     }
 
+    # The I2C's open-drain pins, as an IIC interface rather than six loose
+    # ports, which is what gets the pad built for us.
+    #
+    # cva5_i2c_axi exposes scl_i/scl_o/scl_t and sda_i/sda_o/sda_t and resolves
+    # no tri-state, because an inferred high-Z inside an IP does not survive
+    # that IP's out-of-context synthesis run (Synth 8-5799; cva5_i2c_axi.sv has
+    # the account). Vivado's block-design wrapper will instantiate the buffers
+    # instead -- but only for an *interface* port that declares the _I/_O/_T
+    # triplet, not for three unrelated scalars made external.
+    #
+    # The declaration has to be explicit. Vivado 2025.1 does not infer this
+    # interface from the port names, however they are spelled: packaging this
+    # core reports s_axi, rstn and clk and nothing else. axi_iic does not rely
+    # on inference either -- its IIC interface is declared in its
+    # component.xml, which is what this is the equivalent of.
+    if {$ip eq "cva5_i2c_axi"} {
+        set core [ipx::current_core]
+        ipx::add_bus_interface IIC $core
+        set iic [ipx::get_bus_interfaces IIC -of_objects $core]
+        if {[llength $iic] == 0} {
+            error "$ip: ipx::add_bus_interface IIC produced no interface"
+        }
+        set_property bus_type_vlnv        xilinx.com:interface:iic:1.0     $iic
+        set_property abstraction_type_vlnv xilinx.com:interface:iic_rtl:1.0 $iic
+        set_property interface_mode       master                           $iic
+
+        # Logical name in the iic_rtl abstraction -> physical port here. A
+        # wrong logical name fails on the set_property rather than silently
+        # producing a partial interface, which is the failure mode worth
+        # having: a half-mapped interface would export and then come out of
+        # the wrapper without buffers.
+        foreach {logical physical} {SCL_I scl_i SCL_O scl_o SCL_T scl_t
+                                    SDA_I sda_i SDA_O sda_o SDA_T sda_t} {
+            ipx::add_port_map $logical $iic
+            set pm [ipx::get_port_maps $logical -of_objects $iic]
+            if {[llength $pm] == 0} {
+                error "$ip: no port map $logical on the IIC interface"
+            }
+            set_property physical_name $physical $pm
+        }
+        puts "==> $ip: declared IIC interface with\
+[llength [ipx::get_port_maps -of_objects $iic]] port maps"
+    }
+
     set clk_hz 100000000
     if {[lsearch -exact $openhw_clockless $ip] >= 0} {
         set clk_hz 0

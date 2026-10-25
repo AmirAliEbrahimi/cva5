@@ -47,6 +47,7 @@ UPSTREAM = {
 GENERATED = {
     "ram.mif",              # make -C examples/sw ram
     "examples/sw/ram.mif",
+    "soc_wrapper.v",        # Vivado's make_wrapper, in pynq_z2_sys.tcl
 }
 
 # Submodule-resident files the docs mention by bare name. These have to be

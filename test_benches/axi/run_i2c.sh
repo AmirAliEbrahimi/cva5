@@ -34,7 +34,7 @@ UPSTREAM_NOISE="-Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL
 
 echo "== lint (our wrapper is held to -Wall) =="
 verilator --lint-only -Wall $UPSTREAM_NOISE --top-module cva5_i2c_axi \
-    $DESIGN test_benches/axi/IOBUF_stub.v
+    $DESIGN
 
 echo "== build =="
 rm -rf "$BUILD"
@@ -43,7 +43,7 @@ verilator --binary -j 0 --timing \
     $UPSTREAM_NOISE -Wno-INITIALDLY -Wno-MULTIDRIVEN \
     --top-module tb_i2c \
     -Mdir "$BUILD" -o tb_i2c \
-    $DESIGN test_benches/axi/IOBUF_stub.v test_benches/axi/tb_i2c.sv
+    $DESIGN test_benches/axi/tb_i2c.sv
 
 echo "== run =="
 "$BUILD/tb_i2c"

@@ -51,19 +51,26 @@ set_property -dict { PACKAGE_PIN U17 IOSTANDARD LVCMOS33 } [get_ports {spi_csn[3
 # SPI's comments were copied from another board's naming and that cost an
 # evening:
 #
-#   i2c_scl   AR_SCL   P16   IO_L24N_T3_34   sheet 11; J3 pin 9
-#   i2c_sda   AR_SDA   P15   IO_L24P_T3_34   sheet 11; J3 pin 10
+#   i2c_scl_io   AR_SCL   P16   IO_L24N_T3_34   sheet 11; J3 pin 9
+#   i2c_sda_io   AR_SDA   P15   IO_L24P_T3_34   sheet 11; J3 pin 10
+#
+# The _io suffix is Vivado's, not ours. These two pins come out of one external
+# IIC interface port named i2c (see pynq_z2_sys.tcl), and the wrapper generator
+# names each inout it creates <port>_<line>_io. That script prints the inout
+# names it actually produced and errors if these two are not among them, so a
+# naming change in some other Vivado version is caught there with the real
+# names in hand rather than here as a bare missing-port error.
 #
 # Both are open drain and both need pull-ups. The board has them -- R49 and
 # R50, 2.2k to VCC3V3 on sheet 4 -- so no PULLUP property is wanted here: an
 # internal weak pull-up alongside a 2.2k external one does nothing useful and
 # would hide the external one going missing on a future board revision.
 #
-# No bus-contention risk from leaving these driven: the IOBUF Vivado infers for
-# each inout is driven by the core's t/o pair, which releases the line (drives
-# the T pin high) whenever it is not pulling it low.
-set_property -dict { PACKAGE_PIN P16 IOSTANDARD LVCMOS33 } [get_ports i2c_scl]
-set_property -dict { PACKAGE_PIN P15 IOSTANDARD LVCMOS33 } [get_ports i2c_sda]
+# No bus-contention risk from leaving these driven: the IOBUF in the generated
+# wrapper is driven by the core's t/o pair, which releases the line (drives the
+# T pin high) whenever it is not pulling it low.
+set_property -dict { PACKAGE_PIN P16 IOSTANDARD LVCMOS33 } [get_ports i2c_scl_io]
+set_property -dict { PACKAGE_PIN P15 IOSTANDARD LVCMOS33 } [get_ports i2c_sda_io]
 
 # The SPI clock is generated inside the fabric by a divider off the 100 MHz
 # system clock, so it is a data path as far as timing is concerned, not a

@@ -164,13 +164,23 @@ make_bd_pins_external -name spi_csn  [get_bd_pins cva5_spi_0/spi_csn]
 # ---- I2C --------------------------------------------------------------------
 # Alex Forencich's i2c_master_axil, in place of Xilinx's axi_iic. The only
 # peripheral here whose slave port is already AXI4-Lite, so cva5_i2c_axi is a
-# reset inversion, two open-drain pins and a wider address port and nothing
+# reset inversion, the open-drain triplets and a wider address port and nothing
 # else.
 #
-# scl and sda are inout and leave as inout: Vivado infers an IOBUF per pin at
-# the top level, the core drives them open-drain -- low drives, high releases
-# -- and the bus needs external pull-ups, which the PYNQ-Z2 has on the Arduino
-# header (R49/R50, 2.2k to 3V3 on AR_SCL/AR_SDA).
+# The IP carries no inout and resolves no tri-state. An inferred high-Z inside
+# an IP does not survive that IP's own out-of-context synthesis run -- Vivado
+# converts the tricell to logic (Synth 8-5799), the line is driven high rather
+# than released, and every slave ACK becomes invisible. cva5_i2c_axi.sv has the
+# full account and the three other arrangements that were built.
+#
+# So the pad is Vivado's. package_openhw_ips.tcl declares the triplets as an
+# IIC bus interface, and exporting that whole interface -- rather than making
+# six scalar pins external -- is what makes the wrapper generator instantiate
+# the buffers. It only does that for an interface port that declares the
+# _I/_O/_T group; three loose scalars get three ports and no buffer.
+#
+# Open drain, so the bus needs external pull-ups, which the PYNQ-Z2 has on the
+# Arduino header (R49/R50, 2.2k to 3V3 on AR_SCL/AR_SDA).
 #
 # No interrupt: this master has no irq output at all, so unlike the SPI there
 # is nothing to add to cva5_irq_concat. It is polled through STATUS.
@@ -178,8 +188,16 @@ create_bd_cell -type ip -vlnv xilinx.com:user:cva5_i2c_axi:1.0 cva5_i2c_0
 connect_bd_net $sys_clk  [get_bd_pins cva5_i2c_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins cva5_i2c_0/rstn]
 
-make_bd_pins_external -name i2c_scl [get_bd_pins cva5_i2c_0/scl]
-make_bd_pins_external -name i2c_sda [get_bd_pins cva5_i2c_0/sda]
+# One interface port, not six pins. Fail loudly if the IP has no IIC interface,
+# because make_bd_intf_pins_external on an empty list is silent and the design
+# would come out with no I2C pins at all.
+set i2c_intf [get_bd_intf_pins -quiet cva5_i2c_0/IIC]
+if {[llength $i2c_intf] == 0} {
+    error "cva5_i2c_0 has no IIC interface pin. The packager did not create\
+it -- re-run package_openhw_ips.tcl and check for the \"declared IIC\
+interface\" line, and see the note in cva5_i2c_axi.sv."
+}
+make_bd_intf_pins_external -name i2c $i2c_intf
 
 # ---- Interrupt sources ------------------------------------------------------
 # cva5_plic_axi takes its sources as one vector, and a block design connects a
@@ -339,8 +357,56 @@ regenerate_bd_layout
 validate_bd_design
 
 make_wrapper -files [get_files ./vivado/CVA5BD/CVA5BD.srcs/sources_1/bd/soc/soc.bd] -top
-add_files ./vivado/CVA5BD/CVA5BD.gen/sources_1/bd/soc/hdl/soc_wrapper.v
+set soc_wrapper ./vivado/CVA5BD/CVA5BD.gen/sources_1/bd/soc/hdl/soc_wrapper.v
+add_files $soc_wrapper
 update_compile_order -fileset sources_1
+
+# ---- The I2C pad, checked ---------------------------------------------------
+#
+# Nothing in this repository holds the I2C tri-state; the IIC interface is
+# exported above and the wrapper generator is what instantiates the buffers.
+# This is the one place that can be confirmed, and unlike an inferred
+# tri-state -- which only becomes a buffer during synthesis and never appears
+# in this file -- a declared interface puts the IOBUFs here textually. So
+# counting them is meaningful, and an empty count means the pad is missing
+# rather than merely invisible.
+#
+# Worth having because the failure is silent downstream: no buffers means the
+# lines are driven instead of released, and the first symptom is an I2C scan
+# that finds nothing, which is also what an empty bus looks like.
+set fh [open $soc_wrapper r]
+set wrapper_rtl [read $fh]
+close $fh
+
+set n_iobuf [regexp -all {\mIOBUF\M} $wrapper_rtl]
+if {$n_iobuf < 2} {
+    error "soc_wrapper.v has $n_iobuf IOBUF instances, expected at least 2\
+(scl and sda). The IIC interface did not produce a pad. Check the packaging\
+log for the \"declared IIC interface\" line, and see the note in\
+cva5_i2c_axi.sv."
+}
+
+# And report the inout names the wrapper actually created, because the XDC has
+# to constrain those exact names and Vivado derives them from the interface
+# port rather than from anything written here. A mismatch is an XDC error on a
+# missing port, which is a fine way to fail -- but knowing the real names
+# beforehand is cheaper than reading that error.
+set wrapper_inouts {}
+foreach line [split $wrapper_rtl "\n"] {
+    if {[regexp {^\s*inout\s+(?:wire\s+)?(\w+)} $line -> nm]} {
+        lappend wrapper_inouts $nm
+    }
+}
+puts "I2C: $n_iobuf IOBUF instances in soc_wrapper.v"
+puts "I2C: wrapper inout ports: $wrapper_inouts"
+
+foreach want {i2c_scl_io i2c_sda_io} {
+    if {[lsearch -exact $wrapper_inouts $want] < 0} {
+        error "pynq_z2_cva5.xdc constrains $want, which the wrapper does not\
+have. Its inouts are: $wrapper_inouts. Rename the two I2C constraints to\
+match, or rename the interface port above."
+    }
+}
 
 # ---- Constraints ----------------------------------------------------------
 # Save the XDC next to the project and point this at it.

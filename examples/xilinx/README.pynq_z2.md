@@ -32,7 +32,7 @@ The RTL, by subsystem:
 | `axi/cva5_plic_axi.sv` | the PLIC, aggregating device interrupts into the hart's external interrupt |
 | `axi/cva5_irq_concat.sv` | two device interrupt lines into the vector the PLIC takes, in place of `xlconcat` |
 | `axi/cva5_spi_axi.sv` | pulp's SPI master behind AXI4-Lite |
-| `axi/cva5_i2c_axi.sv` | Forencich's I2C master, with explicitly instantiated `IOBUF`s |
+| `axi/cva5_i2c_axi.sv` | Forencich's I2C master, exposing the open-drain `o`/`i`/`t` triplets as a declared IIC interface. The pad is Vivado's |
 | `axi/cva5_axi_ram.sv` | a measured dead end, kept for the measurement. Simulation only; see Memory |
 | `vendor/` | hand-vendored copies: riscv-dbg's boot ROM, lowRISC's UART, CVA5's CLINT and PLIC, and the pulp AXI-Lite blocks. Renamed `cva5_*` where upstream compiles the original into the core simulation |
 | `openocd/` | bring-up and program-load configs. `cva5-pynq-z2-p1.cfg` carries `p1_diag`, which probes every peripheral over JTAG with the core held in reset |
@@ -383,9 +383,9 @@ alone has now twice suggested a cause that the arithmetic did not support.
 
 **And the limiter moves between subsystems on changes that should not matter.**
 The last row is the synthesis-warning patch: no block design change, no address
-map change, no software change — an instantiated `IOBUF` instead of an inferred
-one, and a `.mif` restored to the packaged IP so the block RAMs carry their
-initialisation. The critical path left the memory system entirely and landed in
+map change, no software change — at that point an instantiated `IOBUF` instead
+of an inferred one, and a `.mif` restored to the packaged IP so the block RAMs
+carry their initialisation. The critical path left the memory system entirely and landed in
 the crossbar, from the debugger port's R-channel FIFO through the response
 arbitration into the core's AXI read-data register: 11 levels, 79% routing.
 
@@ -871,22 +871,47 @@ fields to tie off. The wrapper does three small things:
   `rst`; everything else here is active-low `rstn`. Registered locally from
   `rstn` alone and never `ndmreset`, by the rule above — the debugger can reach
   this peripheral over the system bus.
-- **Turns the open-drain triplets into two `inout` pins**, through an
-  explicitly instantiated `IOBUF` each. `t` and `o` carry the same value: low
+- **Passes the open-drain triplets straight out**, as six directional ports
+  rather than two `inout` pins. `t` and `o` carry the same value: low
   drives the line low, high releases it. The bus needs external pull-ups and
   the PYNQ-Z2 has them on the Arduino header's `ar_scl`/`ar_sda` (R49/R50,
   2.2k).
 
-  The buffers are instantiated and not inferred, and that cost a build to
-  learn. Written as `assign scl = scl_t ? 1'bz : scl_o;` it simulates correctly
-  and synthesises wrong: a block design synthesises each IP out of context, so
-  in that run the module is the top, the high-Z has no buffer to attach to, and
-  Vivado reports `CRITICAL WARNING: [Synth 8-5799] Converted tricell instance
-  to logic` — once per line — and leaves the pin driven high where it should be
-  released. On an open-drain bus that means fighting every slave that pulls the
-  line down to ACK. Everything short of a transfer still passed, and "no device
-  answered" is the correct result on an empty bus, so the first board run would
-  have looked like a bus with nothing on it. `CLAUDE.md` has the full note.
+  **The IP holds no tri-state at all**, and that took four attempts to get
+  right. Written as `assign scl = scl_t ? 1'bz : scl_o;` inside the peripheral
+  it simulates correctly and synthesises wrong: `SYNTH_CHECKPOINT_MODE`
+  defaults to `HIERARCHICAL`, one out-of-context run per IP, so in that run the
+  module is the top, the high-Z has no buffer to attach to, and Vivado reports
+  `CRITICAL WARNING: [Synth 8-5799] Converted tricell instance to logic` — once
+  per line — leaving the pin driven high where it should be released. On an
+  open-drain bus that means fighting every slave that pulls the line down to
+  ACK. Everything short of a transfer still passes, and "no device answered" is
+  the correct result on an empty bus, so a board run looks like a bus with
+  nothing on it.
+
+  | arrangement | outcome |
+  |---|---|
+  | inferred tri-state in the IP | **8-5799** — the line is driven, not released |
+  | instantiated `IOBUF` in the IP | works; a Xilinx primitive in vendor-neutral RTL, plus a UNISIM stub to simulate |
+  | tri-state in a separate module reference | works, no primitive — a module reference is not an IP, so it escapes the per-IP OOC run — but it is a second file |
+  | triplets declared as an **IIC interface**, pad left to the wrapper | works, no primitive, no extra file — what is here |
+
+  What makes the last one work is that the interface is **declared explicitly**
+  with `ipx::add_bus_interface`, not inferred. Vivado 2025.1 does not infer an
+  IIC interface from these port names — packaging this core reports `s_axi`,
+  `rstn` and `clk` and nothing else, and that was a wasted build. `axi_iic`
+  does not rely on inference either: its interface is declared in its
+  `component.xml`, and `package_openhw_ips.tcl` is the equivalent of that.
+
+  The buffer insertion follows the **interface**, not the port names. Six
+  scalar pins made external give six ports and no buffer, however they are
+  spelled; an exported interface port that declares the `_I`/`_O`/`_T` group is
+  what the wrapper generator acts on.
+
+  A fourth route exists and is not used: `GENERATE_SYNTH_CHECKPOINT false` on
+  the I2C IP, which takes it out of the OOC flow so an inferred tri-state
+  reaches a real pin. It works on one IP without disturbing anything else, and
+  is worth knowing if a future Vivado breaks the interface route.
 - **Widens the address port** to the 4 KB floor a Vivado address segment can be
   given. The device decodes four words and aliases within the window.
 
@@ -902,14 +927,28 @@ the same two wires — written out by hand rather than reusing Forencich's own
 driving it would be more testbench than writing the protocol out, and partly
 because a second copy of the same author's assumptions proves less than an
 independent reading of the spec. It covers the register map, that the
-open-drain tie-off actually drives and releases, a write reaching the right
+open-drain path actually drives and releases, a write reaching the right
 slave with the right byte, a read bringing one back, and an address nothing
-answers being reported as a missed ACK rather than hanging. Three mutants are run
-against it: swapping the two `IOBUF`s' pins and inverting a `T` both fail at
-the first address phase, and changing `IOBUF_stub.v` to drive rather than
-release reproduces 8-5799's effect and fails on a missed ACK. That third one is
-the regression check for the bug above — the bench could not catch it while the
-tri-state was an expression, because the expression always simulated right.
+answers being reported as a missed ACK rather than hanging.
+
+The bench resolves the triplets itself, through `pullup`s standing in for
+R49/R50, because the real resolution is in Vivado's generated wrapper and there
+is no pad RTL here to instantiate. Those four `assign`s are therefore
+*testbench* code: mutating them tests the bench, not the design. What the bench
+proves is everything on the controller side of the pad — the register map, the
+protocol, and that `o` and `t` are driven as an open-drain master must drive
+them. Mutants on the controller still bite: swapping the two lines' pins times
+out, and inverting a `t` fails at the first address phase.
+
+**The pad itself is checked in `pynq_z2_sys.tcl`**, which counts `IOBUF`
+instances in the generated `soc_wrapper.v` and errors below two. That count is
+meaningful here and would not have been for any of the other three
+arrangements: an *inferred* buffer only exists after synthesis and never
+appears in the wrapper source, so counting it there would fail a working
+design. A declared interface puts the buffers in the wrapper textually. The
+same script also prints the `inout` names the wrapper created and checks the
+two the XDC constrains are among them, because those names come from Vivado's
+interface naming rather than from anything written here.
 
 `axis_fifo`'s optional `tid`/`tdest`/`tuser` fields select past the end of the
 packed register when those features are disabled — dead code behind

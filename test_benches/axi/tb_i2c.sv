@@ -77,10 +77,26 @@ module tb_i2c;
 
     //A prescale of 4 keeps SCL fast enough for a short simulation; the board
     //uses 250 for 100 kHz.
-    //The DUT instantiates IOBUFs, which test_benches/axi/IOBUF_stub.v models
-    //for Verilator -- so the open-drain behaviour checked below goes through
-    //the same structure synthesis builds, rather than a second expression of
-    //it written for simulation.
+    //The DUT exposes the o/i/t triplets and resolves no tri-state, because on
+    //hardware the pad is Vivado's: the IIC interface is exported from the
+    //block design and its generated wrapper instantiates the buffers. There is
+    //no pad RTL in this repository, so the four assigns below are this bench
+    //standing in for that wrapper.
+    //
+    //What that costs, stated plainly: those assigns are testbench code, so
+    //mutating them tests the bench rather than the design. The pad is checked
+    //in pynq_z2_sys.tcl instead, by counting IOBUF instances in the generated
+    //wrapper. What the bench does still prove is everything on the controller
+    //side of the pad -- the register map, the protocol, and that o and t are
+    //driven the way an open-drain master must drive them.
+    logic scl_o, scl_t, scl_i;
+    logic sda_o, sda_t, sda_i;
+
+    assign scl   = scl_t ? 1'bz : scl_o;
+    assign sda   = sda_t ? 1'bz : sda_o;
+    assign scl_i = scl;
+    assign sda_i = sda;
+
     cva5_i2c_axi #(
         .ADDR_WIDTH (12),
         .DEFAULT_PRESCALE (4),
@@ -96,7 +112,8 @@ module tb_i2c;
         .s_axi_arvalid (arvalid), .s_axi_arready (arready),
         .s_axi_rdata (rdata), .s_axi_rresp (rresp),
         .s_axi_rvalid (rvalid), .s_axi_rready (rready),
-        .scl (scl), .sda (sda)
+        .scl_o (scl_o), .scl_t (scl_t), .scl_i (scl_i),
+        .sda_o (sda_o), .sda_t (sda_t), .sda_i (sda_i)
     );
 
     //==================================================================
