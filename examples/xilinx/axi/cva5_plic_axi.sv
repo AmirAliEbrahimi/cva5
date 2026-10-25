@@ -52,7 +52,7 @@ module cva5_plic_axi #(
     //is exactly what it answers to: 64 MB, which is also the window
     //examples/sw/soc.h reserves at 0x0C00_0000 and what the standard map
     //needs, since threshold and claim live at +0x200000. Master ports obey the
-    //opposite rule and stay 32 bits wide; see CLAUDE.md.
+    //opposite rule and stay 32 bits wide; see README.pynq_z2.md.
     parameter int unsigned ADDR_WIDTH = 26
 ) (
     input logic clk,

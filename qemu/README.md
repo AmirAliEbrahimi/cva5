@@ -6,8 +6,36 @@
 | Address       | Size    | What                                      |
 |---------------|---------|-------------------------------------------|
 | `0x0000_0000` | 4 KiB   | Debug Module window (not modelled)        |
-| `0x1000_0000` |         | AXI UART Lite                             |
+| `0x0200_0000` | 768 KiB | CLINT — `mtime`/`mtimecmp` and `msip`     |
+| `0x0C00_0000` | 64 MiB  | PLIC                                      |
+| `0x1000_0000` |         | AXI UART Lite, interrupt on PLIC source 1 |
+| `0x2000_0000` | 8 MiB   | SPI (not modelled)                        |
+| `0x2800_0000` | 4 KiB   | I2C (not modelled)                        |
 | `0x8000_0000` | 128 KiB | main RAM; programs run here, entry at +0x40 |
+
+The CLINT and the PLIC are QEMU's own devices rather than anything written
+here, because `examples/sw/soc.h` uses the standard SiFive register layout for
+both and says so. Two things are deliberately not the QEMU defaults:
+
+- **The CLINT counts at 1 MHz**, not QEMU's 10 MHz default. `cva5_clint_axi`
+  divides the 100 MHz system clock so `mtime` ticks once per microsecond,
+  which is `soc.h`'s `CLINT_HZ` and what `timer.c`'s arithmetic assumes. A
+  timer test against the default would be out by a factor of ten.
+- **The mtimer is created without `rdtime`.** The core sets
+  `INCLUDE_TIME_CSR` to 0, so `rdtime` traps as an illegal instruction on the
+  board. Letting QEMU provide it would make the model more capable than the
+  thing it models, which is the divergence `csrs.c` exists to catch.
+
+**The SPI and the I2C are mapped unimplemented, not absent.** Both are real on
+the board; modelling them means register-level models of two specific
+third-party cores, and without something attached to the pins there would be
+nothing for them to talk to. Mapped this way, a program touching them says so
+in the QEMU log instead of reading zeros — which, on a status register, looks
+exactly like a device reporting itself idle.
+
+PLIC source 2 is the SPI's transfer-complete interrupt on the board. The source
+exists here and stays low, so software that enables it waits rather than
+receiving a fabricated interrupt.
 
 
 The CPU is RV32IM, machine mode only, matching the wrapper's `CPU_CONFIG`
@@ -36,6 +64,22 @@ cd /path/to/qemu
 git apply /path/to/cva5/qemu/0001-cva5-pynq-machine.patch
 ./configure --target-list=riscv32-softmmu && make -j$(nproc)
 ```
+
+`tools/build-qemu` skips the patch when it is already applied, so **an existing
+`qemu-build/` does not pick up a change to the patch on its own**. Reverse the
+old one first:
+
+```bash
+cd qemu-build
+git checkout hw/riscv/Kconfig hw/riscv/meson.build && rm -f hw/riscv/cva5_pynq.c
+cd .. && tools/build-qemu
+```
+
+Only `cva5_pynq.c` changes, so the rebuild is short.
+
+If `configure` fails on the `dtc` subproject it is trying to fetch it over the
+network; `--enable-fdt=system` uses an installed `libfdt` instead, which is
+what the `libfdt-dev` above provides.
 
 ## Running
 
@@ -88,6 +132,7 @@ machine restores it in a reset handler registered after `qdev_realize`.
 
 ## What is not modelled
 
-Caches, the Debug Module, timing, and the hls4ml accelerator. QEMU is for
-running software quickly; the Verilator harness in `test_benches/debug` runs the
-actual RTL when behaviour has to match the hardware.
+Caches, the Debug Module, the SPI and I2C register sets, and timing. QEMU is
+for running software quickly; the Verilator harness in `test_benches/debug`
+runs the actual RTL when behaviour has to match the hardware, and the board is
+the only place the pins mean anything.

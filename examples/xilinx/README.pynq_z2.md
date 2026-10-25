@@ -22,7 +22,7 @@ The RTL, by subsystem:
 | file | purpose |
 |---|---|
 | `cva5_wrapper.sv` | the SoC's core: CVA5, its debug subsystem, the boot ROM and 128 KB of local memory |
-| `cva5_top.v` | a plain-Verilog, port-for-port shim around it, because the IP packager will not analyse a SystemVerilog top. **A port added to one must be added to the other** — see `CLAUDE.md` |
+| `cva5_top.v` | a plain-Verilog, port-for-port shim around it, because the IP packager will not analyse a SystemVerilog top. **A port added to one must be added to the other**, which `tools/check-port-parity.py` checks |
 | `debug/cva5_debug_subsys.sv` | riscv-dbg's Debug Module, DMI and JTAG TAP |
 | `debug/cva5_sba_split.sv` | routes the debugger's system bus: RAM window straight to the RAM's second port, everything else out to the crossbar |
 | `debug/cva5_ram_mux.sv` | two AXI4 masters sharing that second port: the debugger, and one for something outside the core |
@@ -573,8 +573,9 @@ available aperture ... Valid apertures are {<0x0_0000_0000 [ 4G ]>}
 segment's range in `pynq_z2_sys.tcl` has to match the block the port implies,
 so the UART's is 4K rather than the 64K the crossbar decodes to that port; the
 UART aliases within the window, as `axi_uartlite`'s four registers did. The
-*master* ports obey the opposite rule and stay 32 bits wide; `CLAUDE.md` has
-both error messages side by side, because they are the same error text.
+*master* ports obey the opposite rule and stay 32 bits wide. Getting either
+backwards produces the same error text, which is why the rule is worth stating
+as two cases: narrow slaves, wide masters.
 
 `run_uart.sh` ties `tx` back to `rx`, so one run covers the adapter, both FIFOs
 and both serial state machines. It decodes the line independently of the
@@ -673,11 +674,13 @@ behaviours on hardware — `rdcycle`/`rdinstret` advancing, `rdtime` taking an
 illegal-instruction trap, the CLINT's `mtime` advancing over the bus — with its
 own trap handler, since `trap.S`'s parks by design.
 
-**This is the one place the board and QEMU diverge.** QEMU's `virt` implements
-`time`, so `rdtime` succeeds there and `csrs` reports FAIL on that check under
-`tools/cva5-qemu`. A trap is loud and `trap.S` leaves `mcause` where a debugger
-can read it, which is the behaviour worth having; the alternative was a CSR
-that silently reads zero.
+This used to be the one place the board and QEMU diverged. QEMU's `virt`
+implements `time`, so `rdtime` succeeded there and `csrs` reported FAIL on that
+check. The CVA5 machine now creates its mtimer with `provide_rdtime` false, so
+`rdtime` traps under QEMU exactly as it does on the board and `csrs` passes in
+both. A trap is loud and `trap.S` leaves `mcause` where a debugger can read it,
+which is the behaviour worth having; the alternative was a CSR that silently
+reads zero.
 
 **A port added to `cva5_wrapper.sv` has to be added to `cva5_top.v` as well.**
 That file is a plain-Verilog, port-for-port wrapper that exists only because
@@ -1228,7 +1231,7 @@ something.
 | counter CSRs, in the core sim | `make -C examples/sw run-csrs` | `rdcycle`/`rdinstret`/`mcycle` readable and advancing, `rdtime` and `rdtimeh` taking an illegal-instruction trap. The only place both polarities of `INCLUDE_TIME_CSR` can be run: the sim takes upstream's `EXAMPLE_CONFIG`, so with the bit set the three trap checks are *expected* to fail |
 | SPI on hardware | `make -C examples/sw spi` | the register file and FIFO levels with nothing attached, a transfer running to completion, then — with MOSI jumpered to MISO on the ICSP header — a held 1 reading back as all ones and a held 0 as all zeros, on two chip selects |
 | PLIC on hardware | `make -C examples/sw plic` | the register file over the bus, then **one keypress on the console** reaching `mip.MEIP`, and every filtering check made against that one asserted source: the threshold holding it down and letting it back, priority 0 doing the same, claim naming the UART, and complete leaving it quiet. Interactive, because the UART's receive interrupt is the only source wired and software cannot raise it. Waits 30 s, measured with `mtime` |
-| counter CSRs, on hardware | `make -C examples/sw csrs` | the same checks plus the CLINT's `mtime` advancing over the bus. Prints on the serial console. Fails under QEMU on purpose |
+| counter CSRs, on hardware | `make -C examples/sw csrs` | the same checks plus the CLINT's `mtime` advancing over the bus. Prints on the serial console |
 | SBA bridge | `sh test_benches/debug/run_tb.sh` | DMI → DM → SBA → AXI4-Lite |
 | debugger bus split | `sh test_benches/debug/run_sba_split.sh` | 73 checks: `dm_sba_axil` → `cva5_sba_split` → the real RAM port and `tdp_ram` on one side, a peripheral on the other. Routing, window edges, error propagation, byte strobes, and collisions with the core's port |
 | silent boot | program the board | the preload prints nothing |
@@ -1237,9 +1240,9 @@ something.
 | OpenOCD config scoping | `python3 tools/check-openocd-globals.py examples/xilinx/openocd/*.cfg` | procs that read a global without declaring it. Tcl does not complain until the line runs, and in a diagnostic that can be never |
 | memory map | `python3 tools/check-soc-map.py` | that `soc.h`, the crossbar's decode parameters and the OpenOCD config still agree. Three copies, none of which can include the others |
 | port parity | `python3 tools/check-port-parity.py` | that `cva5_top.v` carries every port `cva5_wrapper.sv` has, with the same direction. The IP's interface is whatever the Verilog shim declares, so a port added to one and not the other is simply not on the IP — and nothing in simulation notices, because simulation instantiates the wrapper |
-| documentation | `python3 tools/check-doc-refs.py README.md CLAUDE.md examples/xilinx/README.pynq_z2.md` | that every filename these documents name exists. A renamed file leaves its old name behind in prose, where nothing compiles it — this document sent readers to a "pynq_z2_waivers.xdc" that never existed. Names cited as missing go in quotes, not backticks, which are what the checker reads |
+| documentation | `python3 tools/check-doc-refs.py README.md examples/xilinx/README.pynq_z2.md` | that every filename these documents name exists. A renamed file leaves its old name behind in prose, where nothing compiles it — this document sent readers to a "pynq_z2_waivers.xdc" that never existed. Names cited as missing go in quotes, not backticks, which are what the checker reads |
 | **all of main memory** | `make -C examples/sw memtest` | **the only thing that addresses all 128 KB**, so the only thing that reaches cascade rows above the first. Prints on the serial console, not the terminal |
-| QEMU parity | `tools/cva5-qemu` | same reset vector and map as the board. `csrs` is the known exception: QEMU implements `time` |
+| QEMU parity | `tools/cva5-qemu` | same reset vector and map as the board, and now the same CLINT and PLIC. `timer`, `csrs` and `plic` run here without a board; `spi` and `i2c` report an unimplemented device, which is the honest answer rather than a fabricated one |
 
 Run the simulation checks before spending a synthesis run — the AXI ones take
 seconds and `run_xbar.sh`, `run_plic.sh` and `run_i2c.sh` each sweep several

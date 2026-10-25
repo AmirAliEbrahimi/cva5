@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check that filenames named in the docs exist.
 
-    python3 tools/check-doc-refs.py README.md CLAUDE.md examples/xilinx/README.pynq_z2.md
+    python3 tools/check-doc-refs.py README.md examples/xilinx/README.pynq_z2.md
 
 The three long documents in this tree name source files constantly -- which
 script packages the IP, which `.xdc` holds a constraint, which testbench covers

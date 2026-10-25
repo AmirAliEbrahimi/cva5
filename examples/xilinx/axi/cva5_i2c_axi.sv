@@ -16,7 +16,7 @@
  * It inverts the reset. Forencich's cores take an active-high synchronous
  * `rst`; everything else in this block design is active-low `rstn`. It is
  * registered locally from rstn alone and never ndmreset, because the debugger
- * can reach this peripheral over the system bus -- the rule in CLAUDE.md.
+ * can reach this peripheral over the system bus -- the rule in README.pynq_z2.md.
  *
  * It passes the core's open-drain triplets straight out. scl_o/scl_t and
  * sda_o/sda_t follow the convention i2c_master.v's own header shows
@@ -48,7 +48,7 @@ module cva5_i2c_axi #(
     //Width of the slave's address bus, and so the address block this IP
     //offers the block design. The device decodes 16 bytes; 12 bits is the 4 KB
     //floor a Vivado address segment can be given. Master ports obey the
-    //opposite rule and stay 32 bits wide; see CLAUDE.md.
+    //opposite rule and stay 32 bits wide; see README.pynq_z2.md.
     parameter int unsigned ADDR_WIDTH = 12,
 
     //clk / (4 x SCL). At 100 MHz: 250 for 100 kHz, 62 for 400 kHz. Software

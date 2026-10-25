@@ -78,5 +78,5 @@ proc cva5_ip_metadata {description {freq_hz 0}} {
 #       the clock and the interrupts are found. That holds because these
 #       wrappers keep flat port lists -- no structs, no interfaces at the
 #       boundary -- which is the condition the warning is really about. The
-#       alternative is a Verilog shim per block, and CLAUDE.md's first section
-#       is about the cost of maintaining the one shim this tree already has.
+#       alternative is a Verilog shim per block, and README.pynq_z2.md is
+#       clear about the cost of maintaining the one shim this tree has.

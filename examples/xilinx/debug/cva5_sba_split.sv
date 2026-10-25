@@ -53,7 +53,7 @@ module cva5_sba_split #(
     //is rstn alone and never ndmreset: OpenOCD's cpu_hold asserts ndmreset and
     //holds it while it loads a program over this very bus. A select register
     //held in reset through that would route every response to the wrong side
-    //and the load would hang. See CLAUDE.md.
+    //and the load would hang. See README.pynq_z2.md.
     input logic rstn,
 
     //AXI4-Lite slave: the Debug Module's system bus, through dm_sba_axil.

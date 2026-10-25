@@ -1,29 +1,39 @@
-From 76665a1f7798ac93fb3ad9d50858d287e3a199b2 Mon Sep 17 00:00:00 2001
+From b93417444ab9ddacd431a4dcf9932902ad3de60c Mon Sep 17 00:00:00 2001
 From: Amirali Ebrahimi <amirebrahimi97@gmail.com>
-Date: Sun, 4 Oct 2026 00:41:12 +0000
+Date: Sat, 24 Oct 2026 23:39:46 -0400
 Subject: [PATCH] hw/riscv: add the CVA5 PYNQ-Z2 machine
 
-Models the SoC in the CVA5 repository's examples/xilinx/cva5_wrapper.sv:
-RV32IM machine-mode CPU, 128 KiB of RAM at 0x8000_0000 where programs run
-(entry 0x40 above its base), and an AXI UART Lite at 0x1000_0000. The
-Debug Module's window is mapped as unimplemented, since QEMU debugs through
-its own gdbstub.
+Models the SoC in the CVA5 repository's examples/xilinx/cva5_wrapper.sv and
+the block design around it: an RV32IM machine-mode CPU, 128 KiB of RAM at
+0x8000_0000 where programs run (entry 0x40 above its base), a CLINT, a PLIC
+and an AXI UART Lite whose receive interrupt arrives on PLIC source 1.
+
+The CLINT and PLIC are QEMU's own devices, which model the hardware without
+adjustment because examples/sw/soc.h uses the standard SiFive register
+layouts for both. Two details are not the defaults: the CLINT counts at
+1 MHz, matching soc.h's CLINT_HZ, and the mtimer is created without rdtime
+because the core sets INCLUDE_TIME_CSR to 0 and traps the instruction.
+
+The SPI and the I2C are real on the board and are mapped unimplemented, as
+is the Debug Module's window, since QEMU debugs through its own gdbstub.
+Accesses to them are logged rather than reading as zero, which on a status
+register would look like a device reporting itself idle.
 
 Programs built for the board run unmodified: -kernel loads the application at
 the reset vector, which on hardware is block RAM inside the core that the
 bitstream preloads, so there is no ROM and nothing to jump through.
 ---
- hw/riscv/Kconfig     |   7 ++
- hw/riscv/cva5_pynq.c | 157 +++++++++++++++++++++++++++++++++++++++++++
+ hw/riscv/Kconfig     |   9 ++
+ hw/riscv/cva5_pynq.c | 301 +++++++++++++++++++++++++++++++++++++++++++
  hw/riscv/meson.build |   1 +
- 3 files changed, 165 insertions(+)
+ 3 files changed, 311 insertions(+)
  create mode 100644 hw/riscv/cva5_pynq.c
 
 diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
-index de37c08..cf0ba10 100644
+index de37c08..e31b002 100644
 --- a/hw/riscv/Kconfig
 +++ b/hw/riscv/Kconfig
-@@ -9,6 +9,13 @@ config IBEX
+@@ -9,6 +9,15 @@ config IBEX
  
  # RISC-V machines in alphabetical order
  
@@ -33,24 +43,36 @@ index de37c08..cf0ba10 100644
 +    depends on RISCV32
 +    select XILINX
 +    select UNIMP
++    select RISCV_ACLINT
++    select SIFIVE_PLIC
 +
  config MICROCHIP_PFSOC
      bool
      default y
 diff --git a/hw/riscv/cva5_pynq.c b/hw/riscv/cva5_pynq.c
 new file mode 100644
-index 0000000..f5918df
+index 0000000..c84653a
 --- /dev/null
 +++ b/hw/riscv/cva5_pynq.c
-@@ -0,0 +1,187 @@
+@@ -0,0 +1,301 @@
 +/*
 + * QEMU model of the CVA5 PYNQ-Z2 system.
 + *
 + * Mirrors examples/xilinx/cva5_wrapper.sv from the CVA5 repository:
 + *
 + *   0x0000_0000    4 KiB  Debug Module window (not modelled)
-+ *   0x1000_0000           AXI UART Lite
++ *   0x0200_0000  768 KiB  CLINT -- mtime/mtimecmp and msip
++ *   0x0C00_0000   64 MiB  PLIC
++ *   0x1000_0000           AXI UART Lite, interrupt on PLIC source 1
++ *   0x2000_0000    8 MiB  SPI (not modelled)
++ *   0x2800_0000    4 KiB  I2C (not modelled)
 + *   0x8000_0000  128 KiB  main RAM; programs run here, entry at +0x40
++ *
++ * The addresses and the CLINT and PLIC register layouts come from
++ * examples/sw/soc.h, which states that both are the standard SiFive ones --
++ * so QEMU's own devices model them without adjustment. The two blocks that
++ * are not modelled are mapped unimplemented, so an access to them is logged
++ * rather than silently reading as zero.
 + *
 + * The CPU is RV32IM, machine mode only, matching the wrapper's CPU_CONFIG
 + * (misa reads 0x40001100 on hardware).
@@ -72,6 +94,8 @@ index 0000000..f5918df
 +#include "elf.h"
 +#include "hw/core/sysbus.h"
 +#include "hw/char/xilinx_uartlite.h"
++#include "hw/intc/riscv_aclint.h"
++#include "hw/intc/sifive_plic.h"
 +#include "hw/misc/unimp.h"
 +#include "system/address-spaces.h"
 +#include "system/system.h"
@@ -114,6 +138,44 @@ index 0000000..f5918df
 +#define CVA5_ROM_SIZE   (4 * KiB)
 +#define CVA5_TRAP_VEC   CVA5_RAM_BASE
 +
++#define CVA5_CLINT_BASE 0x02000000
++#define CVA5_PLIC_BASE  0x0c000000
++#define CVA5_PLIC_SIZE  (64 * MiB)
++#define CVA5_SPI_BASE   0x20000000
++#define CVA5_SPI_SIZE   (8 * MiB)
++#define CVA5_I2C_BASE   0x28000000
++#define CVA5_I2C_SIZE   (4 * KiB)
++
++/*
++ * The CLINT counts at 1 MHz, not at the CPU clock: cva5_clint_axi divides the
++ * 100 MHz system clock down so that mtime ticks once per microsecond, which is
++ * what examples/sw/soc.h's CLINT_HZ says and what examples/sw/timer.c's
++ * microsecond arithmetic assumes. QEMU's default is 10 MHz, so passing this
++ * matters -- a timer test would otherwise be out by ten.
++ */
++#define CVA5_CLINT_HZ   1000000
++
++/*
++ * PLIC geometry. The standard SiFive layout, which is what cva5_plic_axi
++ * implements and what soc.h documents: priorities from the base, pending at
++ * 0x1000, enables at 0x2000, and one context per hart at 0x200000.
++ *
++ * Three sources rather than two, because source 0 does not exist in a PLIC and
++ * the count includes it: soc.h's PLIC_NUM_SOURCES of 2 means sources 1 and 2.
++ */
++#define CVA5_PLIC_NUM_SOURCES   3
++#define CVA5_PLIC_NUM_PRIO_BITS 3
++#define CVA5_PLIC_PRIORITY_BASE 0x00
++#define CVA5_PLIC_PENDING_BASE  0x1000
++#define CVA5_PLIC_ENABLE_BASE   0x2000
++#define CVA5_PLIC_ENABLE_STRIDE 0x80
++#define CVA5_PLIC_CONTEXT_BASE  0x200000
++#define CVA5_PLIC_CONTEXT_STRIDE 0x1000
++
++/* The source numbers examples/sw/soc.h declares, and cva5_irq_concat wires. */
++#define CVA5_PLIC_SRC_UART      1
++#define CVA5_PLIC_SRC_SPI       2
++
 +/*
 + * The boot ROM, built the way examples/xilinx/vendor/boot_rom.sv builds
 + * it: lui x1, %hi(entry) then jalr x0, %lo(entry)(x1). The 0x800 is the
@@ -144,6 +206,7 @@ index 0000000..f5918df
 +    MemoryRegion *ram = g_new(MemoryRegion, 1);
 +    RISCVCPU *cpu;
 +    DeviceState *uart;
++    DeviceState *plic;
 +    uint64_t entry;
 +
 +    /* RV32IM, machine mode only: no A, C, F, D, and no S or U privilege */
@@ -171,12 +234,64 @@ index 0000000..f5918df
 +    memory_region_init_ram(ram, NULL, "cva5.ram", CVA5_RAM_SIZE, &error_fatal);
 +    memory_region_add_subregion(sysmem, CVA5_RAM_BASE, ram);
 +
-+    /* AXI UART Lite. The hardware leaves its interrupt unconnected. */
++    /*
++     * CLINT. Split into the ACLINT MSWI and MTIMER devices, which between them
++     * occupy the same register layout the single SiFive CLINT had: msip at the
++     * base, mtimecmp at 0x4000 and mtime at 0xbff8, exactly the offsets
++     * examples/sw/soc.h uses.
++     *
++     * provide_rdtime is false, which is the point of saying so here. The
++     * hardware sets INCLUDE_TIME_CSR to 0 -- the CLINT publishes mtime on the
++     * bus and the core has no time CSR -- so rdtime traps as an illegal
++     * instruction on the board. Letting QEMU provide it would make this model
++     * more capable than the thing it models, which is the one divergence
++     * examples/sw/csrs.c exists to catch.
++     */
++    riscv_aclint_swi_create(CVA5_CLINT_BASE, 0, 1, false);
++    riscv_aclint_mtimer_create(CVA5_CLINT_BASE + RISCV_ACLINT_SWI_SIZE,
++                               RISCV_ACLINT_DEFAULT_MTIMER_SIZE, 0, 1,
++                               RISCV_ACLINT_DEFAULT_MTIMECMP,
++                               RISCV_ACLINT_DEFAULT_MTIME,
++                               CVA5_CLINT_HZ, false);
++
++    /*
++     * PLIC. One hart, machine mode only -- the core is configured MODES : M,
++     * so there is no supervisor context, and the single context at 0x200000 is
++     * the one soc.h's threshold and claim offsets address.
++     */
++    {
++        char hart_config[] = "M";
++
++        plic = sifive_plic_create(CVA5_PLIC_BASE, hart_config, 1, 0,
++                                  CVA5_PLIC_NUM_SOURCES,
++                                  (1U << CVA5_PLIC_NUM_PRIO_BITS) - 1,
++                                  CVA5_PLIC_PRIORITY_BASE,
++                                  CVA5_PLIC_PENDING_BASE,
++                                  CVA5_PLIC_ENABLE_BASE,
++                                  CVA5_PLIC_ENABLE_STRIDE,
++                                  CVA5_PLIC_CONTEXT_BASE,
++                                  CVA5_PLIC_CONTEXT_STRIDE,
++                                  CVA5_PLIC_SIZE);
++    }
++
++    /*
++     * AXI UART Lite, with its receive interrupt on PLIC source 1 -- the
++     * number soc.h declares and cva5_irq_concat wires on the board.
++     */
 +    uart = qdev_new(TYPE_XILINX_UARTLITE);
 +    qdev_prop_set_enum(uart, "endianness", ENDIAN_MODE_LITTLE);
 +    qdev_prop_set_chr(uart, "chardev", serial_hd(0));
 +    sysbus_realize_and_unref(SYS_BUS_DEVICE(uart), &error_fatal);
 +    sysbus_mmio_map(SYS_BUS_DEVICE(uart), 0, CVA5_UART_BASE);
++    sysbus_connect_irq(SYS_BUS_DEVICE(uart), 0,
++                       qdev_get_gpio_in(plic, CVA5_PLIC_SRC_UART));
++
++    /*
++     * PLIC source 2 is the SPI's transfer-complete interrupt on the board.
++     * There is no SPI model here to raise it, so the source exists and stays
++     * low: software that enables it waits forever rather than reading a
++     * fabricated interrupt.
++     */
 +
 +    /*
 +     * The Debug Module's window. QEMU debugs through its own gdbstub, so the
@@ -184,6 +299,17 @@ index 0000000..f5918df
 +     * instead of aborting.
 +     */
 +    create_unimplemented_device("cva5.dm", CVA5_DM_BASE, CVA5_DM_SIZE);
++
++    /*
++     * The SPI and the I2C. Both are real on the board and neither is modelled:
++     * they are register-level models of specific third-party cores, and
++     * without something attached to the pins there is nothing for them to
++     * talk to. Mapped unimplemented so that a program touching them says so
++     * in the QEMU log instead of reading zeros that look like a device
++     * reporting idle.
++     */
++    create_unimplemented_device("cva5.spi", CVA5_SPI_BASE, CVA5_SPI_SIZE);
++    create_unimplemented_device("cva5.i2c", CVA5_I2C_BASE, CVA5_I2C_SIZE);
 +
 +    /* Boot ROM: the reset vector, and the two instructions it holds */
 +    {

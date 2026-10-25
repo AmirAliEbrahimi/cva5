@@ -67,7 +67,7 @@ module cva5_spi_axi #(
     //this IP offers the block design. The device decodes 128 bytes; 12 bits is
     //the 4 KB floor a Vivado address segment can be given, the same floor
     //cva5_uart sits at. A 32-bit port would offer 4 GB and could only be
-    //placed at zero -- see CLAUDE.md.
+    //placed at zero -- see README.pynq_z2.md.
     parameter int unsigned ADDR_WIDTH = 12,
 
     //TX and RX FIFO depth, in 32-bit words.

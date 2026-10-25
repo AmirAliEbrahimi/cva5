@@ -32,7 +32,7 @@ module cva5_clint_axi #(
     //Width of the slave's address bus, and so the size of the address block
     //this IP offers the block design: 16 bits is the 64 KB the CLINT decodes.
     //A 32-bit port would offer 4 GB, which can only be placed at zero. The
-    //opposite rule applies to master ports -- see CLAUDE.md.
+    //opposite rule applies to master ports -- see README.pynq_z2.md.
     parameter int unsigned ADDR_WIDTH = 16
 ) (
     input logic clk,

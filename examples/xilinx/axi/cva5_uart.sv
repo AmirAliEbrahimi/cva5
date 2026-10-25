@@ -41,7 +41,7 @@ module cva5_uart #(
     //aperture, and a 4 GB aperture can only be placed at zero -- the address
     //editor then refuses the offset with BD 41-70 ("must fit an available
     //aperture"). cva5_clint_axi's 16-bit port gets its 64 KB block the same
-    //way. Master ports obey the opposite rule; see CLAUDE.md.
+    //way. Master ports obey the opposite rule; see README.pynq_z2.md.
     parameter int unsigned ADDR_WIDTH      = 12
 ) (
     input logic clk,

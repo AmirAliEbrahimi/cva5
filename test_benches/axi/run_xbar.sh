@@ -45,7 +45,7 @@ verilator --lint-only -Wall $THIRD_PARTY_NOISE --top-module cva5_axi_xbar $DESIG
 # Three configurations: the widths the block design deploys, full 32-bit
 # ports, and a narrow set -- so the M_*_ADDR_WIDTH truncation path does not
 # rot untested at either extreme. The block design itself keeps every master
-# ports at 32 (see CLAUDE.md); these parameters exist so that the truncation
+# ports at 32 (see README.pynq_z2.md); these parameters exist so that the truncation
 # the crossbar performs is exercised, not because the hardware narrows them.
 rm -rf "$BUILD"
 status=0
