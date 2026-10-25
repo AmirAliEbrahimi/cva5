@@ -316,6 +316,13 @@ per program load. A register would cost a seventh crossbar port and a driver to
 set one bit; EMIO costs a GPIO bank the PS already has, and from Linux it is a
 `gpiochip` line rather than an AXI write.
 
+The bank is configured one bit wide, so `GPIO_O` connects to `cpu_halt`
+directly and there is no `xlslice` between them. There could not be: `xlslice`
+rejects a `DIN_WIDTH` of 1 outright — *"Value '1' is out of the range
+(2,4096)"* — so a slice here would have meant widening the EMIO bank to two
+bits to give it something legal to slice. One fewer Xilinx cell, and `xlslice`
+is reported unsupported from 2025.2 anyway.
+
 The debugger reaches it without leaving `cva5_top`. `cva5_sba_split` sits
 between `dm_sba_axil` and the rest of the design and routes the system bus by
 address: inside the RAM window to the RAM port, everything else out `m_axi_dbg`

@@ -177,13 +177,18 @@ connect_bd_intf_net [get_bd_intf_pins ps7_0/M_AXI_GP0] \
 #
 # Bank 2 is the EMIO bank; bit 0 of it is cpu_halt. From Linux this is a
 # gpiochip line, not an AXI write.
-create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 cpu_halt_slice
-set_property -dict [list CONFIG.DIN_WIDTH {1} CONFIG.DIN_FROM {0} \
-                         CONFIG.DIN_TO {0} CONFIG.DOUT_WIDTH {1}] \
-    [get_bd_cells cpu_halt_slice]
-connect_bd_net [get_bd_pins ps7_0/GPIO_O] [get_bd_pins cpu_halt_slice/Din]
-connect_bd_net [get_bd_pins cpu_halt_slice/Dout] \
-               [get_bd_pins cva5_top_0/cpu_halt]
+#
+# No xlslice. PCW_GPIO_EMIO_GPIO_IO is 1, so GPIO_O is one bit wide and there
+# is nothing to slice out of it -- and xlslice refuses the job anyway:
+#
+#   ERROR: [IP_Flow 19-3458] Validation failed for parameter 'Din
+#          Width(DIN_WIDTH)' ... Value '1' is out of the range (2,4096)
+#
+# A single-bit vector connects to a scalar pin directly. Widening the EMIO
+# bank to 2 bits just to give the slice something legal to do would be a
+# wasted PS pin and an extra cell, and Vivado reports xlslice as unsupported
+# from 2025.2 besides.
+connect_bd_net [get_bd_pins ps7_0/GPIO_O] [get_bd_pins cva5_top_0/cpu_halt]
 
 # ---- The PS into main memory ----------------------------------------------
 # cva5_ram_mux is behind this port and arbitrates it against the debugger's
