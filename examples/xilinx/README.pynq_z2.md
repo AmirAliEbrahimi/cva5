@@ -61,8 +61,19 @@ candidate for replacement.
 
 `processing_system7` is the hard processor system — there is nothing to swap it
 for, and adding it is what lets the PS write programs into main memory. It also
-means this is no longer a PL-only design: the board is brought up by PYNQ Linux
-rather than by a bitstream load alone.
+means this is no longer a PL-only design: the PS runs bare-metal software of
+its own and brings the PL up with it.
+
+Its configuration is the board preset with four things turned off: `GP0` (the
+`GP1` note below), the USB controller, and `FCLK_CLK0` / `FCLK_RESET0_N`. The
+PL takes its clock from the board's oscillator through `clk_wiz` and its reset
+from `reset_sw` through `proc_sys_reset`, so neither FCLK is used. Disabling
+them does **not** touch the PS–PL level shifters, which are a separate PS
+register — the FSBL's `ps7_post_config()` is what enables those, and without
+that call the PS's writes never reach the PL whether an FCLK is running or not.
+`DDR` and `FIXED_IO` stay: bare-metal code and data live in DDR, and
+`FIXED_IO` carries the MIO pins, `PS_CLK` and `PS_SRSTB`, without which the PS
+does not boot at all.
 
 `clk_wiz` stays because the MMCM is a hard block and no amount of RTL replaces
 it. `axi_protocol_converter` stays because a Zynq-7000 PS master is AXI3 and
@@ -481,6 +492,16 @@ inside 0.6 ns of each other:
 | + synthesis warning fixes | crossbar R FIFO → core AXI data_out | 9.775 | **+0.076** |
 | + crossbar DemuxR | crossbar AR spill → crossbar R spill | 9.733 | **+0.153** |
 | + crossbar MuxAr/MuxR | local memory → branch predictor address RAM | 8.980 | **+0.365** |
+| + I2C pins as a declared IIC interface | register file → load queue FIFO | — | **+0.511** |
+| + RAM mux and the PS on it | core AXI address → SBA bridge state enable | 9.329 | **+0.335** |
+
+The last row is the PS going in, and it moved the limiter again. The worst
+path is now `cpu/.../axi_bus/addr_reg[15]` → `debug/i_sba_axil`'s state
+register clock enable: 14 logic levels and 6.81 ns of the 9.33 in routing. The
+`d_tlb` → `local_mem` cluster that had been the limiter sits just behind it at
+`+0.347` to `+0.397`, and the SPI path that used to be fourth is now tenth at
+`+0.404`. Everything in the top ten is inside `cva5_top`, and the core is not
+ours to change, so `+0.335` is where this stops.
 
 #### The limiter is a cluster, not a path
 

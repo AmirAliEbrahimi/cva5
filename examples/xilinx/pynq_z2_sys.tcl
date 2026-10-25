@@ -99,8 +99,8 @@ set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
 # ---- The PS, as a master into CVA5's main memory ---------------------------
 # This is the first Xilinx IP here that is not replaceable and not a PLL: it is
 # the hard processor system, so there is nothing to swap it for. Adding it also
-# means this stops being a PL-only design, and the board is programmed by PYNQ
-# Linux rather than by a JTAG bitstream load alone.
+# means this stops being a PL-only design: the PS runs software of its own,
+# bare metal, and brings the PL up with it.
 #
 # What it buys: the PS can write a program into CVA5's main memory and release
 # the core, which is what OpenOCD does over JTAG today but without the JTAG.
@@ -128,9 +128,10 @@ set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
 # offset. The two ports are otherwise identical -- same AXI3, same 12-bit IDs,
 # same width -- so GP1 costs nothing and keeps one address for main memory.
 #
-# Only GP1 is enabled. Everything else the preset turns on is left alone --
-# this design has no use for the PS's own peripherals, and every one of them
-# that reaches a pin is a pin CVA5 cannot have.
+# Only GP1 is enabled, and three of the preset's defaults are turned off:
+# GP0 (see below), the USB controller, and the FCLK/FRST pair. The rest is left
+# alone -- the DDR and MIO settings are the board's and this design has no
+# business second-guessing them.
 create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7:5.5 ps7_0
 apply_bd_automation -rule xilinx.com:bd_rule:processing_system7 \
   -config {make_external "FIXED_IO, DDR" apply_board_preset "1" \
@@ -152,9 +153,29 @@ apply_bd_automation -rule xilinx.com:bd_rule:processing_system7 \
 # This is the one preset default overridden rather than left alone, because it
 # is the one that costs something: a second PS master into the PL that nothing
 # drives.
+#
+# USB0 off. The preset enables the board's USB host on MIO 28-39; nothing in
+# this design or in the bare-metal loader touches it, and a peripheral left on
+# is a block that has to be configured correctly to not misbehave.
+#
+# FCLK_CLK0 and FCLK_RESET0_N off. Both are PS outputs into the PL and both are
+# unused here: the PL's clock comes from the board's own oscillator through
+# clk_wiz, and its reset comes from reset_sw through proc_sys_reset. That is
+# deliberate and not an oversight -- see the M_AXI_GP1_ACLK note below. Note
+# what disabling them does NOT affect: the PS-PL level shifters, which are a
+# separate PS register and are what the bare-metal FSBL's ps7_post_config()
+# enables after the bitstream loads. Without that call the PS's writes never
+# reach the PL, FCLK or no FCLK.
+#
+# What stays: DDR (bare-metal code and data live there), FIXED_IO (the MIO
+# pins, PS_CLK and PS_SRSTB -- the PS does not boot without it), the MIO
+# peripherals the preset set up, and the EMIO GPIO below.
 set_property -dict [list \
     CONFIG.PCW_USE_M_AXI_GP0 {0} \
     CONFIG.PCW_USE_M_AXI_GP1 {1} \
+    CONFIG.PCW_USB0_PERIPHERAL_ENABLE {0} \
+    CONFIG.PCW_EN_CLK0_PORT {0} \
+    CONFIG.PCW_EN_RST0_PORT {0} \
     CONFIG.PCW_GPIO_EMIO_GPIO_ENABLE {1} \
     CONFIG.PCW_GPIO_EMIO_GPIO_IO {1} \
 ] [get_bd_cells ps7_0]
@@ -171,12 +192,26 @@ foreach pin {M_AXI_GP1_ACLK GPIO_O} {
 if {[llength [get_bd_intf_pins -quiet ps7_0/M_AXI_GP1]] == 0} {
     error "ps7_0 has no M_AXI_GP1 interface. PCW_USE_M_AXI_GP1 did not take."
 }
-# And the other way round: GP0 must be gone, or validate_bd_design fails much
-# later on a dangling M_AXI_GP0_ACLK rather than here.
+# And the other way round: everything switched off must actually be gone. GP0
+# left on fails validate_bd_design much later on a dangling M_AXI_GP0_ACLK; the
+# other three would survive as unconnected pins and quietly undo the point of
+# turning them off.
 if {[llength [get_bd_intf_pins -quiet ps7_0/M_AXI_GP0]] != 0} {
     error "ps7_0 still has an M_AXI_GP0 interface. PCW_USE_M_AXI_GP0 0 did not\
  take, and an unconnected PS master will fail validate_bd_design."
 }
+if {[llength [get_bd_intf_pins -quiet ps7_0/USBIND_0]] != 0} {
+    error "ps7_0 still has a USBIND_0 interface. PCW_USB0_PERIPHERAL_ENABLE 0\
+ did not take."
+}
+foreach pin {FCLK_CLK0 FCLK_RESET0_N} {
+    if {[llength [get_bd_pins -quiet ps7_0/$pin]] != 0} {
+        error "ps7_0 still has a $pin pin. PCW_EN_CLK0_PORT /\
+ PCW_EN_RST0_PORT 0 did not take."
+    }
+}
+# GPIO_O is the one PS output this design does use, so it is checked for
+# presence rather than absence -- that is the foreach above.
 
 # The PS's AXI port runs on OUR clock, not on FCLK_CLK0. That is the whole
 # reason there is no clock-domain crossing anywhere in this: M_AXI_GP1_ACLK is
