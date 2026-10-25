@@ -37,6 +37,21 @@ PLIC source 2 is the SPI's transfer-complete interrupt on the board. The source
 exists here and stays low, so software that enables it waits rather than
 receiving a fabricated interrupt.
 
+## One change outside the machine
+
+The patch also masks bit 0 of the PLIC's first enable word in
+`hw/intc/sifive_plic.c`. Source 0 does not exist in a PLIC — the specification
+reserves interrupt ID 0 — and `sifive_plic_write` already refuses a *priority*
+write to it on those grounds, but the enable path stored the written word whole.
+So `PLIC_ENABLE = 0xFFFFFFFF` left bit 0 set and read it back set, where the
+CVA5 PLIC pins it low (checked in `test_benches/axi/tb_plic.sv`). That was the
+one failing check when `examples/sw/plic.c` was first run against this machine.
+
+It is the only part of this patch that touches a file outside `hw/riscv/`, which
+matters on a version bump: that file changes more often than the machine does,
+so it is the hunk most likely to need rebasing. Dropping it costs one check in
+`plic.c` and nothing else.
+
 
 The CPU is RV32IM, machine mode only, matching the wrapper's `CPU_CONFIG`
 (`misa` reads `0x40001100` on hardware). Programs built by `tools/cva5-run` run

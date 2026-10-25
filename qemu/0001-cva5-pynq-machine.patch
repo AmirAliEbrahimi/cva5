@@ -1,6 +1,6 @@
-From b93417444ab9ddacd431a4dcf9932902ad3de60c Mon Sep 17 00:00:00 2001
+From fa3265b288fad335915a273ae567fcec48477444 Mon Sep 17 00:00:00 2001
 From: Amirali Ebrahimi <amirebrahimi97@gmail.com>
-Date: Sat, 24 Oct 2026 23:39:46 -0400
+Date: Sun, 25 Oct 2026 11:24:18 -0400
 Subject: [PATCH] hw/riscv: add the CVA5 PYNQ-Z2 machine
 
 Models the SoC in the CVA5 repository's examples/xilinx/cva5_wrapper.sv and
@@ -22,13 +22,52 @@ register would look like a device reporting itself idle.
 Programs built for the board run unmodified: -kernel loads the application at
 the reset vector, which on hardware is block RAM inside the core that the
 bitstream preloads, so there is no ROM and nothing to jump through.
+
+hw/intc: reserve PLIC source 0 in the enable bitmap
+
+sifive_plic_write already refuses a priority write to source 0, on the
+grounds that the source does not exist -- the PLIC specification reserves
+interrupt ID 0 and implementations read it as zero. The enable path did
+not apply the same rule: it stored the written word whole, so a guest
+writing 0xffffffff to an enable register left bit 0 set, read it back
+set, and sifive_plic_update would then consider a source that can never
+be raised.
+
+Masking bit 0 of the first enable word makes the device consistent with
+its own treatment of priorities. It is also what hardware does: the CVA5
+PLIC pins source 0's priority and enable bit to zero, which is checked
+in that project's test_benches/axi/tb_plic.sv, and the divergence showed
+up as the one failing check when its plic test was run against this
+machine.
 ---
- hw/riscv/Kconfig     |   9 ++
- hw/riscv/cva5_pynq.c | 301 +++++++++++++++++++++++++++++++++++++++++++
- hw/riscv/meson.build |   1 +
- 3 files changed, 311 insertions(+)
+ hw/intc/sifive_plic.c |  10 ++
+ hw/riscv/Kconfig      |   9 ++
+ hw/riscv/cva5_pynq.c  | 301 ++++++++++++++++++++++++++++++++++++++++++
+ hw/riscv/meson.build  |   1 +
+ 4 files changed, 321 insertions(+)
  create mode 100644 hw/riscv/cva5_pynq.c
 
+diff --git a/hw/intc/sifive_plic.c b/hw/intc/sifive_plic.c
+index 9c84ff0..d9ff071 100644
+--- a/hw/intc/sifive_plic.c
++++ b/hw/intc/sifive_plic.c
+@@ -218,6 +218,16 @@ static void sifive_plic_write(void *opaque, hwaddr addr, uint64_t value,
+         uint32_t wordid = (addr & (plic->enable_stride - 1)) >> 2;
+ 
+         if (wordid < plic->bitfield_words) {
++            if (wordid == 0) {
++                /*
++                 * Source 0 does not exist, so its enable bit is reserved and
++                 * reads as zero. The priority write above already refuses
++                 * source 0; without the same rule here the bitmap keeps
++                 * whatever a guest writes to bit 0, and sifive_plic_update can
++                 * then offer a claim for an interrupt that cannot be raised.
++                 */
++                value &= ~(uint64_t)1;
++            }
+             plic->enable[addrid * plic->bitfield_words + wordid] = value;
+         } else {
+             qemu_log_mask(LOG_GUEST_ERROR,
 diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
 index de37c08..e31b002 100644
 --- a/hw/riscv/Kconfig
