@@ -107,11 +107,28 @@ set sys_rstn [get_bd_pins proc_sys_reset_0/peripheral_aresetn]
 # The same port is what a DMA feeding an accelerator would use later --
 # cva5_ram_mux arbitrates the two of them against the debugger.
 #
-# M_AXI_GP0 and not an HP port: HP ports are PS *slaves*, for PL masters
+# A GP port and not an HP port: HP ports are PS *slaves*, for PL masters
 # reaching DDR. This is the PS mastering into the PL, which is what GP is for.
 # 32 bits wide, which matches, so no data-width conversion.
 #
-# Only GP0 is enabled. Everything else the preset turns on is left alone --
+# GP1 specifically, and the reason is the address. A Zynq-7000 GP master's
+# window is fixed in the PS, not assignable: GP0 is 0x4000_0000-0x7FFF_FFFF
+# and GP1 is 0x8000_0000-0xBFFF_FFFF (UG585 Table 4-1). Main memory is at
+# 0x8000_0000, so GP0 cannot reach it at all --
+#
+#   ERROR: [BD 41-70] The proposed address '0x8000_0000 [ 128K ]' must fit an
+#          available aperture through master interface '/ps7_0/M_AXI_GP0' into
+#          address space '/ps7_0/Data'. Valid apertures are
+#          {<0x4000_0000 [ 1G ]>}.
+#
+# GP0 would have worked only by giving the PS a different address for the same
+# memory, 0x4000_0000 against the core's 0x8000_0000. That is a second number
+# for one thing: examples/sw/soc.h would no longer describe the PS's view,
+# tools/check-soc-map.py could not check it, and every loader would carry the
+# offset. The two ports are otherwise identical -- same AXI3, same 12-bit IDs,
+# same width -- so GP1 costs nothing and keeps one address for main memory.
+#
+# Only GP1 is enabled. Everything else the preset turns on is left alone --
 # this design has no use for the PS's own peripherals, and every one of them
 # that reaches a pin is a pin CVA5 cannot have.
 create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7:5.5 ps7_0
@@ -123,7 +140,7 @@ apply_bd_automation -rule xilinx.com:bd_rule:processing_system7 \
 # at property names for no gain, and anything left at its preset default that
 # does not reach a pin costs nothing.
 set_property -dict [list \
-    CONFIG.PCW_USE_M_AXI_GP0 {1} \
+    CONFIG.PCW_USE_M_AXI_GP1 {1} \
     CONFIG.PCW_GPIO_EMIO_GPIO_ENABLE {1} \
     CONFIG.PCW_GPIO_EMIO_GPIO_IO {1} \
 ] [get_bd_cells ps7_0]
@@ -131,22 +148,22 @@ set_property -dict [list \
 # Fail here, with the pin list in hand, rather than later with a dangling net.
 # These three are what the properties above are for, and a property name that
 # a future Vivado renames would otherwise leave them silently absent.
-foreach pin {M_AXI_GP0_ACLK GPIO_O} {
+foreach pin {M_AXI_GP1_ACLK GPIO_O} {
     if {[llength [get_bd_pins -quiet ps7_0/$pin]] == 0} {
         error "ps7_0 has no $pin pin. The PS configuration above did not take\
  -- check the property names with: report_property \[get_bd_cells ps7_0\]"
     }
 }
-if {[llength [get_bd_intf_pins -quiet ps7_0/M_AXI_GP0]] == 0} {
-    error "ps7_0 has no M_AXI_GP0 interface. PCW_USE_M_AXI_GP0 did not take."
+if {[llength [get_bd_intf_pins -quiet ps7_0/M_AXI_GP1]] == 0} {
+    error "ps7_0 has no M_AXI_GP1 interface. PCW_USE_M_AXI_GP1 did not take."
 }
 
 # The PS's AXI port runs on OUR clock, not on FCLK_CLK0. That is the whole
-# reason there is no clock-domain crossing anywhere in this: M_AXI_GP0_ACLK is
+# reason there is no clock-domain crossing anywhere in this: M_AXI_GP1_ACLK is
 # an input, so feeding it clk_out1 puts the port in the 100 MHz domain the rest
 # of the design already lives in. Using FCLK_CLK0 instead would mean an axi_cdc
 # and a second clock group in the XDC, for nothing.
-connect_bd_net $sys_clk [get_bd_pins ps7_0/M_AXI_GP0_ACLK]
+connect_bd_net $sys_clk [get_bd_pins ps7_0/M_AXI_GP1_ACLK]
 
 # AXI3 to AXI4. A Zynq-7000 PS master is AXI3: 4-bit burst length, WID on the
 # write channel, no QOS or REGION. cva5_top's slave port is AXI4. The converter
@@ -161,7 +178,7 @@ set_property -dict [list \
 ] [get_bd_cells ps_axi4_0]
 connect_bd_net $sys_clk  [get_bd_pins ps_axi4_0/aclk]
 connect_bd_net $sys_rstn [get_bd_pins ps_axi4_0/aresetn]
-connect_bd_intf_net [get_bd_intf_pins ps7_0/M_AXI_GP0] \
+connect_bd_intf_net [get_bd_intf_pins ps7_0/M_AXI_GP1] \
                     [get_bd_intf_pins ps_axi4_0/S_AXI]
 
 # ---- cpu_halt, from the PS's EMIO GPIO ------------------------------------
@@ -188,6 +205,17 @@ connect_bd_intf_net [get_bd_intf_pins ps7_0/M_AXI_GP0] \
 # bank to 2 bits just to give the slice something legal to do would be a
 # wasted PS pin and an extra cell, and Vivado reports xlslice as unsupported
 # from 2025.2 besides.
+#
+# The PS presents GPIO_I/GPIO_O/GPIO_T as one GPIO_0 interface, so taking a net
+# off GPIO_O alone draws a warning:
+#
+#   WARNING: [BD 41-1306] The connection to interface pin </ps7_0/GPIO_O> is
+#            being overridden by the user with net <ps7_0_GPIO_O>. This pin
+#            will not be connected as a part of interface connection <GPIO_0>
+#
+# It is expected and the connection is made. Its caveat is about write_bd_tcl
+# not reproducing the net, which does not apply here: this script IS the block
+# design's source, not something generated from one.
 connect_bd_net [get_bd_pins ps7_0/GPIO_O] [get_bd_pins cva5_top_0/cpu_halt]
 
 # ---- The PS into main memory ----------------------------------------------

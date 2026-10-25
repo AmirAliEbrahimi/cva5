@@ -271,11 +271,21 @@ has to have its valids withdrawn *before* reset is released. `tb_ram_mux`
 deadlocked itself on exactly this while being written.
 
 **S1 is the PS.** `cva5_top` carries an AXI4 slave port, `s_axi_ext`, which the
-block design connects to the PS's `M_AXI_GP0` through an AXI3-to-AXI4
+block design connects to the PS's `M_AXI_GP1` through an AXI3-to-AXI4
 converter. The PS sees main memory at `0x8000_0000` — the same address the core
 does, so a loader on the PS uses `soc.h`'s numbers unchanged.
 
-Three things about that port are deliberate:
+Four things about that port are deliberate:
+
+**`M_AXI_GP1`, not `GP0`.** A Zynq-7000 GP master's window is fixed in the PS
+and cannot be assigned: `GP0` is `0x4000_0000`–`0x7FFF_FFFF`, `GP1` is
+`0x8000_0000`–`0xBFFF_FFFF` (UG585 Table 4-1). Main memory is at `0x8000_0000`,
+so `GP0` cannot reach it — `assign_bd_address` refuses with *"Valid apertures
+are {<0x4000_0000 [ 1G ]>}"*. `GP0` would have worked only by giving the PS a
+different address for the same memory, and that is a second number for one
+thing: `soc.h` would no longer describe the PS's view, `check-soc-map.py` could
+not check it, and every loader would carry the offset. The ports are otherwise
+identical — same AXI3, same 12-bit IDs, same width — so this costs nothing.
 
 **Its address bus is `$clog2(WORDS)+2` bits, not 32.** Vivado infers a packaged
 IP's address block from the width of its AXI address port, so this offers
@@ -289,7 +299,7 @@ does — so 12 at the port is 12 all the way to `cva5_ram_port`. Nothing on that
 path issues an ID, they only echo it, so it is register bits and no logic.
 `run_ram_mux.sh` runs the whole suite at 8 and at 12.
 
-**`M_AXI_GP0_ACLK` is driven from `clk_wiz_0/clk_out1`.** The PS's AXI port
+**`M_AXI_GP1_ACLK` is driven from `clk_wiz_0/clk_out1`.** The PS's AXI port
 clock is an input, so putting it in the 100 MHz domain the rest of the design
 lives in means there is no clock-domain crossing anywhere in this. Using
 `FCLK_CLK0` instead would need an `axi_cdc` and a second clock group in the
