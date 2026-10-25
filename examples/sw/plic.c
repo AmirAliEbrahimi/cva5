@@ -239,19 +239,41 @@ int main(void) {
     check("and restoring the priority brings it back",
           mip_wait(MIP_MEIP, 1) >= 0);
 
-    /* --- 5. claim */
+    /* --- 5. claim, then quiet the device, and only then report
+     *
+     * Nothing may print between the claim and the read of the byte. Printing
+     * writes the UART, and the UART's interrupt is level sensitive: while the
+     * byte is still in the receive FIFO the line is still high, so every
+     * character sent keeps asserting it.
+     *
+     * On this hardware that is harmless -- the PLIC's gateway forwards
+     * nothing for a source whose claim is in progress, which is what the
+     * specification requires. QEMU's PLIC does not implement that: its
+     * gateway sets the pending bit on any assertion, claimed or not, and
+     * ignores deassertion entirely, so the pending bit it sets during the
+     * claim window survives the byte being read and reappears the moment the
+     * complete lifts the claim. The checks below then fail on a model
+     * limitation rather than on anything this SoC does.
+     *
+     * So the results are captured first and printed afterwards. The order of
+     * bus operations is what the test is about; where the PASS lines come out
+     * is not.
+     */
     unsigned int id = PLIC_CLAIM;
-    check("claim names the UART", id == PLIC_SRC_UART);
-    check("claiming suppresses it while in progress",
-          mip_wait(MIP_MEIP, 0) >= 0);
+    int claim_named_uart = (id == PLIC_SRC_UART);
+    int claim_suppressed = (mip_wait(MIP_MEIP, 0) >= 0);
 
-    /* --- 6. quiet the device, THEN complete. The other order re-raises the
+    /* Quiet the device BEFORE completing. The other order re-raises the
      * interrupt immediately, because the irq is level sensitive and the byte
      * is still in the FIFO -- correct hardware behaviour, and the thing most
      * likely to look like a stuck interrupt in a handler. */
-    put_hex("byte received: ", UART_RX);
-    check("reading the byte clears rx_valid",
-          (UART_STAT & UART_RX_VALID) == 0u);
+    unsigned int rx_byte = UART_RX;
+    int rx_valid_cleared = ((UART_STAT & UART_RX_VALID) == 0u);
+
+    check("claim names the UART", claim_named_uart);
+    check("claiming suppresses it while in progress", claim_suppressed);
+    put_hex("byte received: ", rx_byte);
+    check("reading the byte clears rx_valid", rx_valid_cleared);
 
     PLIC_CLAIM = id;                  /* complete */
     /* mip.MEIP is already down from the claim, so mip_wait would return

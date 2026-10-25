@@ -94,6 +94,33 @@ Dropping the PLIC hunk costs one check in `plic.c`. Dropping the uartlite hunk
 costs the whole interrupt half of `plic.c` under QEMU — the register half still
 passes, and the board remains the place that half is really tested.
 
+## What is modelled differently, and not patched
+
+**The PLIC's gateway is edge-triggered and has no notion of a claim in
+progress.** `sifive_plic_irq_request` sets the pending bit on any assertion
+and ignores deassertion entirely, so pending is cleared only by a claim. Two
+consequences follow for a level-sensitive source:
+
+- a source that deasserts before its claim is completed stays pending, where
+  hardware would have let it go quiet
+- the pending bit is set even while a claim is in progress, which the PLIC
+  specification says the gateway must not do — it forwards nothing until it
+  receives the completion
+
+This is **not** patched, and the reason is worth recording. Making the gateway
+level-sensitive would mean clearing pending on deassertion, and a source that
+pulses its interrupt — asserting and deasserting before the claim — would then
+be lost entirely. That is a real regression for every other machine using this
+PLIC, traded for one test here. Tracking the incoming level separately from the
+pending bit would fix it properly, and is more than this patch should carry.
+
+`examples/sw/plic.c` works around it instead, by not printing between the claim
+and the read of the byte: printing writes the UART, the UART's interrupt is
+level sensitive, and the byte is still in the FIFO at that point, so each
+character re-asserts a line whose pending bit the model will not let go of. The
+comment there says so, because the obvious tidy-up — printing each result as it
+is computed — reintroduces it.
+
 
 The CPU is RV32IM, machine mode only, matching the wrapper's `CPU_CONFIG`
 (`misa` reads `0x40001100` on hardware). Programs built by `tools/cva5-run` run
