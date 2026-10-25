@@ -546,6 +546,31 @@ module cva5_wrapper
     logic        sba_rvalid, sba_rready;
     logic [1:0]  sba_bresp, sba_rresp;
 
+    //Three AXI4 bundles now, where there used to be one. cva5_sba_split's RAM
+    //leg (dbg_*) and an external master (ext_*) are cva5_ram_mux's two slave
+    //ports; rp_* is the mux's master port and the only one cva5_ram_port sees.
+    logic [7:0]  dbg_awid, dbg_arid, dbg_bid, dbg_rid;
+    logic [RAM_ADDR_W+1:0] dbg_awaddr, dbg_araddr;
+    logic [7:0]  dbg_awlen, dbg_arlen;
+    logic [2:0]  dbg_awsize, dbg_arsize;
+    logic [1:0]  dbg_awburst, dbg_arburst, dbg_bresp, dbg_rresp;
+    logic        dbg_awvalid, dbg_awready, dbg_wvalid, dbg_wready, dbg_wlast;
+    logic [31:0] dbg_wdata, dbg_rdata;
+    logic [3:0]  dbg_wstrb;
+    logic        dbg_bvalid, dbg_bready, dbg_arvalid, dbg_arready;
+    logic        dbg_rvalid, dbg_rready, dbg_rlast;
+
+    logic [7:0]  ext_awid, ext_arid, ext_bid, ext_rid;
+    logic [RAM_ADDR_W+1:0] ext_awaddr, ext_araddr;
+    logic [7:0]  ext_awlen, ext_arlen;
+    logic [2:0]  ext_awsize, ext_arsize;
+    logic [1:0]  ext_awburst, ext_arburst, ext_bresp, ext_rresp;
+    logic        ext_awvalid, ext_awready, ext_wvalid, ext_wready, ext_wlast;
+    logic [31:0] ext_wdata, ext_rdata;
+    logic [3:0]  ext_wstrb;
+    logic        ext_bvalid, ext_bready, ext_arvalid, ext_arready;
+    logic        ext_rvalid, ext_rready, ext_rlast;
+
     logic [7:0]  rp_awid, rp_arid, rp_bid, rp_rid;  //ram_port defaults ID_WIDTH to 8
     logic [RAM_ADDR_W+1:0] rp_awaddr, rp_araddr;
     logic [7:0]  rp_awlen, rp_arlen;
@@ -596,35 +621,35 @@ module cva5_wrapper
         .s_axi_rvalid (sba_rvalid),
         .s_axi_rready (sba_rready),
 
-        .m_axi_ram_awid (rp_awid),
-        .m_axi_ram_awaddr (rp_awaddr),
-        .m_axi_ram_awlen (rp_awlen),
-        .m_axi_ram_awsize (rp_awsize),
-        .m_axi_ram_awburst (rp_awburst),
-        .m_axi_ram_awvalid (rp_awvalid),
-        .m_axi_ram_awready (rp_awready),
-        .m_axi_ram_wdata (rp_wdata),
-        .m_axi_ram_wstrb (rp_wstrb),
-        .m_axi_ram_wlast (rp_wlast),
-        .m_axi_ram_wvalid (rp_wvalid),
-        .m_axi_ram_wready (rp_wready),
-        .m_axi_ram_bid (rp_bid),
-        .m_axi_ram_bresp (rp_bresp),
-        .m_axi_ram_bvalid (rp_bvalid),
-        .m_axi_ram_bready (rp_bready),
-        .m_axi_ram_arid (rp_arid),
-        .m_axi_ram_araddr (rp_araddr),
-        .m_axi_ram_arlen (rp_arlen),
-        .m_axi_ram_arsize (rp_arsize),
-        .m_axi_ram_arburst (rp_arburst),
-        .m_axi_ram_arvalid (rp_arvalid),
-        .m_axi_ram_arready (rp_arready),
-        .m_axi_ram_rid (rp_rid),
-        .m_axi_ram_rdata (rp_rdata),
-        .m_axi_ram_rresp (rp_rresp),
-        .m_axi_ram_rlast (rp_rlast),
-        .m_axi_ram_rvalid (rp_rvalid),
-        .m_axi_ram_rready (rp_rready),
+        .m_axi_ram_awid (dbg_awid),
+        .m_axi_ram_awaddr (dbg_awaddr),
+        .m_axi_ram_awlen (dbg_awlen),
+        .m_axi_ram_awsize (dbg_awsize),
+        .m_axi_ram_awburst (dbg_awburst),
+        .m_axi_ram_awvalid (dbg_awvalid),
+        .m_axi_ram_awready (dbg_awready),
+        .m_axi_ram_wdata (dbg_wdata),
+        .m_axi_ram_wstrb (dbg_wstrb),
+        .m_axi_ram_wlast (dbg_wlast),
+        .m_axi_ram_wvalid (dbg_wvalid),
+        .m_axi_ram_wready (dbg_wready),
+        .m_axi_ram_bid (dbg_bid),
+        .m_axi_ram_bresp (dbg_bresp),
+        .m_axi_ram_bvalid (dbg_bvalid),
+        .m_axi_ram_bready (dbg_bready),
+        .m_axi_ram_arid (dbg_arid),
+        .m_axi_ram_araddr (dbg_araddr),
+        .m_axi_ram_arlen (dbg_arlen),
+        .m_axi_ram_arsize (dbg_arsize),
+        .m_axi_ram_arburst (dbg_arburst),
+        .m_axi_ram_arvalid (dbg_arvalid),
+        .m_axi_ram_arready (dbg_arready),
+        .m_axi_ram_rid (dbg_rid),
+        .m_axi_ram_rdata (dbg_rdata),
+        .m_axi_ram_rresp (dbg_rresp),
+        .m_axi_ram_rlast (dbg_rlast),
+        .m_axi_ram_rvalid (dbg_rvalid),
+        .m_axi_ram_rready (dbg_rready),
 
         .m_axi_dbg_awaddr (m_axi_dbg_awaddr),
         .m_axi_dbg_awprot (m_axi_dbg_awprot),
@@ -645,6 +670,139 @@ module cva5_wrapper
         .m_axi_dbg_rresp (m_axi_dbg_rresp),
         .m_axi_dbg_rvalid (m_axi_dbg_rvalid),
         .m_axi_dbg_rready (m_axi_dbg_rready)
+    );
+
+    //Two masters on the one RAM port. S0 is the debugger, coming out of
+    //cva5_sba_split above; S1 is for something outside this module -- the PS
+    //programming the core, or a DMA feeding an accelerator.
+    //
+    //S1 is tied off here, and is the only part of this not yet wired out.
+    //Exposing it means an AXI4 slave on cva5_wrapper and cva5_top and a port
+    //on the packaged IP, which a block design has to connect to something:
+    //there is no master to connect yet, and what Vivado does with an
+    //unconnected AXI slave interface on an IP is not something to find out by
+    //guessing. The mux, its arbitration and its reset behaviour are verified
+    //in simulation now (test_benches/debug/run_ram_mux.sh, 315 checks);
+    //routing S1 out is a change to these tie-offs and nothing else.
+    //
+    //ram_rstn, not rst: the owner register must not reset on ndmreset, for
+    //the same reason cva5_sba_split's select register must not. See the header
+    //of cva5_ram_mux.sv.
+    assign ext_awid    = '0;
+    assign ext_awaddr  = '0;
+    assign ext_awlen   = '0;
+    assign ext_awsize  = 3'd2;
+    assign ext_awburst = 2'b01;
+    assign ext_awvalid = 1'b0;
+    assign ext_wdata   = '0;
+    assign ext_wstrb   = '0;
+    assign ext_wlast   = 1'b0;
+    assign ext_wvalid  = 1'b0;
+    assign ext_bready  = 1'b0;
+    assign ext_arid    = '0;
+    assign ext_araddr  = '0;
+    assign ext_arlen   = '0;
+    assign ext_arsize  = 3'd2;
+    assign ext_arburst = 2'b01;
+    assign ext_arvalid = 1'b0;
+    assign ext_rready  = 1'b0;
+
+    cva5_ram_mux #(
+        .ADDR_WIDTH (RAM_ADDR_W),
+        .ID_WIDTH (8)
+    ) ram_mux (
+        .clk (clk),
+        .rstn (ram_rstn),
+
+        .s0_awid (dbg_awid),
+        .s0_awaddr (dbg_awaddr),
+        .s0_awlen (dbg_awlen),
+        .s0_awsize (dbg_awsize),
+        .s0_awburst (dbg_awburst),
+        .s0_awvalid (dbg_awvalid),
+        .s0_awready (dbg_awready),
+        .s0_wdata (dbg_wdata),
+        .s0_wstrb (dbg_wstrb),
+        .s0_wlast (dbg_wlast),
+        .s0_wvalid (dbg_wvalid),
+        .s0_wready (dbg_wready),
+        .s0_bid (dbg_bid),
+        .s0_bresp (dbg_bresp),
+        .s0_bvalid (dbg_bvalid),
+        .s0_bready (dbg_bready),
+        .s0_arid (dbg_arid),
+        .s0_araddr (dbg_araddr),
+        .s0_arlen (dbg_arlen),
+        .s0_arsize (dbg_arsize),
+        .s0_arburst (dbg_arburst),
+        .s0_arvalid (dbg_arvalid),
+        .s0_arready (dbg_arready),
+        .s0_rid (dbg_rid),
+        .s0_rdata (dbg_rdata),
+        .s0_rresp (dbg_rresp),
+        .s0_rlast (dbg_rlast),
+        .s0_rvalid (dbg_rvalid),
+        .s0_rready (dbg_rready),
+
+        .s1_awid (ext_awid),
+        .s1_awaddr (ext_awaddr),
+        .s1_awlen (ext_awlen),
+        .s1_awsize (ext_awsize),
+        .s1_awburst (ext_awburst),
+        .s1_awvalid (ext_awvalid),
+        .s1_awready (ext_awready),
+        .s1_wdata (ext_wdata),
+        .s1_wstrb (ext_wstrb),
+        .s1_wlast (ext_wlast),
+        .s1_wvalid (ext_wvalid),
+        .s1_wready (ext_wready),
+        .s1_bid (ext_bid),
+        .s1_bresp (ext_bresp),
+        .s1_bvalid (ext_bvalid),
+        .s1_bready (ext_bready),
+        .s1_arid (ext_arid),
+        .s1_araddr (ext_araddr),
+        .s1_arlen (ext_arlen),
+        .s1_arsize (ext_arsize),
+        .s1_arburst (ext_arburst),
+        .s1_arvalid (ext_arvalid),
+        .s1_arready (ext_arready),
+        .s1_rid (ext_rid),
+        .s1_rdata (ext_rdata),
+        .s1_rresp (ext_rresp),
+        .s1_rlast (ext_rlast),
+        .s1_rvalid (ext_rvalid),
+        .s1_rready (ext_rready),
+
+        .m_awid (rp_awid),
+        .m_awaddr (rp_awaddr),
+        .m_awlen (rp_awlen),
+        .m_awsize (rp_awsize),
+        .m_awburst (rp_awburst),
+        .m_awvalid (rp_awvalid),
+        .m_awready (rp_awready),
+        .m_wdata (rp_wdata),
+        .m_wstrb (rp_wstrb),
+        .m_wlast (rp_wlast),
+        .m_wvalid (rp_wvalid),
+        .m_wready (rp_wready),
+        .m_bid (rp_bid),
+        .m_bresp (rp_bresp),
+        .m_bvalid (rp_bvalid),
+        .m_bready (rp_bready),
+        .m_arid (rp_arid),
+        .m_araddr (rp_araddr),
+        .m_arlen (rp_arlen),
+        .m_arsize (rp_arsize),
+        .m_arburst (rp_arburst),
+        .m_arvalid (rp_arvalid),
+        .m_arready (rp_arready),
+        .m_rid (rp_rid),
+        .m_rdata (rp_rdata),
+        .m_rresp (rp_rresp),
+        .m_rlast (rp_rlast),
+        .m_rvalid (rp_rvalid),
+        .m_rready (rp_rready)
     );
 
     cva5_ram_port #(.ADDR_WIDTH(RAM_ADDR_W)) ram_port (

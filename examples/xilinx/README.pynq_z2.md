@@ -25,6 +25,7 @@ The RTL, by subsystem:
 | `cva5_top.v` | a plain-Verilog, port-for-port shim around it, because the IP packager will not analyse a SystemVerilog top. **A port added to one must be added to the other** — see `CLAUDE.md` |
 | `debug/cva5_debug_subsys.sv` | riscv-dbg's Debug Module, DMI and JTAG TAP |
 | `debug/cva5_sba_split.sv` | routes the debugger's system bus: RAM window straight to the RAM's second port, everything else out to the crossbar |
+| `debug/cva5_ram_mux.sv` | two AXI4 masters sharing that second port: the debugger, and one for something outside the core |
 | `debug/cva5_ram_port.sv`, `debug/dm_mem_port.sv`, `debug/dm_sba_axil.sv` | the rest of the debugger's path to memory |
 | `axi/cva5_axi_xbar.sv` | the peripheral interconnect: two slave ports, five master ports, address decode from `soc.h` |
 | `axi/cva5_uart.sv` | lowRISC's UART behind AXI4-Lite, keeping `axi_uartlite`'s register map |
@@ -208,6 +209,59 @@ is idle.
 issues single beats, but handling bursts costs little and is what a future
 master on that port would want — main memory moving back out of `cva5_top`, for
 one.
+
+#### A second master on that port
+
+`cva5_ram_mux` sits in front of `cva5_ram_port` and gives it two masters: S0 is
+the debugger, out of `cva5_sba_split`; S1 is for something outside the core —
+the PS writing a program, or a DMA feeding an accelerator. One port serves
+both, because `tdp_ram` has exactly two and the core's fetch and load/store
+already hold them.
+
+It is written out by hand rather than being pulp's `axi_mux`, for the same
+reason `cva5_sba_split` is: **only one packaged IP in this design may carry
+`axi_pkg`**, and the crossbar is it. A second IP defining the same package
+collides in one block design, so anything here wanting pulp AXI types would
+have to spell its channel structs out — more code than flat signals and an
+owner register, for a 2:1 mux in front of a port that serialises everything
+anyway.
+
+Arbitration is one owner at a time, held from the grant until the response
+completes, with priority alternating between the ports. The decision is made at
+the **port** level and not the channel level: whichever port wins, its write
+goes before its read, which is the order the downstream port imposes regardless.
+Choosing write-before-read *across* ports instead lets a master that writes
+continuously starve the other master's reads — which is exactly a DMA streaming
+against a debugger trying to read one word.
+
+IDs pass through untouched and no width is added. A mux normally prepends the
+port index to the ID so responses can be routed back, and pulp's does; here
+only one transaction is ever in flight and the owner is already a register, so
+`cva5_ram_port`'s `ID_WIDTH` stays as it is. A Zynq GP master's 12-bit IDs
+would otherwise have forced it wider.
+
+Two things worth knowing before putting a real master on S1.
+
+**A held grant is held until the response is taken.** A master that has its AR
+accepted and then stops asserting RREADY keeps the port indefinitely, locking
+out the other master — which may be the debugger, the thing you would reach for
+to find out what went wrong. AXI forbids that behaviour and recovery is the
+shared `rstn`. A watchdog was left out deliberately: a timeout long enough never
+to fire on a legitimately slow master is too long to be a useful recovery, and a
+short one breaks the slow master. If a master that can hang goes on S1, give it
+its own reset instead.
+
+**A request standing when reset releases is granted on that edge.** That is
+correct, the request is still being made, but it means an aborted transaction
+has to have its valids withdrawn *before* reset is released. `tb_ram_mux`
+deadlocked itself on exactly this while being written.
+
+**S1 is not wired out yet.** The mux is in the design and verified — 315 checks,
+and every one of eight mutants in the arbitration is caught — but S1 is tied off
+inside `cva5_wrapper.sv`. Exposing it means an AXI4 slave on the wrapper, the
+same on `cva5_top.v`, and a port on the packaged IP that a block design has to
+connect to something. There is no master to connect yet. Routing it out is a
+change to those tie-offs and nothing else.
 
 The debugger reaches it without leaving `cva5_top`. `cva5_sba_split` sits
 between `dm_sba_axil` and the rest of the design and routes the system bus by
@@ -1161,6 +1215,7 @@ something.
 |-------|---------|--------|
 | crossbar | `test_benches/axi/run_xbar.sh` | 72 checks × 3 port-width configurations: decode to all five slaves, both masters to each, cross-contamination, address truncation per master port, window boundaries including the PLIC/UART abutment and the I2C's hole on both sides, DECERR, and the AR-to-R latency measured and printed |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
+| RAM mux | `sh test_benches/debug/run_ram_mux.sh` | 315 checks: two masters on the RAM port through the real `cva5_ram_port` — alternation as an invariant on every transaction, bursts holding the grant to RLAST, a continuous writer not starving the other port, and reset releasing it |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |
 | CLINT | `sh test_benches/debug/run_clint.sh` | mtime tick rate, writes, mtimecmp→mtip at the boundary, msip |
@@ -1181,6 +1236,7 @@ something.
 | DM bring-up | `openocd … -c "init; p1_diag; shutdown"` | DM, SBA, then every peripheral on the bus with the core still in reset: RAM, UART, the CLINT's `mtime` advancing, a PLIC write/read-back, the SPI reporting idle, and the I2C's prescale reading its non-zero reset value — the one identity check here a bus returning zeros cannot fake |
 | OpenOCD config scoping | `python3 tools/check-openocd-globals.py examples/xilinx/openocd/*.cfg` | procs that read a global without declaring it. Tcl does not complain until the line runs, and in a diagnostic that can be never |
 | memory map | `python3 tools/check-soc-map.py` | that `soc.h`, the crossbar's decode parameters and the OpenOCD config still agree. Three copies, none of which can include the others |
+| port parity | `python3 tools/check-port-parity.py` | that `cva5_top.v` carries every port `cva5_wrapper.sv` has, with the same direction. The IP's interface is whatever the Verilog shim declares, so a port added to one and not the other is simply not on the IP — and nothing in simulation notices, because simulation instantiates the wrapper |
 | documentation | `python3 tools/check-doc-refs.py README.md CLAUDE.md examples/xilinx/README.pynq_z2.md` | that every filename these documents name exists. A renamed file leaves its old name behind in prose, where nothing compiles it — this document sent readers to a "pynq_z2_waivers.xdc" that never existed. Names cited as missing go in quotes, not backticks, which are what the checker reads |
 | **all of main memory** | `make -C examples/sw memtest` | **the only thing that addresses all 128 KB**, so the only thing that reaches cascade rows above the first. Prints on the serial console, not the terminal |
 | QEMU parity | `tools/cva5-qemu` | same reset vector and map as the board. `csrs` is the known exception: QEMU implements `time` |

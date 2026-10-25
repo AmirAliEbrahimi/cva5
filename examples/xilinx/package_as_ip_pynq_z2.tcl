@@ -27,6 +27,7 @@ set soc_files {
     examples/xilinx/debug/dm_sba_axil.sv
     examples/xilinx/debug/dm_mem_port.sv
     examples/xilinx/debug/cva5_ram_port.sv
+    examples/xilinx/debug/cva5_ram_mux.sv
     examples/xilinx/debug/cva5_sba_split.sv
     examples/xilinx/debug/cva5_debug_subsys.sv
     examples/xilinx/cva5_wrapper.sv
