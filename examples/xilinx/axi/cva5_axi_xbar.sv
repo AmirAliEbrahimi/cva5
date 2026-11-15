@@ -9,6 +9,7 @@
  *   M2  m_axi_plic   PLIC at PLIC_BASE       AXI4-Lite
  *   M3  m_axi_spi    SPI at SPI_BASE         AXI4-Lite
  *   M4  m_axi_i2c    I2C at I2C_BASE         AXI4-Lite
+ *   M5  m_axi_accel  accelerator at ACCEL_BASE  AXI4-Lite
  *
  * Every port is AXI4-Lite, which is the whole of what this SoC's bus carries.
  * It was not always: the crossbar used to be full AXI4 with a RAM master port,
@@ -60,6 +61,13 @@ module cva5_axi_xbar #(
     // Ethernet window the map reserves.
     parameter logic [31:0] I2C_BASE    = 32'h2800_0000,
     parameter logic [31:0] I2C_SIZE    = 32'h0000_1000,  // 4 KB
+    // The accelerator's control block: the DMA's registers in the low half
+    // and ap_start/status/result in the high half. Not a CVA6 window -- CVA6
+    // has no accelerator -- so it goes above everything CVA6 reserves rather
+    // than inside a window that is spoken for. 4 KB is the floor a Vivado
+    // address segment can be given; the block decodes 64 bytes of it.
+    parameter logic [31:0] ACCEL_BASE  = 32'h5000_0000,
+    parameter logic [31:0] ACCEL_SIZE  = 32'h0000_1000,  // 4 KB
 
     // Width of each master port's address bus.
     //
@@ -81,6 +89,7 @@ module cva5_axi_xbar #(
     parameter int unsigned M_PLIC_ADDR_WIDTH  = 32,
     parameter int unsigned M_SPI_ADDR_WIDTH   = 32,
     parameter int unsigned M_I2C_ADDR_WIDTH   = 32,
+    parameter int unsigned M_ACCEL_ADDR_WIDTH = 32,
 
     // Outstanding transactions allowed per port. Two: every master here issues
     // single register accesses and none of them pipeline.
@@ -245,11 +254,31 @@ module cva5_axi_xbar #(
         input logic [31:0] m_axi_i2c_rdata,
         input logic [1:0] m_axi_i2c_rresp,
         input logic m_axi_i2c_rvalid,
-        output logic m_axi_i2c_rready
+        output logic m_axi_i2c_rready,
+
+        output logic [M_ACCEL_ADDR_WIDTH-1:0] m_axi_accel_awaddr,
+        output logic [2:0] m_axi_accel_awprot,
+        output logic m_axi_accel_awvalid,
+        input logic m_axi_accel_awready,
+        output logic [31:0] m_axi_accel_wdata,
+        output logic [3:0] m_axi_accel_wstrb,
+        output logic m_axi_accel_wvalid,
+        input logic m_axi_accel_wready,
+        input logic [1:0] m_axi_accel_bresp,
+        input logic m_axi_accel_bvalid,
+        output logic m_axi_accel_bready,
+        output logic [M_ACCEL_ADDR_WIDTH-1:0] m_axi_accel_araddr,
+        output logic [2:0] m_axi_accel_arprot,
+        output logic m_axi_accel_arvalid,
+        input logic m_axi_accel_arready,
+        input logic [31:0] m_axi_accel_rdata,
+        input logic [1:0] m_axi_accel_rresp,
+        input logic m_axi_accel_rvalid,
+        output logic m_axi_accel_rready
     );
 
     localparam int unsigned NUM_SLV = 32'd2;
-    localparam int unsigned NUM_MST = 32'd5;
+    localparam int unsigned NUM_MST = 32'd6;
 
     //------------------------------------------------------------------
     // AXI4-Lite channel and request/response types. Field order and names
@@ -391,6 +420,9 @@ module cva5_axi_xbar #(
         addr_map[4] = '{idx: 32'd4,
                         start_addr: I2C_BASE,
                         end_addr:   I2C_BASE + I2C_SIZE};
+        addr_map[5] = '{idx: 32'd5,
+                        start_addr: ACCEL_BASE,
+                        end_addr:   ACCEL_BASE + ACCEL_SIZE};
     end
 
     //------------------------------------------------------------------
@@ -596,6 +628,18 @@ module cva5_axi_xbar #(
     assign m_axi_i2c_arvalid = mst_req[4].ar_valid;
     assign m_axi_i2c_rready  = mst_req[4].r_ready;
 
+    assign m_axi_accel_awaddr  = mst_req[5].aw.addr[M_ACCEL_ADDR_WIDTH-1:0];
+    assign m_axi_accel_awprot  = mst_req[5].aw.prot;
+    assign m_axi_accel_awvalid = mst_req[5].aw_valid;
+    assign m_axi_accel_wdata   = mst_req[5].w.data;
+    assign m_axi_accel_wstrb   = mst_req[5].w.strb;
+    assign m_axi_accel_wvalid  = mst_req[5].w_valid;
+    assign m_axi_accel_bready  = mst_req[5].b_ready;
+    assign m_axi_accel_araddr  = mst_req[5].ar.addr[M_ACCEL_ADDR_WIDTH-1:0];
+    assign m_axi_accel_arprot  = mst_req[5].ar.prot;
+    assign m_axi_accel_arvalid = mst_req[5].ar_valid;
+    assign m_axi_accel_rready  = mst_req[5].r_ready;
+
     always_comb begin
         mst_resp[4] = '0;
         mst_resp[4].aw_ready = m_axi_i2c_awready;
@@ -606,6 +650,15 @@ module cva5_axi_xbar #(
         mst_resp[4].r.data   = m_axi_i2c_rdata;
         mst_resp[4].r.resp   = m_axi_i2c_rresp;
         mst_resp[4].r_valid  = m_axi_i2c_rvalid;
+
+        mst_resp[5].aw_ready = m_axi_accel_awready;
+        mst_resp[5].w_ready  = m_axi_accel_wready;
+        mst_resp[5].b.resp   = m_axi_accel_bresp;
+        mst_resp[5].b_valid  = m_axi_accel_bvalid;
+        mst_resp[5].ar_ready = m_axi_accel_arready;
+        mst_resp[5].r.data   = m_axi_accel_rdata;
+        mst_resp[5].r.resp   = m_axi_accel_rresp;
+        mst_resp[5].r_valid  = m_axi_accel_rvalid;
     end
 
 endmodule

@@ -23,6 +23,7 @@
  *   0x2800_0000   4 KB    I2C                                   [ours]
  *   0x3000_0000  64 KB    Ethernet                              [not planned]
  *   0x4000_0000   4 KB    GPIO                                  [not planned]
+ *   0x5000_0000   4 KB    accelerator control                   [ours]
  *   0x8000_0000 128 KB    main RAM -- programs run here
  *
  * "reserved" means nothing is there yet and the address is spoken for, so that
@@ -219,6 +220,82 @@ static inline void dev_fence(void) {
  * change speed. */
 #define I2C_PRESCALE_100K  250u
 #define I2C_PRESCALE_400K  62u
+
+/*
+ * The hls4ml accelerator's control block -- examples/xilinx/axi/cva5_accel_axi.sv.
+ *
+ * Above everything CVA6 reserves, because CVA6 has no accelerator and there
+ * is no window of theirs to borrow. The I2C at 0x2800_0000 is the precedent:
+ * ours, marked as ours.
+ *
+ * Two register files behind one window, selected by address bit 5. The low
+ * half is ZipCPU's aximm2s exactly as its own documentation describes it;
+ * the high half is ours.
+ */
+#define ACCEL_BASE  0x50000000u
+#define ACCEL_SIZE  0x00001000u
+
+/* The DMA, aximm2s's own map. Offsets 0x4, 0x10 and 0x14 are reserved. */
+#define DMA_CONTROL_OFF 0x00u
+#define DMA_ADDRLO_OFF  0x08u
+#define DMA_ADDRHI_OFF  0x0Cu
+#define DMA_LENLO_OFF   0x18u
+#define DMA_LENHI_OFF   0x1Cu
+
+/* CMD_CONTROL bits. A transfer starts on a write with DMA_START set and the
+ * top byte strobe asserted -- NOT on any write, which is what the register's
+ * documentation might suggest and what cost an afternoon in tb_accel.sv. A
+ * plain 0 clears the flags and starts nothing. */
+#define DMA_START     (1u << 31)   /* also reads back as "busy" */
+#define DMA_BUSY      (1u << 31)
+#define DMA_ERR       (1u << 30)
+#define DMA_COMPLETE  (1u << 29)
+
+/* Ours. */
+#define ACCEL_CTRL_OFF    0x20u
+#define ACCEL_STATUS_OFF  0x24u
+#define ACCEL_RESULT_OFF  0x28u
+#define ACCEL_PADSEEN_OFF 0x2Cu
+
+#define ACCEL_CTRL_START   (1u << 0)   /* cleared in hardware on ap_ready */
+
+#define ACCEL_ST_DONE      (1u << 0)
+#define ACCEL_ST_IDLE      (1u << 1)
+#define ACCEL_ST_READY     (1u << 2)
+#define ACCEL_ST_RESULT    (1u << 3)   /* a result is waiting to be read */
+#define ACCEL_ST_DMA_DONE  (1u << 4)
+
+/*
+ * The image, as the accelerator's data path requires it.
+ *
+ * Four bytes per pixel -- R, G, B and a zero -- so that one pixel is exactly
+ * one 32-bit word and the DMA's beat is the accelerator's beat. Three bytes
+ * would put two pixels across three words and need a gearbox. The pad byte
+ * must be zero: cva5_axis_lane counts the ones that are not, readable at
+ * ACCEL_PADSEEN_OFF, because nothing downstream can tell a mis-packed image
+ * from a correct one -- the colours shift and the classifier quietly worsens.
+ */
+/*
+ * The DMA addresses main memory by OFFSET, not by pointer.
+ *
+ * cva5_accel_axi's master bus is RAM_ADDR_W+2 bits wide, the same width
+ * cva5_top's s_axi_acc offers, for the reason every slave port here is sized
+ * that way: Vivado infers a packaged IP's address block from the width of its
+ * AXI address port, and 32 bits would offer 4 GB that can only be placed at
+ * zero. Seventeen bits cannot express 0x8000_0000, so DMA_ADDRLO takes the
+ * offset within RAM and the block design maps the window at zero in the
+ * DMA's own address space.
+ *
+ * Software therefore writes ACCEL_RAM_OFF(p), not p. Writing the pointer
+ * puts the top bits nowhere and the DMA reads from offset zero -- the reset
+ * vector -- which streams the trap handler into the accelerator and returns
+ * a confident wrong answer.
+ */
+#define ACCEL_RAM_OFF(p)  ((unsigned int)(unsigned long)(p) - RAM_BASE)
+
+#define ACCEL_PIXEL_BYTES 4u
+#define ACCEL_IMG_PIXELS  (32u * 32u)
+#define ACCEL_IMG_BYTES   (ACCEL_IMG_PIXELS * ACCEL_PIXEL_BYTES)
 
 #define RAM_BASE    0x80000000u
 #define RAM_SIZE    0x00020000u   /* 128 KB on the board; 4 KB in the sim */

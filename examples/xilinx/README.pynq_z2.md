@@ -497,6 +497,73 @@ bench hit this at both levels at once and now abandons the phase with a reset
 instead, with every port idled *before* reset releases — a request standing
 at that edge is granted on it.
 
+#### The accelerator
+
+`cva5_accel_axi` is the whole attachment, and it replaces five Xilinx IPs
+from the first version of this design: `axi_fifo_mm_s`,
+`axis_dwidth_converter`, `axi_gpio`, `xlconcat` and `xlconstant`.
+
+```
+main memory --[aximm2s]--> 32b --[cva5_axis_lane]--> 24b --> cnn_0/x
+                 ^                                              |
+            s_axi_acc                              layer9_out (32b)
+                                                                |
+software <--[AXI4-Lite, ACCEL_BASE]--[result register]<---------+
+```
+
+**Why there is a DMA.** The first version had CVA5 store the image into a
+memory-mapped FIFO a word at a time: 1,536 stores through the peripheral bus,
+about 15 cycles each, **23,551 of the 30,498 cycles** an inference took. The
+processor was the bottleneck, acting as a DMA. Now the image stays where it
+was loaded and ZipCPU's `aximm2s` reads it over `s_axi_acc`, so the transfer
+overlaps the compute. The compute is 6,947 cycles and does not move, so this
+is about **4x end to end** — not the 220x that "if the transfer were free"
+suggests.
+
+**Why the return path is not a DMA.** The accelerator produces exactly one
+32-bit beat per inference — `layer9_out_TDATA` is `[31:0]`. A second DMA to
+move four bytes would be a second AXI master, a fourth port on the
+arbitration tree and another set of descriptors, to avoid a register read.
+The result is captured and read at `ACCEL_RESULT_OFF`.
+
+**Why the lane select is not a width converter.** The accelerator's input is
+24 bits: three channels of `ap_ufixed<8,0>`, byte-padded, which is what the
+input precision change bought (`docs/nn_accelerator/README.md`). Converting
+32 to 24 in general means two beats spanning three and a chunk rule — the old
+GOTCHAS #8. Instead the **image is stored 4 bytes per pixel**, R, G, B and a
+zero, so one pixel is one word, the beats are 1:1, and all that is needed is
+`tdata[23:0]`. The image also gets smaller: 4096 bytes against 6144.
+
+The dropped lane is watched rather than assumed. `cva5_axis_lane` counts
+beats whose pad byte was non-zero and publishes the count at
+`ACCEL_PADSEEN_OFF`, because a mis-packed image is the one mistake nothing
+downstream can detect — the colours shift and the classifier quietly gets
+worse. `examples/sw/accel.c` deliberately mis-packs an image to show the
+counter firing, since a detector that only ever reads zero is untested.
+
+**The DMA addresses memory by offset.** Its master bus is `RAM_ADDR_W+2`
+bits, like every slave port here and for the same reason, so it cannot
+express `0x8000_0000`. Software writes `ACCEL_RAM_OFF(p)`. Writing the
+pointer instead reads from offset zero — the trap handler — and returns a
+confident wrong answer.
+
+**Starting the DMA needs bit 31.** `aximm2s` begins a transfer on a
+`CMD_CONTROL` write with its busy bit set *and* the top byte strobe
+asserted. A plain `0` clears the flags and starts nothing, which looks
+exactly like a DMA that is not connected. `tb_accel` found this the hard way
+and `soc.h` says so at `DMA_START`.
+
+`ap_start` is a register bit cleared in hardware on `ap_ready`, which is what
+`ap_ctrl_hs` wants and what software should not have to time. GOTCHAS #4 —
+`axi_gpio`'s tri-state resetting to input so `ap_start` never asserts — stops
+being possible, because there is no GPIO.
+
+The accelerator is **optional in the build**. `pynq_z2_sys.tcl` includes it
+when `tools/nn_accel/.../ip` exists and says so when it does not; the SoC is
+complete without it. `cva5_accel_0/irq` is deliberately unconnected — wiring
+it would mean a third source on `cva5_irq_concat` and a wider PLIC, and
+software polls `ACCEL_STATUS` today.
+
 #### Holding the core while the PS writes
 
 A program loaded into a running core is a program loaded into a core executing
@@ -1512,6 +1579,8 @@ something.
 |-------|---------|--------|
 | crossbar | `test_benches/axi/run_xbar.sh` | 72 checks × 3 port-width configurations: decode to all five slaves, both masters to each, cross-contamination, address truncation per master port, window boundaries including the PLIC/UART abutment and the I2C's hole on both sides, DECERR, and the AR-to-R latency measured and printed |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
+| accelerator, end to end | `sh test_benches/axi/run_accel.sh` | 13 checks: software programs the DMA, the image streams out of a RAM model through the real `aximm2s` and the real lane select into a model accelerator, and the result is read back. Covers the handshake nobody can see on hardware — the result arrives as one beat with no address and no acknowledgement, so a stale or mistimed capture returns a plausible number. Also mis-packs an image and checks the pad counter reports it |
+| lane select | `sh test_benches/axi/run_axis_lane.sh` | 13 checks plus a strict `-Wall` lint of the module alone. Taking the high lanes instead of the low, ignoring back-pressure and dropping `tlast` are all caught by the lint; the pad counter is caught by the bench |
 | RAM tree | `sh test_benches/debug/run_ram_tree.sh` | 76 checks: three masters through the two `cva5_ram_mux` instances `cva5_wrapper` builds, onto the real `cva5_ram_port`. Routing with distinct addresses, data and IDs per master; the grant sequence read directly rather than inferred from who finished; nobody granted twice running while another asks; the contended writes still intact afterwards. It does **not** test arbitration — breaking `cva5_ram_mux`'s alternation passes all 76 of these and fails `run_ram_mux.sh` immediately, which is the division of labour and is checked, not assumed |
 | RAM mux | `sh test_benches/debug/run_ram_mux.sh` | 315 checks: two masters on the RAM port through the real `cva5_ram_port` — alternation as an invariant on every transaction, bursts holding the grant to RLAST, a continuous writer not starving the other port, and reset releasing it |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |

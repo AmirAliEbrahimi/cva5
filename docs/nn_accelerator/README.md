@@ -1,10 +1,12 @@
 # CNN accelerator for CVA5 on the PYNQ-Z2
 
-> **Status on this branch.** The Python toolchain is ported and the
-> accelerator's interface has changed; the driver and the block design have
-> not been ported yet and `make mif`, `make bitstream` and `make baseline`
-> fail with a message saying so. Read "Second iteration" below before
-> anything else here — the numbers in **Result** are from the first one.
+> **Status on this branch.** The toolchain, the RTL, the block design and a
+> driver are all in. `make bitstream` and `make baseline` still fail with a
+> message: the SoC is built from `examples/xilinx/pynq_z2_sys.tcl` now, which
+> picks the accelerator up automatically when its IP exists, and the
+> driver is `examples/sw/accel.c` rather than `bench.c`. Read "Second
+> iteration" below before anything else here — the numbers in **Result** are
+> from the first version, and the first version is not what this builds.
 
 ## Second iteration: where the 77% went
 
@@ -90,6 +92,33 @@ gives 91.75% against 93.00%. Same class pair, different weights. The
 quantization gap is what carries over between models — 0.2 points there, 1.25
 here — and comparing accuracy figures across the two would attribute a retrain
 to a precision change.
+
+### Building it
+
+```sh
+make -C tools/nn_accel ip          # train if needed, generate and export the IP
+make -C examples/sw ram            # the preload image
+```
+
+then, from the repo root in Vivado's Tcl console:
+
+```tcl
+source ./examples/xilinx/package_as_ip_pynq_z2.tcl
+source ./examples/xilinx/package_openhw_ips.tcl
+source ./examples/xilinx/pynq_z2_sys.tcl
+```
+
+`pynq_z2_sys.tcl` finds the accelerator IP at
+`tools/nn_accel/sw_14_5_rf4/cnn_prj/solution1/impl/ip` and includes it; set
+`ACCEL_IP_DIR` for another configuration, or `ACCEL 0` to leave it out. The
+SoC builds fine without it, which is the normal case for anyone working on
+the processor.
+
+Then Generate Bitstream, and on the board:
+
+```sh
+make -C examples/sw accel
+```
 
 **The measurement that gates all of it** is the stream width hls4ml actually
 reports. `sweep.py` now reads it back out of the generated

@@ -18,7 +18,8 @@ module tb_axi_xbar #(
     parameter int unsigned CLINT_AW = 32'd16,
     parameter int unsigned PLIC_AW  = 32'd26,
     parameter int unsigned SPI_AW   = 32'd12,
-    parameter int unsigned I2C_AW   = 32'd12
+    parameter int unsigned I2C_AW   = 32'd12,
+    parameter int unsigned ACCEL_AW = 32'd12
 );
 
     localparam logic [31:0] PERIPH_BASE = 32'h1000_0000;
@@ -26,6 +27,7 @@ module tb_axi_xbar #(
     localparam logic [31:0] PLIC_BASE   = 32'h0C00_0000;
     localparam logic [31:0] SPI_BASE    = 32'h2000_0000;
     localparam logic [31:0] I2C_BASE    = 32'h2800_0000;
+    localparam logic [31:0] ACCEL_BASE  = 32'h5000_0000;
     localparam logic [1:0]  RESP_OKAY   = 2'b00;
     localparam logic [1:0]  RESP_DECERR = 2'b11;
 
@@ -111,6 +113,15 @@ module tb_axi_xbar #(
     logic        i2c_rvalid, i2c_rready;
     logic [1:0]  i2c_bresp, i2c_rresp;
 
+    logic [ACCEL_AW-1:0] accel_awaddr, accel_araddr;
+    logic [2:0]  accel_awprot, accel_arprot;
+    logic        accel_awvalid, accel_awready, accel_wvalid, accel_wready;
+    logic [31:0] accel_wdata, accel_rdata;
+    logic [3:0]  accel_wstrb;
+    logic        accel_bvalid, accel_bready, accel_arvalid, accel_arready;
+    logic        accel_rvalid, accel_rready;
+    logic [1:0]  accel_bresp, accel_rresp;
+
     cva5_axi_xbar #(
         .PERIPH_BASE         (PERIPH_BASE),
         .PERIPH_SIZE         (32'h0001_0000),
@@ -126,7 +137,10 @@ module tb_axi_xbar #(
         .M_SPI_ADDR_WIDTH    (SPI_AW),
         .I2C_BASE            (I2C_BASE),
         .I2C_SIZE            (32'h0000_1000),
-        .M_I2C_ADDR_WIDTH    (I2C_AW)
+        .M_I2C_ADDR_WIDTH    (I2C_AW),
+        .ACCEL_BASE          (ACCEL_BASE),
+        .ACCEL_SIZE          (32'h0000_1000),
+        .M_ACCEL_ADDR_WIDTH  (ACCEL_AW)
     ) dut (
         .clk(clk), .rstn(rstn),
 
@@ -205,7 +219,18 @@ module tb_axi_xbar #(
         .m_axi_i2c_araddr(i2c_araddr), .m_axi_i2c_arprot(i2c_arprot),
         .m_axi_i2c_arvalid(i2c_arvalid), .m_axi_i2c_arready(i2c_arready),
         .m_axi_i2c_rdata(i2c_rdata), .m_axi_i2c_rresp(i2c_rresp),
-        .m_axi_i2c_rvalid(i2c_rvalid), .m_axi_i2c_rready(i2c_rready)
+        .m_axi_i2c_rvalid(i2c_rvalid), .m_axi_i2c_rready(i2c_rready),
+
+        .m_axi_accel_awaddr(accel_awaddr), .m_axi_accel_awprot(accel_awprot),
+        .m_axi_accel_awvalid(accel_awvalid), .m_axi_accel_awready(accel_awready),
+        .m_axi_accel_wdata(accel_wdata), .m_axi_accel_wstrb(accel_wstrb),
+        .m_axi_accel_wvalid(accel_wvalid), .m_axi_accel_wready(accel_wready),
+        .m_axi_accel_bresp(accel_bresp), .m_axi_accel_bvalid(accel_bvalid),
+        .m_axi_accel_bready(accel_bready),
+        .m_axi_accel_araddr(accel_araddr), .m_axi_accel_arprot(accel_arprot),
+        .m_axi_accel_arvalid(accel_arvalid), .m_axi_accel_arready(accel_arready),
+        .m_axi_accel_rdata(accel_rdata), .m_axi_accel_rresp(accel_rresp),
+        .m_axi_accel_rvalid(accel_rvalid), .m_axi_accel_rready(accel_rready)
     );
 
     //==================================================================
@@ -406,6 +431,45 @@ module tb_axi_xbar #(
         end
     end
 
+    logic [31:0] accel_regs [4];
+    logic [ACCEL_AW-1:0] aw2_addr;
+    logic aw2_have_addr = 0, aw2_have_data = 0;
+    logic [31:0] aw2_data;
+
+    assign accel_awready = !aw2_have_addr;
+    assign accel_wready  = !aw2_have_data;
+    assign accel_arready = !accel_rvalid;
+
+    always_ff @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            aw2_have_addr <= 0; aw2_have_data <= 0; accel_bvalid <= 0;
+        end else begin
+            if (accel_awvalid && accel_awready) begin
+                aw2_addr <= accel_awaddr; aw2_have_addr <= 1;
+            end
+            if (accel_wvalid && accel_wready) begin
+                aw2_data <= accel_wdata; aw2_have_data <= 1;
+            end
+            if (aw2_have_addr && aw2_have_data && !accel_bvalid) begin
+                accel_regs[aw2_addr[3:2]] <= aw2_data;
+                aw2_have_addr <= 0; aw2_have_data <= 0;
+                accel_bvalid <= 1; accel_bresp <= RESP_OKAY;
+            end
+            if (accel_bvalid && accel_bready) accel_bvalid <= 0;
+        end
+    end
+
+    always_ff @(posedge clk or negedge rstn) begin
+        if (!rstn) accel_rvalid <= 0;
+        else begin
+            if (accel_arvalid && accel_arready) begin
+                accel_rvalid <= 1;
+                accel_rdata  <= accel_regs[accel_araddr[3:2]];
+                accel_rresp  <= RESP_OKAY;
+            end else if (accel_rvalid && accel_rready) accel_rvalid <= 0;
+        end
+    end
+
     // What each master port last presented, latched at the handshake rather
     // than sampled afterwards: once the transaction has completed the port's
     // address and strobes are whatever the crossbar happens to leave driven.
@@ -581,6 +645,34 @@ module tb_axi_xbar #(
         expect_eq("...and not in the SPI", spi_regs[1], 32'h0);
         lite_read(PORT_CPU, I2C_BASE + 32'h4, rdata, resp);
         expect_eq("cpu read from the I2C", rdata, 32'h12C0_0001);
+
+        //The accelerator's control block, M5. Its window is not one of
+        //CVA6's, so nothing but this rule puts it on the bus.
+        lite_write(PORT_CPU, ACCEL_BASE + 32'h8, 32'hACCE_0001, resp);
+        expect_eq("cpu write to the accelerator resp", 32'(resp),
+                  32'(RESP_OKAY));
+        expect_eq("cpu write landed in the accelerator", accel_regs[2],
+                  32'hACCE_0001);
+        expect_eq("...and not in the I2C", i2c_regs[2], 32'h0);
+        lite_read(PORT_CPU, ACCEL_BASE + 32'h8, rdata, resp);
+        expect_eq("cpu read from the accelerator", rdata, 32'hACCE_0001);
+
+        //Both edges of its window, which is where an off-by-one rule lands.
+        lite_read(PORT_CPU, ACCEL_BASE - 32'h4, rdata, resp);
+        expect_eq("just below the accelerator decodes to nothing",
+                  32'(resp), 32'(RESP_DECERR));
+        lite_read(PORT_CPU, ACCEL_BASE + 32'h0000_1000, rdata, resp);
+        expect_eq("just above the accelerator decodes to nothing",
+                  32'(resp), 32'(RESP_DECERR));
+
+        //And the debugger reaches it too -- the PS loads a program, but it
+        //is OpenOCD that has to be able to poke the accelerator during
+        //bring-up, before any software runs.
+        lite_write(PORT_DBG, ACCEL_BASE + 32'hC, 32'h0D0B_ACC1, resp);
+        expect_eq("dbg write to the accelerator resp", 32'(resp),
+                  32'(RESP_OKAY));
+        lite_read(PORT_DBG, ACCEL_BASE + 32'hC, rdata, resp);
+        expect_eq("dbg read from the accelerator", rdata, 32'h0D0B_ACC1);
 
         //--- the debugger reaches both slaves
         $display("-- debugger port");

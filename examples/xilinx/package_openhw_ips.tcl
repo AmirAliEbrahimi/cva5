@@ -133,6 +133,13 @@ dict set openhw_ips cva5_i2c_axi {
 # Two scalar interrupt lines into the vector the PLIC takes, because a block
 # design cannot attach two nets to two bits of one pin. Ours rather than
 # xlconnect/xlconcat, which are Xilinx IPs. No clock, no bus, one assignment.
+dict set openhw_ips cva5_accel_axi {
+    third_party/wb2axip/rtl/skidbuffer.v
+    third_party/wb2axip/rtl/sfifo.v
+    third_party/wb2axip/rtl/aximm2s.v
+    examples/xilinx/axi/cva5_axis_lane.sv
+    examples/xilinx/axi/cva5_accel_axi.sv
+}
 dict set openhw_ips cva5_irq_concat {
     examples/xilinx/axi/cva5_irq_concat.sv
 }
@@ -189,6 +196,7 @@ dict set openhw_busifs cva5_clint_axi {s_axi}
 dict set openhw_busifs cva5_plic_axi {s_axi}
 dict set openhw_busifs cva5_spi_axi {s_axi}
 dict set openhw_busifs cva5_i2c_axi {s_axi}
+dict set openhw_busifs cva5_accel_axi {s_axi m_axi m_axis s_axis}
 dict set openhw_busifs cva5_irq_concat {}
 
 # One sentence per IP for the Vivado catalog, which is also what answers
@@ -200,6 +208,7 @@ dict set openhw_descs cva5_clint_axi {RISC-V core-local interruptor: mtime, mtim
 dict set openhw_descs cva5_plic_axi {RISC-V platform-level interrupt controller, aggregating device interrupts into the hart's single external interrupt}
 dict set openhw_descs cva5_spi_axi {SPI master (pulp-platform axi_spi_master) with four chip selects and a programmable clock divider, in place of axi_quad_spi}
 dict set openhw_descs cva5_i2c_axi {I2C master (Alex Forencich verilog-i2c) with command, write and read FIFOs and a runtime prescaler, on open-drain pins}
+dict set openhw_descs cva5_accel_axi {hls4ml accelerator attachment: a DMA (ZipCPU aximm2s) reading main memory into the accelerator's stream, a lane select onto its 24-bit port, and ap_ctrl plus the result in registers, in place of axi_fifo_mm_s, axis_dwidth_converter, axi_gpio, xlconcat and xlconstant}
 dict set openhw_descs cva5_irq_concat {Two device interrupt lines into one vector for cva5_plic_axi, in place of xlconcat}
 dict set openhw_descs cva5_axi_ram {AXI4 block-RAM slave (ZipCPU demofull); simulation only, not packaged}
 

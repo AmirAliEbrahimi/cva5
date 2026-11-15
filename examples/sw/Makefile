@@ -54,6 +54,7 @@ CSRS_SRCS := crt0.S trap.S csrs.c puts.c
 PLIC_SRCS := crt0.S trap.S plic.c puts.c
 SPI_SRCS  := crt0.S trap.S spi.c puts.c
 I2C_SRCS  := crt0.S trap.S i2c.c puts.c
+ACCEL_SRCS:= crt0.S trap.S accel.c puts.c
 # Headers, as prerequisites. soc.h carries the memory map and the PLIC source
 # numbers, so an image built against a stale copy of it talks to the wrong
 # address or attributes an interrupt to the wrong device -- and nothing about
@@ -107,7 +108,7 @@ endif
 OPENOCD     ?= openocd
 OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 
-.PHONY: all program ram app load memtest timer csrs run-csrs plic spi sim run clean lint lint-full clean-cva5-sim ps-image
+.PHONY: all program ram app load memtest timer csrs run-csrs plic spi accel sim run clean lint lint-full clean-cva5-sim ps-image
 all: program
 program: program.hex
 
@@ -223,6 +224,20 @@ i2c: i2c.tcl
 	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
 	           -f i2c.tcl -c "init; load_program; shutdown"
 
+# The accelerator on hardware. Needs a bitstream built with the hls4ml IP in
+# it -- see docs/nn_accelerator. Without one the control window decodes to
+# nothing and the first status read returns a decode error rather than a
+# wrong answer, which is the failure worth having.
+accel.elf: $(ACCEL_SRCS) $(HDRS) $(APP_LDSCRIPT)
+	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(ACCEL_SRCS) -lgcc -o $@
+
+accel.tcl: accel.elf
+	python3 $(ELF2TCL) $(CROSS) $(APP_BASE) $< $@
+
+accel: accel.tcl
+	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
+	           -f accel.tcl -c "init; load_program; shutdown"
+
 # The same test in the Verilator core sim, which is the only place the core's
 # CSR behaviour can be checked without a bitstream -- and the only place both
 # polarities of INCLUDE_TIME_CSR can be run, since the sim takes upstream's
@@ -265,6 +280,7 @@ clean:
 	      timer.elf timer.tcl \
 	      csrs.elf csrs.tcl csrs_sim.elf csrs.hex csrs.sim csrs_log.txt csrs_sig.txt csrs_trace.fst \
 	      plic.elf plic.tcl spi.elf spi.tcl i2c.elf i2c.tcl \
+	      accel.elf accel.tcl \
 	      main.elf.rawbinary main.elf.dissasembled \
 	      idle.elf.rawbinary idle.elf.dissasembled \
 		  trace.fst.hier \
