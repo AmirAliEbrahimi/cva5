@@ -456,6 +456,47 @@ demonstrated that nothing here comes close to needing it. `tb_mbox.c` is where
 that behaviour is actually checked, by overfilling the ring deliberately and
 by deleting the drop branch to confirm the check catches it.
 
+#### S2 is the accelerator — a tree, not a 3:1 mux
+
+The accelerator's DMA is a third master on main memory, and `cva5_ram_mux` is
+2:1. Rather than widen it, `cva5_wrapper` instantiates it **twice**:
+
+```
+PS       -> s0 \
+                 inner mux -> s1 \
+DMA      -> s1 /                   outer mux -> cva5_ram_port -> RAM
+debugger ----------------------> s0 /
+```
+
+`cva5_ram_mux.sv` is unchanged by this. Widening it to three masters would
+mean a two-bit owner, a rotating priority pointer and a triplicated response
+fan-out through every line of a module that is passing 315 checks at two ID
+widths and running on the board. The tree costs one more level of
+combinational mux on the path to the RAM, and nothing else.
+
+Fairness becomes hierarchical rather than flat: with all three asking, the
+debugger takes half and the PS and the DMA a quarter each. That suits what
+they are. The debugger is JTAG-paced and idle whenever nobody is attached,
+and with it quiet the outer mux grants the inner one every time, so the PS
+and the DMA alternate evenly — which is the case that actually runs. Nothing
+starves at either level, because each mux holds its grant only to the end of
+one transaction.
+
+`cva5_top` therefore carries **two** external slave ports, `s_axi_ext` for
+the PS and `s_axi_acc` for the DMA, identical in every respect. Two ports
+rather than one shared outside: arbitration inside `cva5_top` is arbitration
+`cva5_ram_mux` already implements and `test_benches/debug` already covers,
+whereas joining them in the block design would put half of it where nothing
+checks it.
+
+`tb_ram_tree` tests the composition and deliberately not the arbitration —
+see the test table. One thing it found about itself is worth repeating here:
+**withdrawing valids while a mux holds a grant strands it.** Its owner's `AW`
+never completes, no response ever returns, and the port is held for good. The
+bench hit this at both levels at once and now abandons the phase with a reset
+instead, with every port idled *before* reset releases — a request standing
+at that edge is granted on it.
+
 #### Holding the core while the PS writes
 
 A program loaded into a running core is a program loaded into a core executing
@@ -1471,6 +1512,7 @@ something.
 |-------|---------|--------|
 | crossbar | `test_benches/axi/run_xbar.sh` | 72 checks × 3 port-width configurations: decode to all five slaves, both masters to each, cross-contamination, address truncation per master port, window boundaries including the PLIC/UART abutment and the I2C's hole on both sides, DECERR, and the AR-to-R latency measured and printed |
 | RAM port | `sh test_benches/debug/run_ram_port.sh` | 1110 checks: core-versus-bus arbitration against the real `tdp_ram` |
+| RAM tree | `sh test_benches/debug/run_ram_tree.sh` | 76 checks: three masters through the two `cva5_ram_mux` instances `cva5_wrapper` builds, onto the real `cva5_ram_port`. Routing with distinct addresses, data and IDs per master; the grant sequence read directly rather than inferred from who finished; nobody granted twice running while another asks; the contended writes still intact afterwards. It does **not** test arbitration — breaking `cva5_ram_mux`'s alternation passes all 76 of these and fails `run_ram_mux.sh` immediately, which is the division of labour and is checked, not assumed |
 | RAM mux | `sh test_benches/debug/run_ram_mux.sh` | 315 checks: two masters on the RAM port through the real `cva5_ram_port` — alternation as an invariant on every transaction, bursts holding the grant to RLAST, a continuous writer not starving the other port, and reset releasing it |
 | boot ROM | `sh test_benches/debug/run_boot_rom.sh` | decodes the lui/jalr pair and recomputes its target for six entry addresses |
 | UART | `test_benches/axi/run_uart.sh` | loopback: adapter, both FIFOs, frame shape, bit period, status bits |

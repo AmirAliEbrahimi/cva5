@@ -107,14 +107,15 @@ ipx::update_source_project_archive -component [ipx::current_core]
 # so every other one has to say which clock drives it explicitly. Without this
 # the interface still works; it just reports no clock domain, which makes the
 # block design's propagation unable to check it.
-foreach busif {m_axi_dbg s_axi_ext} {
+foreach busif {m_axi_dbg s_axi_ext s_axi_acc} {
     ipx::associate_bus_interfaces -busif $busif -clock clk [ipx::current_core]
 }
 
 set cva5_desc "CVA5 RV32IM soft processor: the core, its JTAG debug module and"
 append cva5_desc " its local memory, an AXI4-Lite master for peripherals, a"
 append cva5_desc " second for the debugger's system bus, and an AXI4 slave"
-append cva5_desc " into main memory for a PS or a DMA"
+append cva5_desc " into main memory for a PS, and a second for an"
+append cva5_desc " accelerator's DMA"
 cva5_ip_metadata $cva5_desc 100000000
 
 ipx::create_xgui_files [ipx::current_core]

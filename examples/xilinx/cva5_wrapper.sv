@@ -160,6 +160,44 @@ module cva5_wrapper
         output logic                   s_axi_ext_rvalid,
         input  logic                   s_axi_ext_rready,
 
+        //A second external AXI4 slave into main memory, for the accelerator's
+        //DMA. Identical to s_axi_ext above in every respect; the two differ
+        //only in who drives them and in where they sit in the arbitration.
+        //
+        //Two ports rather than one shared externally: arbitration that lives
+        //inside cva5_top is arbitration cva5_ram_mux already implements and
+        //test_benches/debug covers. Joining the PS and the DMA outside would
+        //put half of it in the block design, where nothing checks it.
+        input  logic [RAM_ID_W-1:0]    s_axi_acc_awid,
+        input  logic [RAM_ADDR_W+1:0]  s_axi_acc_awaddr,
+        input  logic [7:0]             s_axi_acc_awlen,
+        input  logic [2:0]             s_axi_acc_awsize,
+        input  logic [1:0]             s_axi_acc_awburst,
+        input  logic                   s_axi_acc_awvalid,
+        output logic                   s_axi_acc_awready,
+        input  logic [31:0]            s_axi_acc_wdata,
+        input  logic [3:0]             s_axi_acc_wstrb,
+        input  logic                   s_axi_acc_wlast,
+        input  logic                   s_axi_acc_wvalid,
+        output logic                   s_axi_acc_wready,
+        output logic [RAM_ID_W-1:0]    s_axi_acc_bid,
+        output logic [1:0]             s_axi_acc_bresp,
+        output logic                   s_axi_acc_bvalid,
+        input  logic                   s_axi_acc_bready,
+        input  logic [RAM_ID_W-1:0]    s_axi_acc_arid,
+        input  logic [RAM_ADDR_W+1:0]  s_axi_acc_araddr,
+        input  logic [7:0]             s_axi_acc_arlen,
+        input  logic [2:0]             s_axi_acc_arsize,
+        input  logic [1:0]             s_axi_acc_arburst,
+        input  logic                   s_axi_acc_arvalid,
+        output logic                   s_axi_acc_arready,
+        output logic [RAM_ID_W-1:0]    s_axi_acc_rid,
+        output logic [31:0]            s_axi_acc_rdata,
+        output logic [1:0]             s_axi_acc_rresp,
+        output logic                   s_axi_acc_rlast,
+        output logic                   s_axi_acc_rvalid,
+        input  logic                   s_axi_acc_rready,
+
         //External JTAG. Tied off on the board, where the DTM sits on the FPGA's
         //own TAP (BSCANE2) and ignores these; driven by the simulation harness,
         //which builds riscv-dbg's dmi_jtag_tap instead.
@@ -733,6 +771,156 @@ module cva5_wrapper
     //or on cpu_halt, for the same reason cva5_sba_split's select register
     //must not. A master holding the core and then writing memory is the
     //normal case, not an edge case. See the header of cva5_ram_mux.sv.
+    //The inner mux's master port -- the PS and the accelerator already
+    //arbitrated, presented to the outer mux as a single master.
+    //Widths are cva5_ram_mux's own; nothing here reshapes anything.
+    logic [RAM_ID_W-1:0] mid_awid;
+    logic [RAM_ADDR_W+1:0] mid_awaddr;
+    logic [7:0] mid_awlen;
+    logic [2:0] mid_awsize;
+    logic [1:0] mid_awburst;
+    logic mid_awvalid;
+    logic mid_awready;
+    logic [31:0] mid_wdata;
+    logic [3:0] mid_wstrb;
+    logic mid_wlast;
+    logic mid_wvalid;
+    logic mid_wready;
+    logic [RAM_ID_W-1:0] mid_bid;
+    logic [1:0] mid_bresp;
+    logic mid_bvalid;
+    logic mid_bready;
+    logic [RAM_ID_W-1:0] mid_arid;
+    logic [RAM_ADDR_W+1:0] mid_araddr;
+    logic [7:0] mid_arlen;
+    logic [2:0] mid_arsize;
+    logic [1:0] mid_arburst;
+    logic mid_arvalid;
+    logic mid_arready;
+    logic [RAM_ID_W-1:0] mid_rid;
+    logic [31:0] mid_rdata;
+    logic [1:0] mid_rresp;
+    logic mid_rlast;
+    logic mid_rvalid;
+    logic mid_rready;
+
+    //---- The inner mux: the PS against the accelerator's DMA --------------
+    //
+    //Two 2:1 muxes in a tree rather than one 3:1. cva5_ram_mux is unchanged
+    //by this patch: it is the module that passes 315 checks at two ID widths
+    //and that runs on the board, and widening it to three masters would mean
+    //a two-bit owner, a rotating priority pointer and a triplicated response
+    //fan-out through every line of it.
+    //
+    //What the tree costs is one more level of combinational mux on the path
+    //to the RAM, and a fairness that is hierarchical rather than flat: under
+    //full contention from all three, the debugger takes half and the PS and
+    //the DMA a quarter each. That suits what they are. The debugger is
+    //JTAG-paced and idle whenever nobody is attached, and with it quiet the
+    //outer mux grants this one every time, so the PS and the DMA alternate
+    //evenly -- which is the case that matters. Nothing starves either way:
+    //each mux holds its grant only to the end of one transaction.
+    //
+    //S0 is the PS and S1 the DMA, so a tie between them goes to whoever did
+    //not go last, the same rule as the outer mux.
+    cva5_ram_mux #(
+        .ADDR_WIDTH (RAM_ADDR_W),
+        .ID_WIDTH (RAM_ID_W)
+    ) ram_mux_acc (
+        .clk (clk),
+        .rstn (ram_rstn),
+
+        .s0_awid (s_axi_ext_awid),
+        .s0_awaddr (s_axi_ext_awaddr),
+        .s0_awlen (s_axi_ext_awlen),
+        .s0_awsize (s_axi_ext_awsize),
+        .s0_awburst (s_axi_ext_awburst),
+        .s0_awvalid (s_axi_ext_awvalid),
+        .s0_awready (s_axi_ext_awready),
+        .s0_wdata (s_axi_ext_wdata),
+        .s0_wstrb (s_axi_ext_wstrb),
+        .s0_wlast (s_axi_ext_wlast),
+        .s0_wvalid (s_axi_ext_wvalid),
+        .s0_wready (s_axi_ext_wready),
+        .s0_bid (s_axi_ext_bid),
+        .s0_bresp (s_axi_ext_bresp),
+        .s0_bvalid (s_axi_ext_bvalid),
+        .s0_bready (s_axi_ext_bready),
+        .s0_arid (s_axi_ext_arid),
+        .s0_araddr (s_axi_ext_araddr),
+        .s0_arlen (s_axi_ext_arlen),
+        .s0_arsize (s_axi_ext_arsize),
+        .s0_arburst (s_axi_ext_arburst),
+        .s0_arvalid (s_axi_ext_arvalid),
+        .s0_arready (s_axi_ext_arready),
+        .s0_rid (s_axi_ext_rid),
+        .s0_rdata (s_axi_ext_rdata),
+        .s0_rresp (s_axi_ext_rresp),
+        .s0_rlast (s_axi_ext_rlast),
+        .s0_rvalid (s_axi_ext_rvalid),
+        .s0_rready (s_axi_ext_rready),
+
+        .s1_awid (s_axi_acc_awid),
+        .s1_awaddr (s_axi_acc_awaddr),
+        .s1_awlen (s_axi_acc_awlen),
+        .s1_awsize (s_axi_acc_awsize),
+        .s1_awburst (s_axi_acc_awburst),
+        .s1_awvalid (s_axi_acc_awvalid),
+        .s1_awready (s_axi_acc_awready),
+        .s1_wdata (s_axi_acc_wdata),
+        .s1_wstrb (s_axi_acc_wstrb),
+        .s1_wlast (s_axi_acc_wlast),
+        .s1_wvalid (s_axi_acc_wvalid),
+        .s1_wready (s_axi_acc_wready),
+        .s1_bid (s_axi_acc_bid),
+        .s1_bresp (s_axi_acc_bresp),
+        .s1_bvalid (s_axi_acc_bvalid),
+        .s1_bready (s_axi_acc_bready),
+        .s1_arid (s_axi_acc_arid),
+        .s1_araddr (s_axi_acc_araddr),
+        .s1_arlen (s_axi_acc_arlen),
+        .s1_arsize (s_axi_acc_arsize),
+        .s1_arburst (s_axi_acc_arburst),
+        .s1_arvalid (s_axi_acc_arvalid),
+        .s1_arready (s_axi_acc_arready),
+        .s1_rid (s_axi_acc_rid),
+        .s1_rdata (s_axi_acc_rdata),
+        .s1_rresp (s_axi_acc_rresp),
+        .s1_rlast (s_axi_acc_rlast),
+        .s1_rvalid (s_axi_acc_rvalid),
+        .s1_rready (s_axi_acc_rready),
+
+        .m_awid (mid_awid),
+        .m_awaddr (mid_awaddr),
+        .m_awlen (mid_awlen),
+        .m_awsize (mid_awsize),
+        .m_awburst (mid_awburst),
+        .m_awvalid (mid_awvalid),
+        .m_awready (mid_awready),
+        .m_wdata (mid_wdata),
+        .m_wstrb (mid_wstrb),
+        .m_wlast (mid_wlast),
+        .m_wvalid (mid_wvalid),
+        .m_wready (mid_wready),
+        .m_bid (mid_bid),
+        .m_bresp (mid_bresp),
+        .m_bvalid (mid_bvalid),
+        .m_bready (mid_bready),
+        .m_arid (mid_arid),
+        .m_araddr (mid_araddr),
+        .m_arlen (mid_arlen),
+        .m_arsize (mid_arsize),
+        .m_arburst (mid_arburst),
+        .m_arvalid (mid_arvalid),
+        .m_arready (mid_arready),
+        .m_rid (mid_rid),
+        .m_rdata (mid_rdata),
+        .m_rresp (mid_rresp),
+        .m_rlast (mid_rlast),
+        .m_rvalid (mid_rvalid),
+        .m_rready (mid_rready)
+    );
+
     cva5_ram_mux #(
         .ADDR_WIDTH (RAM_ADDR_W),
         .ID_WIDTH (RAM_ID_W)
@@ -770,35 +958,35 @@ module cva5_wrapper
         .s0_rvalid (dbg_rvalid),
         .s0_rready (dbg_rready),
 
-        .s1_awid (s_axi_ext_awid),
-        .s1_awaddr (s_axi_ext_awaddr),
-        .s1_awlen (s_axi_ext_awlen),
-        .s1_awsize (s_axi_ext_awsize),
-        .s1_awburst (s_axi_ext_awburst),
-        .s1_awvalid (s_axi_ext_awvalid),
-        .s1_awready (s_axi_ext_awready),
-        .s1_wdata (s_axi_ext_wdata),
-        .s1_wstrb (s_axi_ext_wstrb),
-        .s1_wlast (s_axi_ext_wlast),
-        .s1_wvalid (s_axi_ext_wvalid),
-        .s1_wready (s_axi_ext_wready),
-        .s1_bid (s_axi_ext_bid),
-        .s1_bresp (s_axi_ext_bresp),
-        .s1_bvalid (s_axi_ext_bvalid),
-        .s1_bready (s_axi_ext_bready),
-        .s1_arid (s_axi_ext_arid),
-        .s1_araddr (s_axi_ext_araddr),
-        .s1_arlen (s_axi_ext_arlen),
-        .s1_arsize (s_axi_ext_arsize),
-        .s1_arburst (s_axi_ext_arburst),
-        .s1_arvalid (s_axi_ext_arvalid),
-        .s1_arready (s_axi_ext_arready),
-        .s1_rid (s_axi_ext_rid),
-        .s1_rdata (s_axi_ext_rdata),
-        .s1_rresp (s_axi_ext_rresp),
-        .s1_rlast (s_axi_ext_rlast),
-        .s1_rvalid (s_axi_ext_rvalid),
-        .s1_rready (s_axi_ext_rready),
+        .s1_awid (mid_awid),
+        .s1_awaddr (mid_awaddr),
+        .s1_awlen (mid_awlen),
+        .s1_awsize (mid_awsize),
+        .s1_awburst (mid_awburst),
+        .s1_awvalid (mid_awvalid),
+        .s1_awready (mid_awready),
+        .s1_wdata (mid_wdata),
+        .s1_wstrb (mid_wstrb),
+        .s1_wlast (mid_wlast),
+        .s1_wvalid (mid_wvalid),
+        .s1_wready (mid_wready),
+        .s1_bid (mid_bid),
+        .s1_bresp (mid_bresp),
+        .s1_bvalid (mid_bvalid),
+        .s1_bready (mid_bready),
+        .s1_arid (mid_arid),
+        .s1_araddr (mid_araddr),
+        .s1_arlen (mid_arlen),
+        .s1_arsize (mid_arsize),
+        .s1_arburst (mid_arburst),
+        .s1_arvalid (mid_arvalid),
+        .s1_arready (mid_arready),
+        .s1_rid (mid_rid),
+        .s1_rdata (mid_rdata),
+        .s1_rresp (mid_rresp),
+        .s1_rlast (mid_rlast),
+        .s1_rvalid (mid_rvalid),
+        .s1_rready (mid_rready),
 
         .m_awid (rp_awid),
         .m_awaddr (rp_awaddr),
