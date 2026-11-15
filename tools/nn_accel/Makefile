@@ -107,18 +107,18 @@ all: mif bitstream
 # cleanup targets deliberately use the system interpreter, not $(PY), so they
 # still work when the venv is broken.
 $(STAMP): requirements.txt
-	@echo [nn] creating $(VENV)
+	@echo "[nn] creating $(VENV)"
 	$(VENVPY) -m venv $(VENV)
 	$(PIP) install --quiet --upgrade pip
 	$(PIP) install --quiet -r requirements.txt
 	@$(PY) -c "open(r'$(STAMP)','w').close()"
-	@echo [nn] $(VENV) ready
+	@echo "[nn] $(VENV) ready"
 
 venv: $(STAMP)
 
 # --- 1. train --------------------------------------------------------------
 $(MODEL): $(STAMP) train.py
-	@echo [nn] training classes $(CLASS_A) vs $(CLASS_B)
+	@echo "[nn] training classes $(CLASS_A) vs $(CLASS_B)"
 	$(PY) train.py --classes $(CLASS_A) $(CLASS_B) --out $(MODEL)
 
 train: $(MODEL)
@@ -157,8 +157,8 @@ $(IPDIR)/.config: FORCE
 	    echo "$(CONFIG_SIG)" > $@; }
 
 $(IPDIR)/cnn_prj/solution1/impl/ip/component.xml: $(MODEL) sweep.py $(IPDIR)/.config
-	@echo [nn] generating HLS project, precision $(PRECISION) reuse $(RF)
-	@echo [nn] input precision $(INPUT_PRECISION)
+	@echo "[nn] generating HLS project, precision $(PRECISION) reuse $(RF)"
+	@echo "[nn] input precision $(INPUT_PRECISION)"
 	$(PY) sweep.py generate --model $(MODEL) --precision "$(PRECISION)" \
 	    --rf $(RF) --input-precision "$(INPUT_PRECISION)"
 	@echo [nn] synthesising and exporting IP, a few minutes
