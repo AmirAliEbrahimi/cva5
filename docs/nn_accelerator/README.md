@@ -56,6 +56,41 @@ What is removed from the block design along the way: `axi_fifo_mm_s`,
 the DMA, the lane select, an AXI4-Lite control block of ours, and
 `cva5_irq_concat`, which already exists.
 
+### What the input change cost: nothing
+
+Measured on one model in one sitting, `evaluate.py` with and without
+`--legacy-input`, which reverts both halves — no `LayerName` override and
+`v/255` instead of `v/256`:
+
+| precision | legacy | 24-bit input |
+|---|---|---|
+| float | 93.00% | 92.90% |
+| `ap_fixed<8,5>` | 52.70% | 52.15% |
+| `ap_fixed<10,5>` | 58.20% | 56.70% |
+| `ap_fixed<12,5>` | 85.80% | 85.50% |
+| **`ap_fixed<14,5>`** | **91.75%** | **91.80%** |
+| `ap_fixed<16,5>` | 92.60% | 92.60% |
+
+At the operating point the 24-bit input is 0.05 points *ahead*, and on 2000
+test samples one image is 0.05 points — so that is one image, which is to say
+nothing. At `<16,5>` the two are identical.
+
+The rows below 12 bits move by a point in both directions, but they sit at
+52–58% on a 93% task: broken either way, and the ordering between two broken
+configurations is not a measurement.
+
+Two things this rules out. The 8-bit input is not a precision loss — it has
+*more* fractional bits than `ap_fixed<10,5>` gives the input, and the source
+is 8-bit data to begin with. And the `v/256` convention is not a distortion
+worth correcting: the float column moves by 0.10 points, which is two images.
+
+**The model is not the one the table below was written against.** That one
+records 95.9% against a 96.1% float reference; legacy on *this* `model_6_8.pt`
+gives 91.75% against 93.00%. Same class pair, different weights. The
+quantization gap is what carries over between models — 0.2 points there, 1.25
+here — and comparing accuracy figures across the two would attribute a retrain
+to a precision change.
+
 **The measurement that gates all of it** is the stream width hls4ml actually
 reports. `sweep.py` now reads it back out of the generated
 `firmware/defines.h` and refuses to continue if the input override did not
@@ -204,8 +239,8 @@ transfer using a dedicated DMA. Same phenomenon, different operating point.
 | DSP / LUT / FF / BRAM18 | 115 / 30,312 / 17,967 / 35 |
 | Occupancy with CVA5 | 63% LUT, 52% DSP |
 | Timing | WNS +0.139 ns at 100 MHz |
-| Accuracy | 95.9% (float reference 96.1%) |
-| Interface | 48-bit AXI-Stream in, 32-bit out |
+| Accuracy | 95.9% (float reference 96.1%) — **an earlier `model_6_8.pt`**; see above |
+| Interface | ~~48-bit~~ **24-bit** AXI-Stream in, 32-bit out |
 
 CVA5 alone measures 3,020 LUT / 4 DSP post-implementation.
 
