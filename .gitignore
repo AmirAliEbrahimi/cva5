@@ -17,3 +17,5 @@ examples/sw/*_log.txt
 examples/sw/signature.txt
 examples/sw/*.fst
 examples/sw/*.fst.hier
+__pycache__/
+*.pyc

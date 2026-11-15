@@ -1,0 +1,7 @@
+# Pinned: hls4ml 1.3.0 is what every result here was produced with, and its
+# generated C++ is sensitive to both its own version and the Vitis HLS version.
+hls4ml==1.3.0
+torch
+torchvision
+numpy
+onnx
