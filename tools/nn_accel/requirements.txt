@@ -1,6 +1,21 @@
 # Pinned: hls4ml 1.3.0 is what every result here was produced with, and its
 # generated C++ is sensitive to both its own version and the Vitis HLS version.
 hls4ml==1.3.0
+
+# quantizers is hls4ml's own dependency and hls4ml 1.3.0 does not pin it --
+# its pyproject.toml says only "quantizers". Version 2.0.0, released
+# 2026-11-03, removed get_fixed_quantizer_np, so a venv built after that date
+# dies on import:
+#
+#   File ".../hls4ml/converters/keras_v3/hgq2/unary_lut.py", line 5
+#     from quantizers import get_fixed_quantizer_np
+#   ImportError: cannot import name 'get_fixed_quantizer_np' from 'quantizers'
+#
+# It fails whatever model you are converting: hls4ml/converters/__init__.py
+# imports the keras_v3 path unconditionally, so a PyTorch-only flow still
+# walks through it. The symbol is present through 1.2.2post1 and absent in
+# 2.0.0, with nothing in between.
+quantizers<2
 torch
 torchvision
 numpy
