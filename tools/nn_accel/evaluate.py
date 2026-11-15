@@ -56,6 +56,15 @@ class SmallCNN(nn.Module):
         return self.fc(self.fl(x))
 
 
+# Set from the command line by main(). "legacy" restores the behaviour from
+# before the 24-bit input port: no per-layer override, and v/255 rather than
+# v/256. It exists so the two can be compared on one model in one sitting --
+# the alternative is reading two runs taken at different times against
+# possibly different weights, which is how a model change gets mistaken for a
+# precision change.
+LEGACY_INPUT = False
+
+
 def load_test(a, b, limit=2000):
     ds = torchvision.datasets.CIFAR10(root="./data", train=False,
                                       download=True,
@@ -72,7 +81,8 @@ def load_test(a, b, limit=2000):
     # exported weights and the hls4ml model out of step. It is a uniform
     # 0.4% scale on the input and the accuracy column below is where it
     # shows up or does not.
-    X *= 255.0 / 256.0
+    if not LEGACY_INPUT:
+        X *= 255.0 / 256.0
 
     y = np.array([0 if t[i] == a else 1 for i in idx])
     return np.ascontiguousarray(X), y
@@ -179,11 +189,18 @@ def _emulate(state, total, integer, images_nchw):
 
 
 def main():
-    if len(sys.argv) < 4:
+    global LEGACY_INPUT
+    argv = [v for v in sys.argv[1:] if v != "--legacy-input"]
+    LEGACY_INPUT = len(argv) != len(sys.argv) - 1
+    if len(argv) < 3:
         print(__doc__)
         return
-    path, a, b = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+    path, a, b = argv[0], int(argv[1]), int(argv[2])
+
+    inp = ("ap_fixed<N,I> (the model default), v/255" if LEGACY_INPUT
+           else "ap_ufixed<8,0>, v/256")
     print(f"Model: {path}   Task: {NAMES[a]} vs {NAMES[b]}")
+    print(f"Input: {inp}")
 
     model = SmallCNN()
     model.load_state_dict(torch.load(path, map_location="cpu"))
@@ -240,8 +257,9 @@ def main():
         # first and falls through to Model for everything else -- so this
         # changes the input and nothing more. See sweep.py for why the input
         # is the one precision that is free to change.
-        cfg.setdefault('LayerName', {})['x'] = {
-            'Precision': {'result': 'ap_ufixed<8,0>'}}
+        if not LEGACY_INPUT:
+            cfg.setdefault('LayerName', {})['x'] = {
+                'Precision': {'result': 'ap_ufixed<8,0>'}}
         try:
             hm = hls4ml.converters.convert_from_pytorch_model(
                 model, output_dir="p_" + "_".join(re.findall(r"\d+", precision)),
