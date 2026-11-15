@@ -54,6 +54,12 @@ MODEL     := model_$(CLASS_A)_$(CLASS_B).pt
 # into underscores: ap_fixed<14,5> at RF 4 -> sw_14_5_rf4
 IPDIR     := sw_$(subst $(comma),_,$(PRECISION))_rf$(RF)
 
+# The input layer's precision, which sweep.py applies to layer "x" alone and
+# which decides the width of the accelerator's AXI-Stream port. It is NOT in
+# IPDIR above, so two values of it share one directory -- see .config below
+# for what keeps that honest.
+INPUT_PRECISION ?= ap_ufixed<8,0>
+
 # --- python ----------------------------------------------------------------
 # A venv keeps the pinned hls4ml away from the system interpreter. hls4ml's
 # generated C++ is sensitive to its own version and to the Vitis HLS version,
@@ -125,9 +131,36 @@ precision: $(MODEL)
 	$(PY) evaluate.py $(MODEL) $(CLASS_A) $(CLASS_B)
 
 # --- 3. accelerator IP -----------------------------------------------------
-$(IPDIR)/cnn_prj/solution1/impl/ip/component.xml: $(MODEL) sweep.py
+# A stamp holding the configuration this directory was built with, rewritten
+# only when it changes, so the IP rebuilds when any of PRECISION, RF or
+# INPUT_PRECISION moves and not otherwise.
+#
+# Without it, changing INPUT_PRECISION leaves IPDIR the same and make reports
+# "Nothing to be done for 'ip'" over an IP built for the old width. That
+# happened: the 48-bit IP sat in sw_14_5_rf4 while the config asked for 24,
+# and sweep.py's check_input_type -- which exists precisely to catch a
+# mismatch -- never ran, because make skipped the recipe that calls it. A
+# check in a recipe is worth nothing if the recipe does not run.
+#
+# PRECISION and RF are in the directory name and so cannot go stale this way;
+# INPUT_PRECISION is here instead of in the name so that switching it does
+# not orphan an existing build directory.
+CONFIG_SIG := $(PRECISION) rf$(RF) in=$(INPUT_PRECISION)
+
+.PHONY: FORCE
+FORCE:
+
+$(IPDIR)/.config: FORCE
+	@mkdir -p $(dir $@)
+	@[ "$$(cat $@ 2>/dev/null)" = "$(CONFIG_SIG)" ] || { \
+	    echo "[nn] config changed -> $(CONFIG_SIG)"; \
+	    echo "$(CONFIG_SIG)" > $@; }
+
+$(IPDIR)/cnn_prj/solution1/impl/ip/component.xml: $(MODEL) sweep.py $(IPDIR)/.config
 	@echo [nn] generating HLS project, precision $(PRECISION) reuse $(RF)
-	$(PY) sweep.py generate --model $(MODEL) --precision "$(PRECISION)" --rf $(RF)
+	@echo [nn] input precision $(INPUT_PRECISION)
+	$(PY) sweep.py generate --model $(MODEL) --precision "$(PRECISION)" \
+	    --rf $(RF) --input-precision "$(INPUT_PRECISION)"
 	@echo [nn] synthesising and exporting IP, a few minutes
 	cd $(IPDIR) && $(VITIS_RUN) --mode hls --tcl build_prj.tcl
 	@$(VENVPY) -c "import sys,os;sys.exit(0 if os.path.isfile(sys.argv[1]) else print('IP export failed, missing:',sys.argv[1]) or 1)" $@

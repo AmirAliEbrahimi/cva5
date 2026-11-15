@@ -62,7 +62,18 @@ reports. `sweep.py` now reads it back out of the generated
 take — an unknown layer name is silently ignored by hls4ml, and the first
 sign would otherwise be a 48-bit port in Vivado an hour later. Run
 `make -C tools/nn_accel ip` and it prints the element type and the implied
-port width. It should say 24.
+port width. It says 24, and the generated `firmware/defines.h` reads
+`typedef nnet::array<ap_ufixed<8,0>, 3*1> input_t;`.
+
+That check had to be made to run, which is a lesson of its own. The IP's
+directory name is `sw_<precision>_rf<rf>` and does not mention the input
+precision, so the first attempt found a 48-bit IP already sitting there,
+reported "Nothing to be done for 'ip'", and skipped the recipe —
+`check_input_type` included. A check inside a recipe is worth nothing when
+the recipe does not run. `tools/nn_accel/Makefile` now keeps a `.config`
+stamp in that directory holding the precision, the reuse factor and the
+input precision, and rewrites it only when one of them changes, so the IP
+rebuilds exactly when its configuration moves.
 
 
 A quantized CNN generated with [hls4ml](https://github.com/fastmachinelearning/hls4ml),

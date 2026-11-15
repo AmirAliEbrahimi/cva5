@@ -315,6 +315,10 @@ def _parse_args():
                     help="trained state_dict to synthesise")
     ap.add_argument("--precision", default=None,
                     help='e.g. "14,5" -- overrides PRECISIONS')
+    ap.add_argument("--input-precision", default=None,
+                    help="precision for the input layer alone, e.g. "
+                         "ap_ufixed<8,0>. Decides the AXI-Stream port width; "
+                         "see INPUT_PRECISION above.")
     ap.add_argument("--rf", type=int, default=None,
                     help="reuse factor -- overrides REUSE_FACTORS")
     return ap.parse_args()
@@ -323,6 +327,8 @@ def _parse_args():
 if __name__ == "__main__":
     args = _parse_args()
     MODEL_PATH = args.model
+    if args.input_precision:
+        INPUT_PRECISION = args.input_precision
     if args.precision:
         PRECISIONS = [f"ap_fixed<{args.precision}>"]
     if args.rf is not None:
