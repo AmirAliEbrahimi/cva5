@@ -119,8 +119,12 @@ int main(void) {
         pad    = ps_rd(JOB_PADSEEN_A);
 
         if (status != JOB_OK) {
-            xil_printf("  %2u  job failed, status %u\r\n",
-                       (unsigned)k, (unsigned)status);
+            xil_printf("  %2u  %s\r\n", (unsigned)k,
+                       status == JOB_ERR_STUCK
+                           ? "a result was already waiting and would not clear"
+                             " -- the accelerator's output stream, not this"
+                           : "no result within the poll limit -- the DMA or"
+                             " the accelerator never finished");
             wrong++;
             continue;
         }

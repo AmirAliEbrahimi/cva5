@@ -21,7 +21,13 @@
 >
 > **It works on hardware.** Eight CIFAR images, hardware and software
 > agreeing on all eight and both 8/8 against the labels, both logits
-> matching in sign, pad counter clean.
+> matching in sign, pad counter clean. `PASS cifar`.
+>
+> The PS-fed path -- `server.c` and `cva5_demo.c` -- is not working yet.
+> The job protocol carries requests and responses correctly and the server
+> answers every one; what fails is the inference inside it, on an image at
+> `JOB_IMG_BASE` rather than in `.rodata`. Being specific about which
+> failure is what `JOB_ERR_STUCK` was split from `JOB_ERR_TIMEOUT` for.
 >
 > **7,097 cycles end to end**, identical on all eight
 > images, against 30,498 in the first version and a compute floor of 6,947.
@@ -29,14 +35,20 @@
 > version existed to do and within 2% of what "Second iteration" predicted.
 > The 77% is gone.
 >
-> The software baseline is being rebuilt rather than quoted. `cifar.c`'s Q9
-> reference first came in at 2.6M cycles against the first version's 1.53M,
-> which made the speedup it printed a measurement of unoptimized C; zero-
-> padding each convolution's input instead of testing every tap for the edge
-> made it **5.1x faster on the host at the same `-Os`**, bit-identical
-> output. What that is worth on CVA5 is not the same number — no caches, in
-> order, every load a block RAM access — so the figure the board prints is
-> the one to record, and it has not been read yet.
+> The software baseline is now an honest one. `cifar.c`'s Q9 reference first
+> came in at 2.6M cycles against the first version's 1.53M, which made the
+> speedup it printed a measurement of unoptimized C. Zero-padding each
+> convolution's input instead of testing every tap for the edge brought it
+> to **1,013,943 cycles** — below the first version's software as well as
+> its own, bit-identical output, 2.6x on the board against 5.1x on the host
+> at the same `-Os`. CVA5 recovers half of what a cached machine does from
+> the same change, which is what no caches and an in-order pipeline look
+> like: the loads this did not remove now dominate.
+>
+> So the end-to-end figure is **142.9x**, 7,093 cycles against 1,013,943,
+> and unlike the first version's 50.2x it is not mostly transfer. The
+> comparable claim is that the 220x "if transfer were free" ceiling and the
+> measured speedup are now within 1.5x of each other rather than 4.4x.
 
 ## Second iteration: where the 77% went
 

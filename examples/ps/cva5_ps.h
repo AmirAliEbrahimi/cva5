@@ -109,6 +109,7 @@
 
 #define JOB_OK           0u
 #define JOB_ERR_TIMEOUT  1u
+#define JOB_ERR_STUCK    2u
 
 /*
  * cpu_halt, on EMIO GPIO bit 0.

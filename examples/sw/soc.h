@@ -532,7 +532,14 @@ static inline int accel_logit(unsigned int lane) {
 #define JOB_PADSEEN_OFF  0x20u
 
 #define JOB_OK           0u
-#define JOB_ERR_TIMEOUT  1u   /* the accelerator never produced a result */
+#define JOB_ERR_TIMEOUT  1u   /* no result within the poll limit */
+#define JOB_ERR_STUCK    2u   /* a result was already waiting and would not
+                               * clear -- cva5_accel_axi clears result_valid
+                               * in the else branch of the assignment that
+                               * sets it, so an output stream holding tvalid
+                               * starves the clear. A different fault from a
+                               * slow inference and a different thing to go
+                               * and look at, so a different number. */
 
 /*
  * The top of fpga_link.ld's region, and so _stack_top.

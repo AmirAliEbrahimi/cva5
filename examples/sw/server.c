@@ -114,7 +114,8 @@ int main(void) {
         st_after = ACCEL(ACCEL_STATUS_OFF);
 
         if (ok != 1) {
-            job_complete(seq, JOB_ERR_TIMEOUT, 0, 0, 0u, 0u, pad);
+            job_complete(seq, ok == -1 ? JOB_ERR_STUCK : JOB_ERR_TIMEOUT,
+                         0, 0, 0u, 0u, pad);
             putstr("  job "); putdec(seq);
             putstr(ok == -1 ? ": a result was already waiting and would not"
                               " clear"
