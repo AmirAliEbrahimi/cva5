@@ -27,10 +27,16 @@
 > images, against 30,498 in the first version and a compute floor of 6,947.
 > The transfer has disappeared behind the compute, which is what the second
 > version existed to do and within 2% of what "Second iteration" predicted.
-> The 77% is gone. What is not yet re-measured is a software baseline worth
-> comparing against: `cifar.c`'s Q9 reference takes 2.6M cycles, slower than
-> the first version's 1.53M, so the speedup it prints is not the 50.2x
-> figure's successor and should not be read as one.
+> The 77% is gone.
+>
+> The software baseline is being rebuilt rather than quoted. `cifar.c`'s Q9
+> reference first came in at 2.6M cycles against the first version's 1.53M,
+> which made the speedup it printed a measurement of unoptimized C; zero-
+> padding each convolution's input instead of testing every tap for the edge
+> made it **5.1x faster on the host at the same `-Os`**, bit-identical
+> output. What that is worth on CVA5 is not the same number — no caches, in
+> order, every load a block RAM access — so the figure the board prints is
+> the one to record, and it has not been read yet.
 
 ## Second iteration: where the 77% went
 

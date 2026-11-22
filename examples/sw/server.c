@@ -21,8 +21,10 @@
  * There is no software reference here and that is the point of the split:
  * examples/sw/cifar.c checks the hardware against software on fixed images
  * and answers "is it right", and this answers "does the system work". Doing
- * both in one program would mean 2.6M cycles of reference arithmetic per
- * image sitting in the middle of the thing being demonstrated.
+ * both in one program would put a million-odd cycles of reference
+ * arithmetic per image in the middle of the thing being demonstrated, and
+ * would mean linking the weights into a program whose whole appeal is that
+ * it is 1.7 KB and gets its work from the other processor.
  *
  * Build and run:
  *     make -C examples/sw server        # load over JTAG, then feed it

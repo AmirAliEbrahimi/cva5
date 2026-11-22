@@ -54,6 +54,17 @@ typedef char cifar_pixels_agree[(IMG_PIXELS == (int)ACCEL_IMG_PIXELS) ? 1 : -1];
 static int32_t h1[C1][P1][P1];   /* conv1 -> relu -> pool, Q9 */
 static int32_t h2[C2][P2][P2];   /* conv2 -> relu -> pool, Q9 */
 
+/* Zero-bordered copies of each convolution's input, so the inner loops have
+ * no edge test in them. 3x3 kernels with padding 1 means one row and one
+ * column each side. 6,936 bytes and 1,600, against the 16 KB a full 32x32x4
+ * intermediate would have taken -- which is why conv and pool stay fused. */
+#define PW1  (DIM + 2)
+#define PH1  (DIM + 2)
+#define PW2  (P1 + 2)
+#define PH2  (P1 + 2)
+static int16_t pad1[3][PH1][PW1];
+static int32_t pad2[C1][PH2][PW2];
+
 #ifdef __riscv
 /* -march=rv32im has not implied zicsr since binutils 2.36, and the Makefile
  * builds every target with the same ARCH. csrs.c enables it the same way. */
@@ -133,8 +144,28 @@ static int hw_infer(const uint8_t *img, int *l0, int *l1, unsigned *cycles) {
  * int32.
  */
 static void sw_infer(const uint8_t *img, int *l0, int *l1) {
-    int oc, ic, py, px, wy, wx, ky, kx, iy, ix, o, i;
+    int oc, ic, py, px, wy, wx, o, i;
     int32_t acc, v, best;
+
+    /*
+     * Pad once, then convolve without a branch.
+     *
+     * The first version tested every tap for falling off the edge -- 27 of
+     * them per conv1 output, 110,592 taps for the layer -- and rebuilt the
+     * address from a multiply each time. Writing a zero border instead
+     * costs 3,468 stores for the whole image and makes the inner loop nine
+     * loads, nine multiplies and some pointer arithmetic. The result is
+     * identical because a tap off the edge contributed w*0 anyway;
+     * test_benches/sw/run_cifar.sh checks that against a reference written
+     * the other way round and would catch it if it were not.
+     */
+    for (i = 0; i < 3 * PH1 * PW1; i++) ((int16_t *)pad1)[i] = 0;
+    for (ic = 0; ic < 3; ic++)
+        for (py = 0; py < DIM; py++)
+            for (px = 0; px < DIM; px++)
+                /* v/256 in Q9 is v<<1, exact. */
+                pad1[ic][py + 1][px + 1] =
+                    (int16_t)(img[(py * DIM + px) * 4 + ic] << 1);
 
     for (oc = 0; oc < C1; oc++) {
         for (py = 0; py < P1; py++) {
@@ -145,17 +176,13 @@ static void sw_infer(const uint8_t *img, int *l0, int *l1) {
                         int y = py * 4 + wy, x = px * 4 + wx;
                         acc = B1[oc];
                         for (ic = 0; ic < 3; ic++) {
-                            for (ky = 0; ky < 3; ky++) {
-                                iy = y + ky - 1;
-                                if (iy < 0 || iy >= DIM) continue;
-                                for (kx = 0; kx < 3; kx++) {
-                                    ix = x + kx - 1;
-                                    if (ix < 0 || ix >= DIM) continue;
-                                    /* v/256 in Q9 is v<<1, exact. */
-                                    acc += (int32_t)W1[((oc * 3 + ic) * 3 + ky) * 3 + kx]
-                                         * (int32_t)(img[(iy * DIM + ix) * 4 + ic] << 1);
-                                }
-                            }
+                            const int16_t *w = &W1[(oc * 3 + ic) * 9];
+                            const int16_t *p = &pad1[ic][y][x];
+                            acc += w[0] * p[0] + w[1] * p[1] + w[2] * p[2];
+                            p += PW1;
+                            acc += w[3] * p[0] + w[4] * p[1] + w[5] * p[2];
+                            p += PW1;
+                            acc += w[6] * p[0] + w[7] * p[1] + w[8] * p[2];
                         }
                         if (acc < 0) acc = 0;          /* relu, on Q18 */
                         v = acc >> Q_SHIFT;            /* back to Q9 */
@@ -167,6 +194,15 @@ static void sw_infer(const uint8_t *img, int *l0, int *l1) {
         }
     }
 
+    /* Same again for the second layer, over conv1's pooled output. int32
+     * here rather than int16: h1 is a Q9 activation with no bound this code
+     * can prove, and 800 bytes is not worth a saturation question. */
+    for (i = 0; i < C1 * PH2 * PW2; i++) ((int32_t *)pad2)[i] = 0;
+    for (ic = 0; ic < C1; ic++)
+        for (py = 0; py < P1; py++)
+            for (px = 0; px < P1; px++)
+                pad2[ic][py + 1][px + 1] = h1[ic][py][px];
+
     for (oc = 0; oc < C2; oc++) {
         for (py = 0; py < P2; py++) {
             for (px = 0; px < P2; px++) {
@@ -176,16 +212,13 @@ static void sw_infer(const uint8_t *img, int *l0, int *l1) {
                         int y = py * 4 + wy, x = px * 4 + wx;
                         acc = B2[oc];
                         for (ic = 0; ic < C1; ic++) {
-                            for (ky = 0; ky < 3; ky++) {
-                                iy = y + ky - 1;
-                                if (iy < 0 || iy >= P1) continue;
-                                for (kx = 0; kx < 3; kx++) {
-                                    ix = x + kx - 1;
-                                    if (ix < 0 || ix >= P1) continue;
-                                    acc += (int32_t)W2[((oc * C1 + ic) * 3 + ky) * 3 + kx]
-                                         * h1[ic][iy][ix];
-                                }
-                            }
+                            const int16_t *w = &W2[(oc * C1 + ic) * 9];
+                            const int32_t *p = &pad2[ic][y][x];
+                            acc += w[0] * p[0] + w[1] * p[1] + w[2] * p[2];
+                            p += PW2;
+                            acc += w[3] * p[0] + w[4] * p[1] + w[5] * p[2];
+                            p += PW2;
+                            acc += w[6] * p[0] + w[7] * p[1] + w[8] * p[2];
                         }
                         if (acc < 0) acc = 0;
                         v = acc >> Q_SHIFT;
