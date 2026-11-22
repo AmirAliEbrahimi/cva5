@@ -83,7 +83,16 @@
  * the interrupt pins, so they lag the device by a cycle that no fence covers,
  * and `csrr mip` is not a load. */
 static inline void dev_fence(void) {
+#ifdef __riscv
     __asm__ volatile ("fence o,i" ::: "memory");
+#else
+    /* The host test benches compile this header and the drivers that use it
+     * -- test_benches/sw/tb_cifar.c builds examples/sw/cifar.c on the host to
+     * check its arithmetic. There are no devices there, so the ordering this
+     * enforces has nothing to order, but the compiler barrier is still the
+     * honest translation and costs nothing. */
+    __asm__ volatile ("" ::: "memory");
+#endif
 }
 
 #define DM_BASE     0x00000000u

@@ -108,6 +108,8 @@ static void putstr_w(const char *s, int width) {
  * the top byte's strobe -- a plain write clears the flags and starts
  * nothing, which looks exactly like a DMA that was never connected.
  */
+static unsigned last_raw;   /* the result word, kept for the diagnostic line */
+
 static int hw_infer(const uint8_t *img, int *l0, int *l1, unsigned *cycles) {
     unsigned t0, t1, spins = 0, r;
 
@@ -126,6 +128,7 @@ static int hw_infer(const uint8_t *img, int *l0, int *l1, unsigned *cycles) {
     /* One inference is one beat: two 16-bit logits, element zero in the low
      * half, which is the order hls4ml packs nnet::array in. */
     r = ACCEL(ACCEL_RESULT_OFF);
+    last_raw = r;
     *l0 = (int)(short)(r & 0xFFFFu);
     *l1 = (int)(short)(r >> 16);
     *cycles = t1 - t0;
@@ -221,8 +224,38 @@ static void sw_infer(const uint8_t *img, int *l0, int *l1) {
     }
 }
 
+/*
+ * A control image, all zeros, in .bss where it is four-byte aligned.
+ *
+ * With a zero input every activation is the bias path alone, which both
+ * sides compute without reading a pixel. If hardware and software agree
+ * here and disagree on real images, the fault is in how the image gets to
+ * the accelerator -- alignment, byte order, the DMA's length. If they
+ * disagree here too, the image path is innocent and the accelerator in the
+ * bitstream was built from a different model than weights.h was exported
+ * from, which no amount of looking at the data path will show.
+ */
+static unsigned int zero_img[ACCEL_IMG_PIXELS];
+
+static void putsigned(int v) {
+    if (v < 0) { putstr("-"); putdec((unsigned)(-v)); }
+    else putdec((unsigned)v);
+}
+
+static void puthex8(unsigned v) {
+    char b[11];
+    int i;
+    b[0] = '0'; b[1] = 'x';
+    for (i = 0; i < 8; i++) {
+        unsigned nib = (v >> ((7 - i) * 4)) & 0xF;
+        b[2 + i] = (char)(nib < 10 ? '0' + nib : 'a' + nib - 10);
+    }
+    b[10] = '\0';
+    putstr(b);
+}
+
 int main(void) {
-    unsigned hw_total = 0, sw_total = 0, hw_cyc, t0, t1, pad;
+    unsigned hw_total = 0, sw_total = 0, hw_cyc, t0, t1, pad, pad_base;
     int k, hw0, hw1, sw0, sw1, hw_class, sw_class;
     int agree = 0, hw_right = 0, sw_right = 0, fails = 0;
 
@@ -231,8 +264,37 @@ int main(void) {
     putstr(CLASS_NAMES[0]); putstr(" / "); puts(CLASS_NAMES[1]);
     putstr("  images      "); putdec((unsigned)N_IMAGES);
     putstr(" x "); putdec((unsigned)IMG_BYTES); puts(" bytes, read in place by the DMA");
+
+    /* PADSEEN counts since rstn, and loading a program over JTAG does not
+     * assert rstn -- so whatever accel.c's mis-packed run left behind is
+     * still in there. Take a baseline rather than reporting someone else's
+     * count as this run's. */
+    pad_base = ACCEL(ACCEL_PADSEEN_OFF);
+    putstr("  pad at entry "); putdec(pad_base);
+    puts(pad_base ? "  (left by an earlier run; only the delta is this one)" : "");
+
+    /* The control. Both paths, before any real image. */
+    for (k = 0; k < (int)ACCEL_IMG_PIXELS; k++) zero_img[k] = 0u;
+    dev_fence();
+    if (hw_infer((const uint8_t *)zero_img, &hw0, &hw1, &hw_cyc)) {
+        sw_infer((const uint8_t *)zero_img, &sw0, &sw1);
+        putstr("  zero image  hw "); putsigned(hw0);
+        putstr(" / "); putsigned(hw1);
+        putstr("   sw "); putsigned(sw0);
+        putstr(" / "); putsigned(sw1);
+        putstr("   raw "); puthex8(last_raw);
+        puts("");
+        if ((hw1 > hw0) != (sw1 > sw0))
+            puts("    ^ the bias path alone disagrees: the image path is not"
+                 " the fault, the model is");
+    } else {
+        puts("  zero image  FAIL no result");
+        fails++;
+    }
+
     puts("");
-    puts("   #  label     hw        sw        hw cyc     sw cyc");
+    puts("   #  label     hw        sw        hw logits        sw logits"
+         "        hw cyc     sw cyc");
 
     for (k = 0; k < N_IMAGES; k++) {
         const uint8_t *img = IMAGES[k];
@@ -261,6 +323,11 @@ int main(void) {
         putstr_w(CLASS_NAMES[IMAGE_LABELS[k]], 9);
         putstr_w(CLASS_NAMES[hw_class], 9);
         putstr_w(CLASS_NAMES[sw_class], 9);
+        /* The numbers, not just the verdict. Two logits that are close
+         * explain a disagreement; two that are nothing like each other say
+         * the two paths are not running the same network. */
+        putsigned(hw0); putstr(","); putsigned(hw1); putstr("  ");
+        putsigned(sw0); putstr(","); putsigned(sw1); putstr("  ");
         putdec_w(hw_cyc, 8); putstr("  ");
         putdec_w(t1 - t0, 10);
         puts(hw_class == sw_class ? "" : "   <- disagree");
@@ -288,7 +355,7 @@ int main(void) {
      * non-zero count means the exporter and the data path disagree about
      * the layout, which shifts the colours and quietly costs accuracy --
      * there is no other symptom. */
-    pad = ACCEL(ACCEL_PADSEEN_OFF);
+    pad = ACCEL(ACCEL_PADSEEN_OFF) - pad_base;
     putstr("  pad bytes   "); putdec(pad);
     puts(pad ? "  <- the images are not 4 bytes per pixel" : "  (clean)");
     if (pad) fails++;
