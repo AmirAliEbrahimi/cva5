@@ -1,13 +1,16 @@
-# Hardware
+# Hardware, as the first version built it
 
 > **This describes the first version's block design and nothing else builds
 > it.** `pynq_z2_nn_sys.tcl`, `axi_fifo_mm_s`, `axis_dwidth_converter`,
 > `axi_gpio`, `xlconcat` and the 0x6000_0000 peripheral map are all gone;
 > the SoC is `examples/xilinx/pynq_z2_sys.tcl` and the accelerator's
-> attachment is `examples/xilinx/axi/cva5_accel_axi.sv`. Kept for the wire
-> format reasoning, which still holds, and because the three attempts it
-> records are worth not repeating. The current result and input formats are
-> in README.md under "Second iteration".
+> attachment is `examples/xilinx/axi/cva5_accel_axi.sv`. Kept as a record of how the
+> accelerator was first attached, and because the measurements in it were
+> real. The two things still true have moved to README.md: the byte-lane
+> experiment, under "Second iteration", and the `enable_dsp_full_reg`
+> option -- which also withdraws this file's advice to change the
+> implementation strategy, since the current design closes at +0.226
+> without it. Nothing else here describes anything that exists.
 
 The block design, the wire format, and what `examples/xilinx/pynq_z2_nn_sys.tcl`
 builds for you.

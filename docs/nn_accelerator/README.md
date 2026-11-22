@@ -353,6 +353,28 @@ accelerator did not shrink when the input narrowed, which is the same
 measurement "What the input change cost" reports from the accuracy side:
 nothing changed because nothing much depended on it.
 
+### If the accelerator ever stops closing timing
+
+The first version missed by about 70 ps on the conv2 multiplier path -- a
+combinational DSP48E1 into a carry chain -- and the note recorded then was
+to switch the implementation strategy to
+`Performance_ExplorePostRoutePhysOpt`. **That is not what this tree does and
+the advice is withdrawn.** The current build closes at WNS +0.226 with the
+default strategy, and a design that needs a non-default strategy to close
+has no margin left for the next change.
+
+The option worth keeping is in the HLS rather than in implementation: set
+
+```tcl
+config_schedule -enable_dsp_full_reg=true
+```
+
+in the generated `build_prj.tcl` and re-synthesise. hls4ml writes `false`,
+which leaves the DSP48 output unregistered; registering it costs a cycle or
+two of latency and some flops, and the design has 81% of its flops free. It
+buys margin on exactly the path that was the problem, inside the block that
+owns it, without changing how the rest of the SoC is built.
+
 CVA5 alone measured 3,020 LUT / 4 DSP post-implementation. `cva5_top_0` in
 this build measures 4,900 LUT / 4 DSP, the difference being the two added AXI
 slave ports, the two-level `cva5_ram_mux` tree and the boot ROM — not the core,
@@ -396,7 +418,7 @@ objects, so accuracy depends heavily on the class pair: frog vs ship reaches
 | `examples/xilinx/axi/cva5_accel_axi.sv` | the DMA, the lane select and the control registers |
 | `examples/xilinx/axi/cva5_axis_lane.sv` | 32 → 24 lane select, and the pad counter |
 | `examples/xilinx/pynq_z2_sys.tcl` | the block design — one SoC now, accelerator included when its IP exists |
-| `docs/nn_accelerator/HARDWARE.md` | block design detail, wire format |
+| `docs/nn_accelerator/HARDWARE.md` | **the first version's** block design — kept as a record, builds nothing here |
 | `docs/nn_accelerator/GOTCHAS.md` | failures that produce wrong results silently |
 
 ## Changes to the base CVA5

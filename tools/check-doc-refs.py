@@ -55,6 +55,7 @@ GENERATED = {
     "examples/sw/weights.h",
     "examples/sw/images.h",
     "firmware/defines.h",   # inside the generated HLS project, not this tree
+    "build_prj.tcl",        # likewise -- sweep.py writes it into the project
 }
 
 # Submodule-resident files the docs mention by bare name. These have to be
