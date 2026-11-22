@@ -156,7 +156,9 @@ int main(void) {
                               " clear"
                             : ": no result from the accelerator");
             putstr("  status "); puthex8(st_before);
-            putstr(" -> "); puthex8(st_after); puts("");
+            putstr(" -> "); puthex8(st_after);
+            putstr("  raw "); puthex8(raw);
+            puts("");
             continue;
         }
 
@@ -164,24 +166,16 @@ int main(void) {
          * means the poll never waited, which means a result was there
          * before this one started -- a different fault from a wrong
          * answer, and they look the same in a table of classes. */
-        if (seq == 1u) {
-            /* Again, now that the PS has written an image and is polling
-             * main memory. If the accelerator answered at startup and
-             * answers 0xBADCAB1E here, the trigger is PS traffic, not the
-             * build -- and that is a finding about the bus rather than
-             * about this program. */
-            bus_report("in job 1");
-            putstr("  first job: status "); puthex8(st_before);
-            putstr(" -> "); puthex8(st_after);
-            putstr("  raw "); puthex8(raw);
-            putstr("  "); putdec(cycles); puts(" cycles");
-        }
 
-        job_complete(seq, JOB_OK, l0, l1, cls, cycles, pad);
-        served++;
 
-        /* The console line is for a human watching; the PS reads the job
-         * block, not this. */
+        /*
+         * The console line goes out BEFORE the response counter, not after.
+         * The PS prints its own row the moment it sees response move, so a
+         * line written afterwards arrives a job late and the two sides read
+         * as though they disagree. Printing first costs this job the
+         * mailbox writes -- a few hundred cycles against 7,093 -- and makes
+         * the interleaving mean what it looks like it means.
+         */
         putstr("  job "); putdec(seq);
         putstr(": class "); putdec(cls);
         putstr("  logits "); putsigned(l0); putstr(","); putsigned(l1);
@@ -189,5 +183,8 @@ int main(void) {
         if (pad) { putstr("  pad "); putdec(pad); putstr(" <- not 4 bytes"
                                                          " per pixel"); }
         puts("");
+
+        job_complete(seq, JOB_OK, l0, l1, cls, cycles, pad);
+        served++;
     }
 }

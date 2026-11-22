@@ -23,11 +23,17 @@
 > agreeing on all eight and both 8/8 against the labels, both logits
 > matching in sign, pad counter clean. `PASS cifar`.
 >
-> The PS-fed path -- `server.c` and `cva5_demo.c` -- is not working yet.
-> The job protocol carries requests and responses correctly and the server
-> answers every one; what fails is the inference inside it, on an image at
-> `JOB_IMG_BASE` rather than in `.rodata`. Being specific about which
-> failure is what `JOB_ERR_STUCK` was split from `JOB_ERR_TIMEOUT` for.
+> **And the full system works.** The PS writes a CIFAR image into CVA5's
+> main memory over `M_AXI_GP1`, CVA5 runs the accelerator over it out of
+> that memory, and the classification comes back through the job block
+> while CVA5's own account of it comes back through the mailbox: **8 of 8
+> correct**, 7,093 cycles a job.
+>
+> The logits are bit-identical to the ones `cifar.c` gets from the same
+> images in `.rodata` -- 929,-626 through -1542,1806 on all eight. Two
+> entirely different delivery paths, the same numbers, which says the PS's
+> byte-at-a-time copy into the image page preserves the layout the DMA
+> needs exactly rather than approximately.
 >
 > **7,097 cycles end to end**, identical on all eight
 > images, against 30,498 in the first version and a compute floor of 6,947.
