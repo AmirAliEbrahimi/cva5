@@ -50,6 +50,11 @@ GENERATED = {
     "examples/sw/ram.mif",
     "soc_wrapper.v",        # Vivado's make_wrapper, in pynq_z2_sys.tcl
     "cva5_image.c",         # make -C examples/sw ps-image
+    "weights.h",            # make -C tools/nn_accel headers
+    "images.h",
+    "examples/sw/weights.h",
+    "examples/sw/images.h",
+    "firmware/defines.h",   # inside the generated HLS project, not this tree
 }
 
 # Submodule-resident files the docs mention by bare name. These have to be

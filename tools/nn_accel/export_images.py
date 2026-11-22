@@ -1,13 +1,16 @@
 """
 export_images.py — dump CIFAR-10 test images as a C header for the CVA5 driver.
 
-Images are stored as raw uint8 RGB in raster order (channels-last), which is
-both the most compact form and the order the accelerator expects. The driver
-converts uint8 -> ap_fixed<14,5> at runtime with integer arithmetic.
+Images are stored as uint8 R,G,B,0 in raster order, four bytes a pixel, which
+is the layout the DMA and the accelerator agree on -- one pixel is one 32-bit
+word. Nothing converts anything at runtime: the input type is ap_ufixed<8,0>,
+so a pixel byte v already means v/256, and the driver passes the address of
+this array to the DMA rather than copying it.
 
-Size: 3072 bytes per image. Check this against your CVA5 memory before
-raising N_IMAGES -- the array lands in .rodata and there is no DRAM in this
-design.
+Size: 4096 bytes per image, 1 KB more than packed RGB would be. Check the
+total against your CVA5 memory before raising N_IMAGES -- the array lands in
+.rodata, the link script gives it 124 KB shared with everything else, and
+there is no DRAM in this design.
 
 Usage:
     python export_images.py --n 8 --classes 6 8 --out images.h
@@ -127,7 +130,13 @@ static const uint8_t IMAGE_LABELS[N_IMAGES] = {{
 }};
 """)
 
-        f.write("\nstatic const uint8_t IMAGES[N_IMAGES][IMG_BYTES] = {\n")
+        # Four-byte aligned, because the DMA reads this array where it lies.
+        # The driver hands the accelerator &IMAGES[k][0] and copies nothing,
+        # so the array's own alignment is what makes a beat a pixel; at the
+        # default alignment of 1 the pixels straddle word boundaries and the
+        # colours come out rotated with nothing reporting it.
+        f.write("\nstatic const uint8_t __attribute__((aligned(4)))\n"
+                "IMAGES[N_IMAGES][IMG_BYTES] = {\n")
         for k, im in enumerate(imgs):
             # HWC uint8 from CIFAR, widened to RGBA with a zero pad byte.
             rgba = np.zeros((im.shape[0], im.shape[1], 4), dtype=np.uint8)

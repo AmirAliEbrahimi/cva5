@@ -19,3 +19,8 @@ examples/sw/*.fst
 examples/sw/*.fst.hier
 __pycache__/
 *.pyc
+
+# Generated from the trained model by tools/nn_accel/export_{weights,images}.py.
+# 32 KB of .rodata derived from a .pt that is not in this tree either.
+examples/sw/images.h
+examples/sw/weights.h

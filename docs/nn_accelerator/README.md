@@ -3,15 +3,21 @@
 > **Status on this branch.** The toolchain, the RTL, the block design and a
 > driver are all in. `make bitstream` and `make baseline` still fail with a
 > message: the SoC is built from `examples/xilinx/pynq_z2_sys.tcl` now, which
-> picks the accelerator up automatically when its IP exists, and the
-> driver is `examples/sw/accel.c` rather than `bench.c`. Read "Second
+> picks the accelerator up automatically when its IP exists. The first
+> version's single benchmark program is replaced by two: `examples/sw/accel.c` brings the
+> data path up, and `examples/sw/cifar.c` is the demo. Read "Second
 > iteration" below before anything else here — the numbers in **Result** are
 > from the first version, and the first version is not what this builds.
 >
 > The second version synthesises, implements and closes: **WNS +0.226 ns** at
 > 100 MHz, routed, no failing endpoints, 61.7% slice occupancy. What is not
-> measured yet is the end-to-end cycle count with the DMA doing the transfer,
-> which needs `make -C examples/sw accel` on hardware.
+> measured yet is the end-to-end cycle count with the DMA doing the transfer:
+>
+> ```
+> make -C tools/nn_accel headers     # weights.h, images.h from the model
+> make -C examples/sw accel          # the path: PASS accel, pad bytes 0
+> make -C examples/sw cifar          # the demo: hardware vs software, timed
+> ```
 
 ## Second iteration: where the 77% went
 
@@ -170,8 +176,7 @@ make -C tools/nn_accel train       # -> model_6_8.pt
 make -C tools/nn_accel precision   # precision/accuracy table (informational)
 make -C tools/nn_accel ip          # HLS synthesis + IP export
 make -C tools/nn_accel headers     # weights.h + images.h -> examples/sw/
-make -C tools/nn_accel mif         # build bench.c -> examples/sw/mem.mif
-make -C tools/nn_accel bitstream   # package CVA5, build the SoC
+make -C tools/nn_accel demo        # cross-compile the demo and load it
 ```
 
 Knobs:
@@ -219,7 +224,7 @@ have `make` and `riscv64-unknown-elf-gcc` in WSL. The stages divide cleanly:
 In WSL:
 
 ```bash
-make -C tools/nn_accel mif        # venv, train, headers, bench.c
+make -C tools/nn_accel all        # venv, train, IP, headers
 ```
 
 Then in PowerShell, from the repo root:
@@ -330,10 +335,13 @@ objects, so accuracy depends heavily on the class pair: frog vs ship reaches
 | `tools/nn_accel/evaluate.py` | precision choice from measured dynamic range |
 | `tools/nn_accel/sweep.py` | HLS generation, 2025.x fixes, IP export |
 | `tools/nn_accel/ref_const.py` | host reference for the board self test |
-| `tools/nn_accel/export_{weights,images}.py` | C headers for the benchmark |
-| `examples/sw/bench.c` | the benchmark, runs on CVA5 |
-| `examples/sw/printf.c` | minimal printf — no libc, no float |
-| `examples/xilinx/pynq_z2_nn_sys.tcl` | the block design |
+| `tools/nn_accel/export_{weights,images}.py` | `weights.h` and `images.h`, generated into `examples/sw` |
+| `examples/sw/accel.c` | brings the data path up: the control block, the DMA, the pad counter |
+| `examples/sw/cifar.c` | the demo — accelerator against the same network in Q9 C, both timed |
+| `test_benches/sw/run_cifar.sh` | `cifar.c`'s software reference against a NumPy model of it |
+| `examples/xilinx/axi/cva5_accel_axi.sv` | the DMA, the lane select and the control registers |
+| `examples/xilinx/axi/cva5_axis_lane.sv` | 32 → 24 lane select, and the pad counter |
+| `examples/xilinx/pynq_z2_sys.tcl` | the block design — one SoC now, accelerator included when its IP exists |
 | `docs/nn_accelerator/HARDWARE.md` | block design detail, wire format |
 | `docs/nn_accelerator/GOTCHAS.md` | failures that produce wrong results silently |
 

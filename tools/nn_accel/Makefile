@@ -13,7 +13,7 @@
 #    precision   report the precision sweep   (informational)
 #    ip          generate + export accelerator IP
 #    headers     weights.h + images.h         -> examples/sw/
-#    mif         build bench.c                -> examples/sw/mem.mif
+#    demo        headers + cross-compile + load examples/sw/cifar.c
 #    bitstream   package CVA5 as IP + build the SoC
 #    baseline    build the stock SoC with no accelerator (diagnostic)
 #
@@ -95,9 +95,9 @@ VITIS_RUN ?= vitis-run
 # riscv64-unknown-elf-; the xPack Windows build is riscv-none-elf-.
 CROSS     ?= riscv64-unknown-elf-
 
-.PHONY: all venv train precision ip headers mif bitstream baseline clean distclean help
+.PHONY: all venv train precision ip headers demo mif bitstream baseline clean distclean help
 
-all: mif bitstream
+all: ip headers
 	@echo
 	@echo "Done. Program examples/sw/... bitstream and open the serial"
 	@echo "terminal at 9600 8N1. Expect ~50x speedup, hw and sw agreeing."
@@ -177,20 +177,23 @@ headers: $(MODEL) export_weights.py export_images.py
 	    --model $(MODEL) --out $(SW)/images.h
 
 # --- 5. software -----------------------------------------------------------
-# NOT PORTED YET. examples/sw/bench.c, the APP= knob and the mif target all
-# live on the cnn-accel branch and are written against the old SoC: an
-# axi_uartlite at 0x6000_0000, an AXI GPIO for ap_start, and a stream FIFO
-# that the driver stores 1,536 words into by hand. On this branch the UART,
-# the interrupt controller and the whole peripheral bus are different, and
-# the FIFO is being replaced by a DMA, so porting it is a rewrite of the
-# driver rather than a merge. Until then this fails here, loudly, instead of
-# failing three layers down in a cross-compile.
+# The driver the old mif target built, examples/sw/bench.c, does not exist
+# here: it stored 1,536 words into a stream FIFO by hand against a SoC with
+# an axi_uartlite at 0x6000_0000 and an AXI GPIO for ap_start. The DMA
+# replaced all of that, and the demo is examples/sw/cifar.c.
+#
+# What is deliberately not rebuilt is the BRAM preload. The old flow baked
+# the benchmark into the memory image so the board ran it at power-on; this
+# branch boots silently and loads over JTAG, which is one build step rather
+# than a bitstream. 'demo' is the target that does the whole thing.
+demo: headers
+	$(MAKE) -C $(SW) cifar
+
 mif:
-	@echo "[nn] 'mif' is not available on this branch yet."
-	@echo "     examples/sw/bench.c is still written against the old SoC"
-	@echo "     (axi_uartlite, AXI GPIO, axi_fifo_mm_s). It is ported after"
-	@echo "     the DMA lands. 'make headers' works and is what you want in"
-	@echo "     the meantime."
+	@echo "[nn] 'mif' built examples/sw/bench.c into the BRAM preload, and"
+	@echo "     neither exists on this branch: the demo is examples/sw/cifar.c"
+	@echo "     and it loads over JTAG rather than being baked into the"
+	@echo "     bitstream. Run 'make demo' -- headers, cross-compile, load."
 	@exit 1
 
 # --- 6. hardware -----------------------------------------------------------
@@ -203,11 +206,12 @@ mif:
 # xlconcat, xlconstant -- around a peripheral map at 0x6000_0000 that no
 # longer exists. It is rewritten against pynq_z2_sys.tcl, not merged into it.
 bitstream:
-	@echo "[nn] 'bitstream' is not available on this branch yet."
-	@echo "     pynq_z2_nn_sys.tcl targets the old SoC and is rewritten"
-	@echo "     against examples/xilinx/pynq_z2_sys.tcl once the DMA and the"
-	@echo "     lane select exist. 'make ip' works and is the step that"
-	@echo "     matters now -- it reports the accelerator's stream width."
+	@echo "[nn] 'bitstream' built a second SoC, pynq_z2_nn_sys.tcl, around"
+	@echo "     the accelerator. There is one SoC now:"
+	@echo "         examples/xilinx/pynq_z2_sys.tcl"
+	@echo "     which picks the accelerator up on its own when 'make ip' has"
+	@echo "     produced the IP, so there is nothing for this target to do."
+	@echo "     Build it the way every other change to the SoC is built."
 	@exit 1
 
 # --- diagnostic ------------------------------------------------------------

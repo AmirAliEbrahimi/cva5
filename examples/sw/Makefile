@@ -55,6 +55,7 @@ PLIC_SRCS := crt0.S trap.S plic.c puts.c
 SPI_SRCS  := crt0.S trap.S spi.c puts.c
 I2C_SRCS  := crt0.S trap.S i2c.c puts.c
 ACCEL_SRCS:= crt0.S trap.S accel.c puts.c
+CIFAR_SRCS:= crt0.S trap.S cifar.c puts.c
 # Headers, as prerequisites. soc.h carries the memory map and the PLIC source
 # numbers, so an image built against a stale copy of it talks to the wrong
 # address or attributes an interrupt to the wrong device -- and nothing about
@@ -108,7 +109,7 @@ endif
 OPENOCD     ?= openocd
 OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 
-.PHONY: all program ram app load memtest timer csrs run-csrs plic spi accel sim run clean lint lint-full clean-cva5-sim ps-image
+.PHONY: all program ram app load memtest timer csrs run-csrs plic spi accel cifar sim run clean lint lint-full clean-cva5-sim ps-image
 all: program
 program: program.hex
 
@@ -238,6 +239,25 @@ accel: accel.tcl
 	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
 	           -f accel.tcl -c "init; load_program; shutdown"
 
+# The CIFAR demo: the accelerator against the same network in software on the
+# same core, on the same images. Needs the trained model's headers, which are
+# generated rather than committed because they are 32 KB of .rodata derived
+# from a .pt file that is not in this tree either.
+images.h weights.h:
+	@echo "$@ is generated from the trained model. Run:" >&2
+	@echo "    make -C $(CVA5_DIR)/tools/nn_accel headers" >&2
+	@false
+
+cifar.elf: $(CIFAR_SRCS) $(HDRS) images.h weights.h $(APP_LDSCRIPT)
+	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(CIFAR_SRCS) -lgcc -o $@
+
+cifar.tcl: cifar.elf
+	python3 $(ELF2TCL) $(CROSS) $(APP_BASE) $< $@
+
+cifar: cifar.tcl
+	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
+	           -f cifar.tcl -c "init; load_program; shutdown"
+
 # The same test in the Verilator core sim, which is the only place the core's
 # CSR behaviour can be checked without a bitstream -- and the only place both
 # polarities of INCLUDE_TIME_CSR can be run, since the sim takes upstream's
@@ -281,6 +301,7 @@ clean:
 	      csrs.elf csrs.tcl csrs_sim.elf csrs.hex csrs.sim csrs_log.txt csrs_sig.txt csrs_trace.fst \
 	      plic.elf plic.tcl spi.elf spi.tcl i2c.elf i2c.tcl \
 	      accel.elf accel.tcl \
+	      cifar.elf cifar.tcl \
 	      main.elf.rawbinary main.elf.dissasembled \
 	      idle.elf.rawbinary idle.elf.dissasembled \
 		  trace.fst.hier \
