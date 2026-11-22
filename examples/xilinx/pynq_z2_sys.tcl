@@ -562,6 +562,41 @@ proc cva5_seg {args} {
     return ""
 }
 
+# Place one slave address block into one master address space, at a stated
+# offset, naming both sides.
+#
+# assign_bd_address above works out most of the map by itself and is left to
+# do so. It stopped being able to the moment cva5_top acquired a second slave
+# interface: with s_axi_ext and s_axi_acc each offering a reg0, it placed the
+# accelerator's and SKIPPED THE PS'S -- no error and no warning, just an
+# empty ps7_0/Data and a failure a hundred lines further on looking for a
+# segment that was never created. Both halves of this design had been built
+# and the block design validated before anything said so.
+#
+# What makes this reliable is which name it takes. A slave's address BLOCK is
+# <cell>/<interface>/reg0 and says what the IP offers; the assigned SEGMENT
+# is named per master space and changes when a cell gains an interface, which
+# is what cva5_seg's three candidate spellings were coping with. This names
+# the block.
+#
+# -force so it does not matter whether assign_bd_address already placed it.
+proc cva5_map {space block offset range} {
+    set seg [get_bd_addr_segs -quiet $block]
+    if {$seg eq ""} {
+        set cell [lindex [split $block /] 0]
+        error "no address block $block.\n  $cell offers:\
+ [get_bd_addr_segs -quiet -of [get_bd_cells $cell]]"
+    }
+    assign_bd_address -target_address_space [get_bd_addr_spaces $space] \
+        $seg -offset $offset -range $range -force
+    set placed [get_bd_addr_segs -quiet -of [get_bd_addr_spaces $space]]
+    if {$placed eq ""} {
+        error "assign_bd_address reported no error but $space is still\
+ empty after placing $block. Check that the master is connected to it."
+    }
+    puts [format "pynq_z2_sys: %-28s -> %-22s at %s" $block $space $offset]
+}
+
 set uart_seg [cva5_seg {axi_xbar_0/m_axi_uart/SEG_cva5_uart_0_reg0} \
                        {axi_xbar_0/m_axi_uart/SEG_cva5_uart_0_Reg} \
                        {axi_xbar_0/m_axi_uart/SEG_cva5_uart_0_s_axi}]
@@ -627,16 +662,7 @@ if {$ACCEL} {
     # bits, so the window sits at zero in its space and software programs an
     # OFFSET into RAM rather than a pointer -- examples/sw/soc.h's
     # ACCEL_RAM_OFF says so where a driver author will read it.
-    set dma_seg [cva5_seg {cva5_accel_0/m_axi/SEG_cva5_top_0_reg0} \
-                          {cva5_accel_0/m_axi/SEG_cva5_top_0_Reg} \
-                          {cva5_accel_0/m_axi/SEG_cva5_top_0_s_axi_acc}]
-    if {$dma_seg eq ""} {
-        error "the accelerator's DMA has no address segment for main memory.\
- List what it does have with: get_bd_addr_segs -of \[get_bd_addr_spaces\
- cva5_accel_0/m_axi\]"
-    }
-    set_property offset 0x0   $dma_seg
-    set_property range  128K  $dma_seg
+    cva5_map /cva5_accel_0/m_axi cva5_top_0/s_axi_acc/reg0 0x0 128K
 }
 
 # ---- Where the PS sees CVA5's main memory ---------------------------------
@@ -649,16 +675,7 @@ if {$ACCEL} {
 # bus is $clog2(WORDS)+2 bits wide for exactly this reason, so Vivado infers
 # an address block of the right size instead of a 4 GB aperture it would then
 # refuse to place anywhere but zero.
-set ps_ram_seg [cva5_seg {ps7_0/Data/SEG_cva5_top_0_reg0} \
-                         {ps7_0/Data/SEG_cva5_top_0_Reg} \
-                         {ps7_0/Data/SEG_cva5_top_0_s_axi_ext}]
-if {$ps_ram_seg eq ""} {
-    error "the PS has no address segment for cva5_top's external port. List\
- what it does have with: get_bd_addr_segs -of \[get_bd_addr_spaces\
- ps7_0/Data\]"
-}
-set_property offset 0x80000000 $ps_ram_seg
-set_property range  128K       $ps_ram_seg
+cva5_map /ps7_0/Data cva5_top_0/s_axi_ext/reg0 0x80000000 128K
 
 # ---- Finalise -------------------------------------------------------------
 regenerate_bd_layout

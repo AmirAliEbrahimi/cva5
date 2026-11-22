@@ -564,6 +564,20 @@ complete without it. `cva5_accel_0/irq` is deliberately unconnected — wiring
 it would mean a third source on `cva5_irq_concat` and a wider PLIC, and
 software polls `ACCEL_STATUS` today.
 
+**Address segments are assigned by naming both sides.** `assign_bd_address`
+with no arguments worked out the whole map until `cva5_top` acquired a second
+slave interface. With `s_axi_ext` and `s_axi_acc` each offering a `reg0` it
+placed the accelerator's and **silently skipped the PS's** — no error, no
+warning, an empty `ps7_0/Data`, and a failure a hundred lines later looking
+for a segment that was never created. Both the RTL and the block design had
+been built and validated before anything said so.
+
+`cva5_map` names the slave's address *block* and the master's address space
+together. The block name, `<cell>/<interface>/reg0`, is stable and describes
+what the IP offers; the assigned *segment* name is generated per master space
+and changes when a cell gains an interface, which is what the three candidate
+spellings in `cva5_seg` had been coping with.
+
 #### Holding the core while the PS writes
 
 A program loaded into a running core is a program loaded into a core executing
