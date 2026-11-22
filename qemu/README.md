@@ -33,6 +33,43 @@ nothing for them to talk to. Mapped this way, a program touching them says so
 in the QEMU log instead of reading zeros — which, on a status register, looks
 exactly like a device reporting itself idle.
 
+## The accelerator, and the plan for modelling it
+
+`0x5000_0000` is not in this machine's map at all, so a program that
+touches the accelerator under QEMU reads an unmapped address. The SPI and
+the I2C are mapped unimplemented for exactly the reason that is bad --
+a status register that reads as zero looks like a device reporting itself
+idle -- and the accelerator deserves the same at minimum.
+
+The plan is more than that, and it rests on one thing worth checking
+before any of it is built: **hls4ml already emits a bit-accurate model of
+the network.** `sw_14_5_rf4/firmware/cnn.cpp` is the C++ that Vitis HLS
+turns into the RTL, and hls4ml compiles it natively for its own
+`predict()`. If it builds under a plain g++ then the QEMU device never
+implements a network: it loads whatever `make ip` last generated, through
+a small `extern "C"` shim, and the model regenerates whenever the model
+does. A hand-written model would be stale the first time the network was
+retrained, which is the objection that shaped this.
+
+So the device would be plumbing only -- the register block, a DMA that
+reads guest memory, the lane select and its pad counter, and the result
+packed as two `ap_fixed<14,5>` in 16-bit lanes -- about 300 lines of C,
+with the `.so` loaded at run time and the "not modelled" behaviour as the
+fallback when it is absent.
+
+`make -C tools/nn_accel host-model` is the gate. It compiles the
+generated firmware for the host and checks it against the eight logit
+pairs the board produced. It needs no Vitis, no licence and no board, and
+it is worth having whether or not QEMU follows: `examples/sw/cifar.c`'s
+reference is int32 Q9 while the hardware truncates to `ap_fixed<14,5>` at
+every layer, and this is the only thing that can say which of the two a
+disagreement belongs to.
+
+One more copy of the memory map lives here, and `tools/check-soc-map.py`
+does not read it -- it reconciles `soc.h`, the crossbar and the OpenOCD
+config, and this machine is a fourth. Moving a peripheral in `soc.h`
+today does not move it here, and nothing says so.
+
 PLIC sources 2 and 3 are the SPI's transfer-complete interrupt and the
 accelerator's result-ready on the board. Both exist here and stay low, so
 software that enables either waits rather than receiving a fabricated

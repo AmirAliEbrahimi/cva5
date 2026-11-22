@@ -15,6 +15,8 @@
 #    headers     weights.h + images.h -> examples/sw/,
 #                and cva5_pixels.c    -> examples/ps/ for the PS demo
 #    demo        headers + cross-compile + load examples/sw/cifar.c
+#    host-model  build the generated firmware for the host and check it
+#                against the board's numbers (no Vitis, no licence, no board)
 #    bitstream   package CVA5 as IP + build the SoC
 #    baseline    build the stock SoC with no accelerator (diagnostic)
 #
@@ -97,7 +99,7 @@ VITIS_RUN ?= vitis-run
 # riscv64-unknown-elf-; the xPack Windows build is riscv-none-elf-.
 CROSS     ?= riscv64-unknown-elf-
 
-.PHONY: all venv train precision ip headers demo mif bitstream baseline clean distclean help
+.PHONY: all venv train precision ip headers demo host-model mif bitstream baseline clean distclean help
 
 all: ip headers
 	@echo
@@ -190,6 +192,13 @@ headers: $(MODEL) export_weights.py export_images.py
 # than a bitstream. 'demo' is the target that does the whole thing.
 demo: headers
 	$(MAKE) -C $(SW) cifar
+
+# The gate for modelling the accelerator in QEMU: hls4ml already emits a
+# bit-accurate C++ model of the network, and if it builds outside Vitis
+# then the QEMU device loads that rather than implementing anything. See
+# the header of host_model.py. Standard g++, no venv, no board.
+host-model:
+	python3 host_model.py --dir $(IPDIR)
 
 mif:
 	@echo "[nn] 'mif' built examples/sw/bench.c into the BRAM preload, and"
