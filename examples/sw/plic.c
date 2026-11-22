@@ -40,11 +40,7 @@
 #include "soc.h"
 #include "mip.h"
 
-#define PLIC_PRIORITY(src) (*(volatile unsigned int *)(PLIC_BASE + PLIC_PRIORITY_OFF(src)))
-#define PLIC_PENDING   (*(volatile unsigned int *)(PLIC_BASE + PLIC_PENDING_OFF))
-#define PLIC_ENABLE    (*(volatile unsigned int *)(PLIC_BASE + PLIC_ENABLE_OFF))
-#define PLIC_THRESHOLD (*(volatile unsigned int *)(PLIC_BASE + PLIC_THRESHOLD_OFF))
-#define PLIC_CLAIM     (*(volatile unsigned int *)(PLIC_BASE + PLIC_CLAIM_OFF))
+/* The PLIC's registers are in soc.h now, shared with accel.h. */
 
 #define UART_RX    (*(volatile unsigned int *)(UART_BASE + UART_RX_OFF))
 #define UART_STAT  (*(volatile unsigned int *)(UART_BASE + UART_STAT_OFF))

@@ -107,6 +107,14 @@ MBOX        ?=
 ifeq ($(MBOX),1)
 CFLAGS      += -DCVA5_MBOX
 endif
+# server.c waits on PLIC source 3 instead of polling ACCEL_STATUS. Off by
+# default: polling is proven on hardware and a wait that never wakes is a
+# server that never answers again. Needs a bitstream with the accelerator's
+# interrupt wired, which is every build from patch 0068 on.
+ACCEL_IRQ   ?=
+ifeq ($(ACCEL_IRQ),1)
+CFLAGS      += -DACCEL_IRQ
+endif
 OPENOCD     ?= openocd
 OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 

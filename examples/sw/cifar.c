@@ -127,7 +127,7 @@ static unsigned last_raw;   /* the result word, kept for the diagnostic line */
  * bug -- accel_infer() hands back decoded logits and nothing else.
  */
 static int hw_infer(const uint8_t *img, int *l0, int *l1, unsigned *cycles) {
-    return accel_infer(img, l0, l1, cycles, &last_raw);
+    return accel_infer(img, l0, l1, cycles, &last_raw, 0);
 }
 
 /*

@@ -119,6 +119,21 @@ int main(void) {
         return 1;
     }
 
+    /*
+     * ACCEL_IRQ=1 waits on PLIC source 3 instead of spinning on
+     * ACCEL_STATUS. Off by default: polling is correct and has been run on
+     * hardware, and a wait that never wakes is a server that never answers
+     * again, which is a worse failure than a busy loop. Build both and
+     * compare -- the inference takes the same time either way, so what
+     * differs is 7,000 register reads the core did not have to do.
+     */
+#ifdef ACCEL_IRQ
+    accel_irq_arm();
+    puts("  waiting on PLIC source 3");
+#else
+    puts("  polling ACCEL_STATUS");
+#endif
+
     job_listen();
     puts("  listening");
 
@@ -142,7 +157,11 @@ int main(void) {
          * earlier test's deliberate mis-packing. */
         pad_before = ACCEL(ACCEL_PADSEEN_OFF);
 
-        ok = accel_infer((const void *)JOB_IMG_BASE, &l0, &l1, &cycles, &raw);
+#ifdef ACCEL_IRQ
+        ok = accel_infer((const void *)JOB_IMG_BASE, &l0, &l1, &cycles, &raw, 1);
+#else
+        ok = accel_infer((const void *)JOB_IMG_BASE, &l0, &l1, &cycles, &raw, 0);
+#endif
         pad = ACCEL(ACCEL_PADSEEN_OFF) - pad_before;
         cls = (l1 > l0) ? 1u : 0u;
 
@@ -154,6 +173,7 @@ int main(void) {
             putstr("  job "); putdec(seq);
             putstr(ok == -1 ? ": a result was already waiting and would not"
                               " clear"
+                 : ok == -2 ? ": woken by something that was not source 3"
                             : ": no result from the accelerator");
             putstr("  status "); puthex8(st_before);
             putstr(" -> "); puthex8(st_after);

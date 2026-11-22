@@ -125,6 +125,16 @@ static inline void dev_fence(void) {
 #define PLIC_ENABLE_OFF    0x002000u
 #define PLIC_THRESHOLD_OFF 0x200000u
 #define PLIC_CLAIM_OFF     0x200004u
+
+/* The registers themselves. These lived in plic.c until accel.h needed them
+ * too -- the accelerator's result-ready is source 3, and a driver that waits
+ * on it has to claim and complete like any other handler. A register
+ * accessor for a device this file already describes belongs here. */
+#define PLIC_PRIORITY(src) (*(volatile unsigned int *)(PLIC_BASE + PLIC_PRIORITY_OFF(src)))
+#define PLIC_PENDING       (*(volatile unsigned int *)(PLIC_BASE + PLIC_PENDING_OFF))
+#define PLIC_ENABLE        (*(volatile unsigned int *)(PLIC_BASE + PLIC_ENABLE_OFF))
+#define PLIC_THRESHOLD     (*(volatile unsigned int *)(PLIC_BASE + PLIC_THRESHOLD_OFF))
+#define PLIC_CLAIM         (*(volatile unsigned int *)(PLIC_BASE + PLIC_CLAIM_OFF))
 /* Interrupt sources, numbered from 1. Source 0 does not exist and the hardware
  * pins its priority and enable bit low, as the spec requires.
  *

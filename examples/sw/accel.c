@@ -27,6 +27,7 @@
 
 #include <stdio.h>
 #include "soc.h"
+#include "mip.h"
 
 #define ACCEL(off) (*(volatile unsigned int *)(ACCEL_BASE + (off)))
 
@@ -155,6 +156,74 @@ int main(void) {
         puts("  FAIL a mis-packed image was not reported");
         fails++;
     }
+
+    /*
+     * The interrupt, which until patch 0068 was a port nobody had seen
+     * assert. Last, because it needs the data path above it to work, and
+     * because arming the PLIC changes state a failure here would otherwise
+     * be blamed on.
+     *
+     * The accelerator's irq is result_valid, which makes it a level like
+     * the UART's and not a pulse like the SPI's: reading ACCEL_RESULT is
+     * what lowers it, so the read that collects the answer is also the
+     * acknowledgement. Completing before that read leaves the line high and
+     * the source comes straight back.
+     */
+    puts("  -- interrupt, PLIC source 3");
+    PLIC_THRESHOLD = 0u;
+    PLIC_PRIORITY(PLIC_SRC_ACCEL) = 1u;
+    PLIC_ENABLE = PLIC_ENABLE | (1u << PLIC_SRC_ACCEL);
+    dev_fence();
+    for (v = 0; v < 4u; v++) {              /* drain an earlier run's pending */
+        unsigned stale = PLIC_CLAIM;
+        if (!stale) break;
+        PLIC_CLAIM = stale;
+        dev_fence();
+    }
+    if (mip_wait(MIP_MEIP, 0) < 0) {
+        puts("  FAIL meip is high before an inference has been started");
+        fails++;
+    }
+
+    fill_image(0x00);
+    if (!run_once()) {
+        puts("  FAIL no result on the interrupt run");
+        fails++;
+    } else {
+        /* run_once polls the status, so by here the result is waiting and
+         * the line has been up for a while. */
+        if (mip_wait(MIP_MEIP, 1) < 0) {
+            puts("  FAIL a waiting result did not raise meip");
+            fails++;
+        }
+        v = PLIC_CLAIM;
+        if (v != PLIC_SRC_ACCEL) {
+            putstr("  FAIL claimed source "); putdec(v);
+            putstr(" wanted "); putdec(PLIC_SRC_ACCEL); puts("");
+            fails++;
+        }
+        /* Complete FIRST, with the result still unread, to show the source
+         * coming back -- an inference whose answer nobody collected must
+         * not be lost. */
+        PLIC_CLAIM = v;
+        dev_fence();
+        if (mip_wait(MIP_MEIP, 1) < 0) {
+            puts("  FAIL completing with the result unread lost the"
+                 " interrupt");
+            fails++;
+        }
+        /* Now the other order: claim, read the result, then complete. */
+        v = PLIC_CLAIM;
+        (void)ACCEL(ACCEL_RESULT_OFF);
+        PLIC_CLAIM = v;
+        dev_fence();
+        if (mip_wait(MIP_MEIP, 0) < 0) {
+            puts("  FAIL reading the result did not drop the interrupt");
+            fails++;
+        }
+    }
+    PLIC_ENABLE = PLIC_ENABLE & ~(1u << PLIC_SRC_ACCEL);
+    PLIC_PRIORITY(PLIC_SRC_ACCEL) = 0u;
 
     if (fails) { putstr("FAIL accel: "); putdec((unsigned)fails); puts(" problems"); }
     else       puts("PASS accel");

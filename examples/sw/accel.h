@@ -19,15 +19,17 @@
 #define CVA5_SW_ACCEL_H
 
 #include "soc.h"
+#include "mip.h"
 
 #define ACCEL(off) (*(volatile unsigned int *)(ACCEL_BASE + (off)))
 
 /*
  * Run the accelerator over ACCEL_IMG_BYTES at `img`, which must be in main
  * memory and four-byte aligned. Returns 1 and fills the logits, 0 if no
- * result arrived, or -1 if a result was already waiting and could not be
- * cleared -- which is a stuck line, not a slow inference, and wants
- * saying differently. `cycles` and `raw` may be NULL.
+ * result arrived, -1 if a result was already waiting and could not be
+ * cleared -- a stuck line, not a slow inference, and wants saying
+ * differently -- or -2 if waiting on the interrupt was woken by a
+ * source that was not the accelerator. `cycles` and `raw` may be NULL.
  *
  * Three things here are not obvious and all three have been wrong at some
  * point:
@@ -44,8 +46,54 @@
  *   bits nowhere and it reads from offset zero, which streams the reset
  *   vector into the accelerator and returns a confident wrong answer.
  */
+/*
+ * Open PLIC source 3 so an inference can be waited on rather than polled.
+ *
+ * Call once, before the first accel_infer(..., 1). Everything here outlives
+ * a program load: the PLIC resets from rstn alone and never from ndmreset,
+ * so an earlier run's enables, priorities and -- the one that bites -- its
+ * pending bits are all still set. A pending bit on source 3 would satisfy
+ * the very first wait before the accelerator had done anything.
+ *
+ * Draining is safe at this point because accel_infer() clears any waiting
+ * result first, and the accelerator's irq IS result_valid, so the line is
+ * already low by the time a claim is taken.
+ */
+static inline void accel_irq_arm(void) {
+    int i;
+
+    PLIC_THRESHOLD = 0u;
+    PLIC_PRIORITY(PLIC_SRC_ACCEL) = 1u;
+    PLIC_ENABLE = PLIC_ENABLE | (1u << PLIC_SRC_ACCEL);
+    /* The claim below reads a different register from the writes above, so
+     * without this it can issue before they land -- and a claim taken with
+     * the priority still at 0 returns 0 and drains nothing. */
+    dev_fence();
+
+    for (i = 0; i < 4; i++) {
+        unsigned int stale = PLIC_CLAIM;
+        if (!stale)
+            break;
+        PLIC_CLAIM = stale;
+        dev_fence();
+    }
+}
+
+/*
+ * `use_irq` waits on mip.MEIP instead of spinning on ACCEL_STATUS. The
+ * inference takes the same 7,093 cycles either way -- what changes is that
+ * the core is not reading a register 7,000 times to find out.
+ *
+ * The claim-read-complete order is not interchangeable. The accelerator's
+ * irq is result_valid, so reading ACCEL_RESULT is what lowers the line;
+ * completing before that read leaves it high and the PLIC's gateway raises
+ * the source again immediately. test_benches/axi/tb_irq_concat.sv checks
+ * both orders for exactly this reason.
+ */
 static inline int accel_infer(const void *img, int *l0, int *l1,
-                              unsigned int *cycles, unsigned int *raw) {
+                              unsigned int *cycles, unsigned int *raw,
+                              int use_irq) {
+    unsigned int claimed = 0u;
     unsigned int t0 = 0, t1 = 0, spins = 0, r;
 
     /*
@@ -84,9 +132,17 @@ static inline int accel_infer(const void *img, int *l0, int *l1,
     ACCEL(DMA_LENLO_OFF)   = ACCEL_IMG_BYTES;
     ACCEL(DMA_CONTROL_OFF) = DMA_START;
 
-    while (!(ACCEL(ACCEL_STATUS_OFF) & ACCEL_ST_RESULT)) {
-        if (++spins > 2000000u)
+    if (use_irq) {
+        if (mip_wait(MIP_MEIP, 1) < 0)
             return 0;
+        claimed = PLIC_CLAIM;
+        if (claimed != PLIC_SRC_ACCEL)
+            return -2;      /* something else's interrupt, or none */
+    } else {
+        while (!(ACCEL(ACCEL_STATUS_OFF) & ACCEL_ST_RESULT)) {
+            if (++spins > 2000000u)
+                return 0;
+        }
     }
 
 #ifdef __riscv
@@ -105,6 +161,13 @@ static inline int accel_infer(const void *img, int *l0, int *l1,
      * be turned back into it, and the padding is what would show a packing
      * change -- it is how the sign-extension bug was identified. */
     if (raw) *raw = r;
+
+    /* After the result read, never before: the line is low now, so the
+     * source stays quiet instead of coming straight back. */
+    if (use_irq) {
+        PLIC_CLAIM = claimed;
+        dev_fence();
+    }
     return 1;
 }
 
