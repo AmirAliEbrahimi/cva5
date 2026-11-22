@@ -753,7 +753,8 @@ inside 0.6 ns of each other:
 | + RAM mux and the PS on it | core AXI address → SBA bridge state enable | 9.329 | **+0.335** |
 | + USB and the FCLKs switched off | unchanged | 9.329 | **+0.335** |
 | + the DMA, the third RAM master and the accelerator | register file → divider CLZ | 9.728 | **+0.226** |
-| + the interrupt, and the I2C pins on the codec | d_tlb → main RAM enable | 9.038 | **+0.077** |
+| + the accelerator's interrupt (PLIC 2 → 3 sources) | — | — | **+0.217** |
+| the same, with the I2C pins moved to the audio codec | d_tlb → main RAM enable | 9.038 | **+0.077** |
 
 The last row is the accelerator going in — the DMA, the lane select, the
 accelerator's own AXI4-Lite control block and a second `cva5_ram_mux` level on
@@ -770,45 +771,52 @@ combination that means *re-placement*, not a path this work added. 12,000 more
 LUTs in the device re-deals the hand; the core's divider was already in the
 cluster and came up holding it.
 
-The last row lost 0.149 ns and **the cause is not yet attributed**, which
-is worth leaving written down rather than tidying into a story.
+Those last two rows are the best evidence in this file for what the rest
+of this section claims, because they were built to separate two changes
+and the answer was the opposite of the obvious one.
 
-Three things differ from the +0.226 build and only one of them can be
-dismissed outright:
+| change | logic added | cost |
+|---|---|---|
+| PLIC from two sources to three | 31 LUTs, 8 flops | **0.009 ns** |
+| I2C pins moved from P16/P15 to U9/T9 | none | **0.140 ns** |
 
-- **An FPU fix merged from upstream** — `fp_div`, `fp_sqrt`, `fp_mul`,
-  `fp_sqrt_core`, `fp_wb2int_misc`. Dismissed: `CPU_CONFIG` has `FPU : 0`,
-  so all five elaborate away and change no netlist. Vivado is
-  deterministic; a merge that alters nothing synthesised alters nothing
-  here.
-- **Patch 0068's PLIC, two sources to three** — `cva5_plic_0` goes from
-  79 LUT and 38 flops to 110 and 46, the only added logic in the build,
-  and the design *shrinks* by four LUTs overall.
-- **The I2C pins moved from P16/P15 to U9/T9** for the codec experiment
-  above. No logic at all, but it drags `cva5_i2c_0`'s 229 LUTs and its
-  IOBUFs to a different part of the die, and everything near them
-  re-places.
+Patch 0068 widened the PLIC to carry the accelerator's interrupt:
+`cva5_plic_0` goes from 79 LUT and 38 flops to 110 and 46, the only added
+gates in either build, and the design shrinks by four LUTs overall. It
+cost nine picoseconds. Moving two pads to the audio codec's pins for the
+experiment described under **Proving the I2C pins** added no logic
+whatsoever and cost fifteen times as much, by dragging `cva5_i2c_0`'s 229
+LUTs and its IOBUFs to a different part of the die and re-placing
+everything near them.
 
-The first instinct was to blame the PLIC because it is the only thing that
-added gates. That is the wrong instinct and this file has made the point
-twice already: changes that add no logic on the reported path have moved
-this design 0.2 ns, and the pin move is exactly that kind of change. A
-build with the pins back on P16/P15 separates them, and since the codec
-pins are a fixture rather than a configuration, that build has to happen
-anyway.
+**The first instinct was to blame the PLIC, because it was the only thing
+that added gates. That instinct was wrong by a factor of fifteen.** The
+two builds exist because the number moved and the cause was guessed at;
+the guess was recorded, then tested, then overturned. A change's effect on
+this design is not predicted by how much logic it adds, and this is the
+third time that has been demonstrated here — the earlier two were a memory
+map that changed seven constants and cost 0.135 ns, and a boot ROM that
+added logic to the critical path and made the number go *up*.
 
-What is clear either way is where it landed:
+An FPU fix merged from upstream at the same time was the third candidate
+and is dismissed on grounds that need no measurement: `CPU_CONFIG` has
+`FPU : 0`, so `fp_div`, `fp_sqrt`, `fp_mul`, `fp_sqrt_core` and
+`fp_wb2int_misc` all elaborate away and change no netlist. Vivado is
+deterministic; a merge that alters nothing synthesised alters nothing here.
+
+Where the codec build landed:
 `d_tlb/mmu.virtual_address_reg[17]` into `local_mem/mem_reg_1_0_3/ENARDEN`,
 seven logic levels carrying 9.038 ns, so routing and BRAM setup rather
-than logic. That structure is not new — it sat at +0.347 to +0.397 in the
-PS build, one of the cluster — and nothing in the PLIC or the I2C is on
-it. Whichever change did it, it did it by re-placing the design and
-letting the cluster re-deal, which is the thing this section has been
-saying for eight rows.
+than logic. Not a new structure — it sat at +0.347 to +0.397 in the PS
+build, one of the cluster — and nothing in the PLIC or the I2C is on it.
+The pin move did not lengthen that path. It re-placed the design and let
+the cluster re-deal, which is the thing this section has been saying for
+eight rows and now has a controlled experiment behind.
 
-Hold came back **+0.017**, just under the 0.019–0.029 band every earlier
-build sat in. Vivado's hold fixing stops at met rather than maximising, so
-a number drifting inside that band is the tool satisficing; only a negative
+Hold tracked the same way: **+0.019** on the P16/P15 build, inside the
+0.019–0.029 band every earlier build sat in, and +0.017 with the pins on
+the codec. Vivado's hold fixing stops at met rather than maximising, so a
+number drifting inside that band is the tool satisficing; only a negative
 one means anything.
 
 The two rows above the accelerator's are the same number, and that is the
