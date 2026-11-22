@@ -752,19 +752,35 @@ inside 0.6 ns of each other:
 | + I2C pins as a declared IIC interface | register file → load queue FIFO | — | **+0.511** |
 | + RAM mux and the PS on it | core AXI address → SBA bridge state enable | 9.329 | **+0.335** |
 | + USB and the FCLKs switched off | unchanged | 9.329 | **+0.335** |
+| + the DMA, the third RAM master and the accelerator | register file → divider CLZ | 9.728 | **+0.226** |
 
-The last two rows are the same number, and that is the point of the second
+The last row is the accelerator going in — the DMA, the lane select, the
+accelerator's own AXI4-Lite control block and a second `cva5_ram_mux` level on
+main memory, measured together because they are one block design. It cost
+0.109 ns, and **the limiter is in none of them.** The worst path is
+`register_file_block/issue_sel_reg[0][1]` into the divider input FIFO's
+`data_out_reg[dividend_CLZ][0]`: 14 levels, 9.728 ns of datapath, and the same
+register-file-into-divider-CLZ structure that already reported at the boot ROM
+row (+0.319) and the PLIC row (+0.430). Nothing from `cnn_0`, `cva5_accel_0`
+or either mux appears on it. By the two tests this section settles on below —
+does the design still close, and does the worst path land in the RTL that
+changed — this is a pass on the first and a miss on the second, which is the
+combination that means *re-placement*, not a path this work added. 12,000 more
+LUTs in the device re-deals the hand; the core's divider was already in the
+cluster and came up holding it.
+
+The two rows above it are the same number, and that is the point of the second
 one: switching off USB0 and the two FCLK ports removed cells from the PS, and
 nothing the PS contains was ever on a PL timing path. A change that cannot
 move the number is worth one build to confirm it did not.
 
-The row before them is the PS going in, and it moved the limiter again. The worst
+The earlier of those two is the PS going in, and it moved the limiter again. The worst
 path is now `cpu/.../axi_bus/addr_reg[15]` → `debug/i_sba_axil`'s state
 register clock enable: 14 logic levels and 6.81 ns of the 9.33 in routing. The
 `d_tlb` → `local_mem` cluster that had been the limiter sits just behind it at
 `+0.347` to `+0.397`, and the SPI path that used to be fourth is now tenth at
 `+0.404`. Everything in the top ten is inside `cva5_top`, and the core is not
-ours to change, so `+0.335` is where this stops.
+ours to change, so `+0.335` is where that build stopped.
 
 #### The limiter is a cluster, not a path
 
@@ -880,6 +896,42 @@ has never failed. Vivado's hold fixing stops at met rather than maximising, so
 a number drifting down within that band is the tool satisficing, not the design
 degrading; the only reading that means anything is a negative one, which arrives
 as a reported failure.
+
+### What the whole design costs
+
+`report_utilization -hierarchical` on the routed accelerator build:
+
+| block | LUT | FF | RAMB36 | RAMB18 | DSP |
+|---|---|---|---|---|---|
+| `cnn_0` — the hls4ml accelerator | 12,388 | 13,765 | 10 | 2 | 115 |
+| `cva5_top_0` — core, 128 KB memory, mux tree | 4,900 | 3,439 | 32 | 4 | 4 |
+| `axi_xbar_0` | 1,617 | 984 | — | — | — |
+| `cva5_accel_0` — DMA, lane select, control | 1,257 | 364 | — | — | — |
+| `cva5_spi_0` | 737 | 863 | — | — | — |
+| `cva5_uart_0` | 310 | 623 | — | — | — |
+| `cva5_i2c_0` | 229 | 245 | — | — | — |
+| `cva5_clint_0` | 193 | 175 | — | — | — |
+| `cva5_plic_0` | 79 | 38 | — | — | — |
+| **whole design** | **21,722** | **20,529** | **42** | **6** | **119** |
+
+Against the device: 40.8% of the LUTs, 19.3% of the flops, 32.1% of the block
+RAM, 54.1% of the DSPs — and **61.7% of the slices**, which is the number that
+decides whether the next thing fits. LUT percentage understates occupancy by
+half again here, because a slice is claimed by whatever lands in it.
+
+Three things in that table matter before anything else is added:
+
+- **The accelerator is 57% of the logic and 97% of the DSPs.** 115 of the 119
+  DSP48s are `cnn_0`; CVA5 uses 4. Widening the network is not a thing this
+  part can absorb — see `docs/nn_accelerator/README.md`.
+- **The DMA is nearly free.** 1,257 LUTs for `cva5_accel_0`, 704 of them
+  LUTRAM: ZipCPU's `aximm2s` keeps its buffer in distributed memory, so the
+  entire inbound data path costs no block RAM and no DSP.
+- **32 of the 42 RAMB36 are the 128 KB main memory**, the floor for that size
+  with byte enables (above). The accelerator's 10 are line buffers and weights.
+
+The child rows sum to 21,710 against a reported 21,722; the twelve are
+top-level glue and cross-hierarchy LUT combining, which the report warns about.
 
 ### UART
 

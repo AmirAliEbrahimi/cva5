@@ -7,6 +7,11 @@
 > driver is `examples/sw/accel.c` rather than `bench.c`. Read "Second
 > iteration" below before anything else here — the numbers in **Result** are
 > from the first version, and the first version is not what this builds.
+>
+> The second version synthesises, implements and closes: **WNS +0.226 ns** at
+> 100 MHz, routed, no failing endpoints, 61.7% slice occupancy. What is not
+> measured yet is the end-to-end cycle count with the DMA doing the transfer,
+> which needs `make -C examples/sw accel` on hardware.
 
 ## Second iteration: where the 77% went
 
@@ -261,17 +266,44 @@ transfer using a dedicated DMA. Same phenomenon, different operating point.
 
 ## Configuration
 
-| | |
-|---|---|
-| Precision | `ap_fixed<14,5>` — 5 integer bits including sign, 9 fractional |
-| Reuse factor | 4 |
-| DSP / LUT / FF / BRAM18 | 115 / 30,312 / 17,967 / 35 |
-| Occupancy with CVA5 | 63% LUT, 52% DSP |
-| Timing | WNS +0.139 ns at 100 MHz |
-| Accuracy | 95.9% (float reference 96.1%) — **an earlier `model_6_8.pt`**; see above |
-| Interface | ~~48-bit~~ **24-bit** AXI-Stream in, 32-bit out |
+| | first version | this build |
+|---|---|---|
+| Precision | `ap_fixed<14,5>` — 5 integer bits including sign, 9 fractional | unchanged |
+| Input precision | `ap_fixed<14,5>` | `ap_ufixed<8,0>` |
+| Reuse factor | 4 | 4 |
+| Interface | 48-bit AXI-Stream in, 32-bit out | **24-bit** in, 32-bit out |
+| `cnn_0` DSP | 115 | **115** |
+| `cnn_0` LUT / FF | 30,312 / 17,967 | **12,388 / 13,765** |
+| `cnn_0` block RAM | 35 x18 | **10 x36 + 2 x18** |
+| Whole-system occupancy | 63% LUT, 52% DSP | **40.8% LUT, 54.1% DSP, 61.7% slices** |
+| Timing | WNS +0.139 ns at 100 MHz | **WNS +0.226 ns at 100 MHz** |
+| Accuracy | 95.9% (float reference 96.1%) — **an earlier `model_6_8.pt`**; see above | |
 
-CVA5 alone measures 3,020 LUT / 4 DSP post-implementation.
+The second column is `report_utilization -hierarchical` on the routed build
+that includes the PS, the peripherals and the DMA; the per-block table is in
+`examples/xilinx/README.pynq_z2.md`. The DSP count is identical, which is what
+it should be: DSPs here are set by the MAC count and the reuse factor, and
+neither changed.
+
+**The LUT and flop figures in the first column are not explained by this
+iteration, and should not be read as a baseline it improved on.** Narrowing
+the input port from 48 bits to 24 shrinks the first conv layer's line buffer
+by about 1,500 bits; it does not remove 18,000 LUTs. Nothing else in the
+network changed. The likeliest explanation — untested — is that 30,312 was a
+Vitis HLS `csynth` estimate rather than a placed-and-routed count, which runs
+roughly 2x high; the 63% occupancy figure beside it was derived by adding
+30,312 to CVA5's 3,020, so it inherits whatever that number was. No report
+survives in this repo behind either. If the old `sw_14_5_rf4` HLS project is
+still on disk, one command settles it:
+
+```bash
+grep -A12 "Utilization Estimates" tools/nn_accel/sw_*/solution1/syn/report/*_csynth.rpt
+```
+
+CVA5 alone measured 3,020 LUT / 4 DSP post-implementation. `cva5_top_0` in
+this build measures 4,900 LUT / 4 DSP, the difference being the two added AXI
+slave ports, the two-level `cva5_ram_mux` tree and the boot ROM — not the core,
+which is untouched.
 
 ## Network
 
