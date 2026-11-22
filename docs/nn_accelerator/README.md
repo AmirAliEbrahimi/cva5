@@ -19,7 +19,11 @@
 > make -C examples/sw cifar          # the demo: hardware vs software, timed
 > ```
 >
-> **Measured on hardware: 7,097 cycles end to end**, identical on all eight
+> **It works on hardware.** Eight CIFAR images, hardware and software
+> agreeing on all eight and both 8/8 against the labels, both logits
+> matching in sign, pad counter clean.
+>
+> **7,097 cycles end to end**, identical on all eight
 > images, against 30,498 in the first version and a compute floor of 6,947.
 > The transfer has disappeared behind the compute, which is what the second
 > version existed to do and within 2% of what "Second iteration" predicted.
@@ -303,39 +307,45 @@ transfer using a dedicated DMA. Same phenomenon, different operating point.
 
 ## Configuration
 
-| | first version | this build |
+| | HLS estimate | implemented |
 |---|---|---|
-| Precision | `ap_fixed<14,5>` — 5 integer bits including sign, 9 fractional | unchanged |
-| Input precision | `ap_fixed<14,5>` | `ap_ufixed<8,0>` |
-| Reuse factor | 4 | 4 |
-| Interface | 48-bit AXI-Stream in, 32-bit out | **24-bit** in, 32-bit out |
-| `cnn_0` DSP | 115 | **115** |
-| `cnn_0` LUT / FF | 30,312 / 17,967 | **12,388 / 13,765** |
-| `cnn_0` block RAM | 35 x18 | **10 x36 + 2 x18** |
-| Whole-system occupancy | 63% LUT, 52% DSP | **40.8% LUT, 54.1% DSP, 61.7% slices** |
-| Timing | WNS +0.139 ns at 100 MHz | **WNS +0.226 ns at 100 MHz** |
+| Precision | `ap_fixed<14,5>` — 5 integer bits including sign, 9 fractional | |
+| Input precision | `ap_ufixed<8,0>` (was `ap_fixed<14,5>`) | |
+| Reuse factor | 4 | |
+| Interface | **24-bit** AXI-Stream in (was 48), 32-bit out | |
+| `cnn_0` LUT | 30,352 | **12,388** |
+| `cnn_0` FF | 18,915 | **13,765** |
+| `cnn_0` DSP | 88 | **115** |
+| `cnn_0` block RAM | 33 x18 | **10 x36 + 2 x18** |
+| Whole-system occupancy | | **40.8% LUT, 54.1% DSP, 61.7% slices** |
+| Timing | | **WNS +0.226 ns at 100 MHz** |
 | Accuracy | 95.9% (float reference 96.1%) — **an earlier `model_6_8.pt`**; see above | |
 
-The second column is `report_utilization -hierarchical` on the routed build
-that includes the PS, the peripherals and the DMA; the per-block table is in
-`examples/xilinx/README.pynq_z2.md`. The DSP count is identical, which is what
-it should be: DSPs here are set by the MAC count and the reuse factor, and
-neither changed.
+The implemented column is `report_utilization -hierarchical` on the routed
+build with the PS, the peripherals and the DMA in it; the per-block table is
+in `examples/xilinx/README.pynq_z2.md`. The estimate column is
+`cnn_prj/solution1/syn/report/cnn_csynth.rpt`.
 
-**The LUT and flop figures in the first column are not explained by this
-iteration, and should not be read as a baseline it improved on.** Narrowing
-the input port from 48 bits to 24 shrinks the first conv layer's line buffer
-by about 1,500 bits; it does not remove 18,000 LUTs. Nothing else in the
-network changed. The likeliest explanation — untested — is that 30,312 was a
-Vitis HLS `csynth` estimate rather than a placed-and-routed count, which runs
-roughly 2x high; the 63% occupancy figure beside it was derived by adding
-30,312 to CVA5's 3,020, so it inherits whatever that number was. No report
-survives in this repo behind either. If the old `sw_14_5_rf4` HLS project is
-still on disk, one command settles it:
+**Do not size a network off the HLS estimate.** On this design it is wrong in
+both directions and by different factors:
 
-```bash
-grep -A12 "Utilization Estimates" tools/nn_accel/sw_*/solution1/syn/report/*_csynth.rpt
-```
+- **LUTs: 2.45x too high.** 30,352 estimated, 12,388 implemented. This is
+  what the first version of this file recorded as the accelerator's size,
+  which made the design look like it occupied 63% of the device when it
+  occupies 41%. A network rejected as not fitting on that basis would have
+  fitted with room to spare.
+- **DSPs: 24% too low.** 88 estimated, 115 implemented — and DSPs are the
+  binding constraint here at 54% of the part. Headroom that exists in the
+  estimate does not exist on the die.
+- Flops and block RAM land within about 30% and 50% respectively, high in
+  both cases.
+
+The 2.45x also disposes of a more interesting story that the numbers seemed
+to tell. 30,352 is this project's estimate, with the 24-bit input; the
+30,312 recorded for the 48-bit version differs from it by 0.1%. The
+accelerator did not shrink when the input narrowed, which is the same
+measurement "What the input change cost" reports from the accuracy side:
+nothing changed because nothing much depended on it.
 
 CVA5 alone measured 3,020 LUT / 4 DSP post-implementation. `cva5_top_0` in
 this build measures 4,900 LUT / 4 DSP, the difference being the two added AXI
@@ -348,8 +358,10 @@ which is untouched.
 `MaxPool(4)` -> `Linear(32,2)`. **474 parameters.**
 
 That is the ceiling for a 7020 shared with CVA5, not a starting point — 4 and
-8 filters at 32x32 already needs 115 DSPs. Widening the conv layers changes
-every resource number and requires a fresh sweep.
+8 filters at 32x32 already needs 115 DSPs of the part's 220, and the DSP
+count is the one HLS *under*-estimates. Widening the conv layers changes
+every resource number and requires a fresh sweep, implemented rather than
+estimated.
 
 At this size the network separates colour statistics rather than recognizing
 objects, so accuracy depends heavily on the class pair: frog vs ship reaches

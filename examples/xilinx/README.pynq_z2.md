@@ -923,7 +923,10 @@ Three things in that table matter before anything else is added:
 
 - **The accelerator is 57% of the logic and 97% of the DSPs.** 115 of the 119
   DSP48s are `cnn_0`; CVA5 uses 4. Widening the network is not a thing this
-  part can absorb — see `docs/nn_accelerator/README.md`.
+  part can absorb — see `docs/nn_accelerator/README.md`, which also records
+  that Vitis HLS estimated this block at 30,352 LUTs and 88 DSPs against the
+  12,388 and 115 it actually takes. Sizing the next one off `csynth` gets
+  the binding constraint wrong in the dangerous direction.
 - **The DMA is nearly free.** 1,257 LUTs for `cva5_accel_0`, 704 of them
   LUTRAM: ZipCPU's `aximm2s` keeps its buffer in distributed memory, so the
   entire inbound data path costs no block RAM and no DSP.
