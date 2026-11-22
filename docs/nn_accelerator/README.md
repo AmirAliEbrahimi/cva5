@@ -35,6 +35,16 @@
 > byte-at-a-time copy into the image page preserves the layout the DMA
 > needs exactly rather than approximately.
 >
+> On the interrupt (`ACCEL_IRQ=1`) the same eight images give the same
+> eight answers in **7,110 cycles** against 7,093 polling. Seventeen cycles
+> is what the claim, the complete and the `mip` poll cost; what it buys is
+> roughly seven thousand AXI reads the core no longer issues while the
+> accelerator works. Polling stays the default, because on this workload
+> the core has nothing else to do with that time and a wait that never
+> wakes is a worse failure than a busy loop -- but the choice is now
+> measured rather than assumed, and the moment CVA5 runs anything
+> concurrent it inverts.
+>
 > **7,097 cycles end to end**, identical on all eight
 > images, against 30,498 in the first version and a compute floor of 6,947.
 > The transfer has disappeared behind the compute, which is what the second
