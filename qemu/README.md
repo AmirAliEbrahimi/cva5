@@ -57,13 +57,17 @@ packed as two `ap_fixed<14,5>` in 16-bit lanes -- about 300 lines of C,
 with the `.so` loaded at run time and the "not modelled" behaviour as the
 fallback when it is absent.
 
-`make -C tools/nn_accel host-model` is the gate. It compiles the
-generated firmware for the host and checks it against the eight logit
-pairs the board produced. It needs no Vitis, no licence and no board, and
-it is worth having whether or not QEMU follows: `examples/sw/cifar.c`'s
+`make -C tools/nn_accel host-model` was the gate, and **it passes**. The
+generated firmware compiles with a plain g++ and reproduces the board on
+all eight CIFAR images -- not just the decoded logits but the packed
+result word, padding bits and all: `0x3d8e03a1` for image 0, which is
+exactly what `server.c` printed from the board. There is a bit-accurate
+model of this accelerator that needs no Xilinx tooling to run.
+
+It is worth having whether or not QEMU follows: `examples/sw/cifar.c`'s
 reference is int32 Q9 while the hardware truncates to `ap_fixed<14,5>` at
-every layer, and this is the only thing that can say which of the two a
-disagreement belongs to.
+every layer, and this is the only thing in the tree that can say which of
+the two a disagreement belongs to.
 
 One more copy of the memory map lives here, and `tools/check-soc-map.py`
 does not read it -- it reconciles `soc.h`, the crossbar and the OpenOCD

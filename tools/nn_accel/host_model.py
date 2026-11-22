@@ -218,12 +218,34 @@ def main():
             f.write("{" + ",".join(str(v) for v in im) + "},\n")
         f.write("};\n")
 
+    def build_and_run(tag, extra, cwd):
+        """One build of the generated firmware, and its eight answers."""
+        exe = os.path.join(build, "host_model_" + tag)
+        cmd = ["g++", "-O2", "-std=c++14", "-o", exe,
+               os.path.join(build, "shim.cpp"),
+               os.path.join(build, "images.cpp"),
+               os.path.join(firmware, "cnn.cpp"),
+               f"-I{firmware}", f"-I{aptypes}", f"-I{nnet}",
+               # hls4ml's generated code is full of #pragma HLS, which g++
+               # does not know and does not need to.
+               "-Wno-unknown-pragmas"] + extra
+        print(f"host_model: building [{tag}] " + " ".join(extra))
+        c = subprocess.run(cmd, capture_output=True, text=True)
+        if c.returncode != 0:
+            return None, "\n".join(c.stderr.strip().splitlines()[-25:]), c.stderr
+        x = subprocess.run([exe], capture_output=True, text=True, cwd=cwd)
+        if x.returncode != 0:
+            return None, x.stderr.strip(), None
+        rows = []
+        for line in x.stdout.strip().splitlines():
+            k, w, l0, l1 = line.split()
+            rows.append((int(k), w, int(l0), int(l1)))
+        return rows, None, None
+
     cmd = ["g++", "-O2", "-std=c++14", "-o", os.path.join(build, "host_model"),
            os.path.join(build, "shim.cpp"), os.path.join(build, "images.cpp"),
            os.path.join(firmware, "cnn.cpp"),
            f"-I{firmware}", f"-I{aptypes}", f"-I{nnet}",
-           # hls4ml's generated code is full of #pragma HLS, which g++ does
-           # not know and does not need to.
            "-Wno-unknown-pragmas"]
     print("host_model: " + " ".join(cmd[:4]) + " ...")
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -268,9 +290,11 @@ def main():
     print()
     print("  img  packed      host logits    board logits   match")
     bad = 0
+    rows_txt = []
     for line in r.stdout.strip().splitlines():
         k, w, l0, l1 = line.split()
         k, l0, l1 = int(k), int(l0), int(l1)
+        rows_txt.append((k, w, l0, l1))
         if k < len(BOARD):
             b0, b1 = BOARD[k]
             ok = (l0, l1) == (b0, b1)
@@ -298,6 +322,37 @@ def main():
         print("  needs no Vitis to run. The QEMU device can load this rather"
               " than")
         print("  implement a network of its own.")
+
+    # ---- and the build the QEMU device will actually have to use -------
+    #
+    # A .so loaded by QEMU cannot depend on the working directory, so it
+    # cannot reload weights from weights/*.txt. Defining __SYNTHESIS__
+    # makes nnet_utils use the arrays compiled in from weights/*.h and do
+    # no file I/O at all -- but it also tells nnet_utils it is being
+    # synthesised, which changes what compiles. That has to be shown
+    # equivalent rather than assumed, which is what this does: same
+    # images, same comparison, and then the two builds against each other.
+    print()
+    syn, err, _ = build_and_run("synthesis", ["-D__SYNTHESIS__"], build)
+    if syn is None:
+        print("host_model: the __SYNTHESIS__ build did not work:")
+        print("  " + (err or "").replace("\n", "\n  "))
+        print("  Not fatal. It means the .so the QEMU device loads will need")
+        print("  weights/*.txt installed beside it and its own directory to")
+        print("  run from, rather than having them compiled in.")
+    else:
+        differ = [k for (k, w, a, b), (_, w2, c, d) in zip(syn, rows_txt)
+                  if (w, a, b) != (w2, c, d)]
+        if differ:
+            print(f"host_model: __SYNTHESIS__ differs on images {differ}.")
+            print("  The run-time weight loading and the compiled-in arrays")
+            print("  are not the same numbers, which is worth knowing before")
+            print("  either is trusted. Use the .txt path for the .so.")
+        else:
+            print("host_model: __SYNTHESIS__ gives identical results, with no")
+            print("  file I/O. That is how the QEMU device's .so gets built:")
+            print("  weights compiled in, nothing relative to a working")
+            print("  directory.")
 
     if not args.keep:
         for n in ("shim.cpp", "images.cpp"):
