@@ -3,21 +3,32 @@ Fixture and reference for test_benches/sw/tb_cifar.c.
 
 Writes images.h, weights.h and expected.h into a build directory. The first
 two are what examples/sw/cifar.c expects from the exporters; the third is
-this file's own answer, computed with NumPy from the PyTorch semantics
-rather than from cifar.c's loops, so that agreement between them means two
-independently written index expressions agree.
+this file's own answer, computed here from the PyTorch semantics rather than
+from cifar.c's loops, so that agreement between them means two independently
+written index expressions pick the same numbers.
 
-Deterministic: a fixed seed, so a failure is reproducible and a passing run
-is not luck. No torch dependency -- that would make a test of 200 lines of
-integer C wait on a 2 GB wheel.
+Two things are deliberate about how that answer is computed.
+
+It uses nothing but the standard library. The accelerator toolchain's venv
+holds torch and NumPy, but this test checks 200 lines of integer C and has
+to be runnable in a clone where none of that has been built yet -- a test
+that needs the thing it is testing to be set up first does not get run.
+
+And it is written the other way round from the C wherever there is a choice.
+cifar.c fuses convolution with pooling and skips out-of-range taps with a
+bounds test; this pads the input with zeros once, convolves the whole map,
+and pools in a second pass. A reference that transliterates the code it
+checks only proves the code was copied correctly.
+
+Deterministic: a fixed seed, so a failure is reproducible and a pass is not
+luck.
 
 Usage: python3 test_benches/sw/gen_cifar_fixture.py <outdir>
 """
 
 import os
+import random
 import sys
-
-import numpy as np
 
 Q = 9
 ONE = 1 << Q
@@ -26,76 +37,109 @@ DIM = 32
 C1, C2 = 4, 8
 
 
-def conv2d_q(x, w, b, pad=1):
-    """Q9 in, Q9 out. x[ic][h][w], w[oc][ic][kh][kw] Q9, b[oc] Q18.
+def conv_relu(x, w, b, cin, cout, n):
+    """Q9 in, Q9 out. 3x3, padding 1, relu on the Q18 accumulator.
 
-    Integer throughout and in the same order cifar.c does it: accumulate in
-    Q18, relu on the accumulator, then one arithmetic shift back to Q9.
+    Zero-padded rather than bounds-tested: cifar.c skips taps that fall off
+    the edge with an `if`, and padding is the other way to write the same
+    thing. The two disagree if either gets an edge wrong, which is the point.
     """
-    ic_n, h, w_ = x.shape
-    oc_n = w.shape[0]
-    xp = np.zeros((ic_n, h + 2 * pad, w_ + 2 * pad), dtype=np.int64)
-    xp[:, pad:pad + h, pad:pad + w_] = x
-    out = np.zeros((oc_n, h, w_), dtype=np.int64)
-    for oc in range(oc_n):
-        acc = np.full((h, w_), b[oc], dtype=np.int64)
-        for ic in range(ic_n):
-            for ky in range(3):
-                for kx in range(3):
-                    acc += int(w[oc, ic, ky, kx]) * xp[ic, ky:ky + h, kx:kx + w_]
-        acc = np.maximum(acc, 0)
-        out[oc] = acc >> Q
+    pad = [[[0] * (n + 2) for _ in range(n + 2)] for _ in range(cin)]
+    for ic in range(cin):
+        for y in range(n):
+            src = x[ic][y]
+            dst = pad[ic][y + 1]
+            for xx in range(n):
+                dst[xx + 1] = src[xx]
+
+    out = [[[0] * n for _ in range(n)] for _ in range(cout)]
+    for oc in range(cout):
+        bias = b[oc]
+        for y in range(n):
+            orow = out[oc][y]
+            for xx in range(n):
+                acc = bias
+                for ic in range(cin):
+                    wk = w[oc][ic]
+                    for ky in range(3):
+                        prow = pad[ic][y + ky]
+                        wrow = wk[ky]
+                        acc += (wrow[0] * prow[xx]
+                                + wrow[1] * prow[xx + 1]
+                                + wrow[2] * prow[xx + 2])
+                if acc < 0:
+                    acc = 0
+                orow[xx] = acc >> Q
     return out
 
 
-def maxpool_q(x, k=4):
-    c, h, w = x.shape
-    return x.reshape(c, h // k, k, w // k, k).max(axis=(2, 4))
+def maxpool(x, cout, n, k=4):
+    m = n // k
+    return [[[max(x[c][y * k + dy][xx * k + dx]
+                  for dy in range(k) for dx in range(k))
+              for xx in range(m)] for y in range(m)] for c in range(cout)]
+
+
+def q(v, scale):
+    """Round half away from zero, which is what numpy.round-then-cast did
+    here and what the exporter does."""
+    return int(v * scale + (0.5 if v >= 0 else -0.5))
 
 
 def main():
     outdir = sys.argv[1]
     os.makedirs(outdir, exist_ok=True)
-    rng = np.random.default_rng(20261121)
+    rnd = random.Random(20261121)
 
     # Weights in the range a trained model of this size actually produces:
-    # export_weights.py refuses to export a peak |param| below 0.193, and
-    # these land around 0.3.
-    W1 = np.round(rng.normal(0, 0.15, (C1, 3, 3, 3)) * ONE).astype(np.int16)
-    B1 = np.round(rng.normal(0, 0.05, C1) * ONE * ONE).astype(np.int32)
-    W2 = np.round(rng.normal(0, 0.15, (C2, C1, 3, 3)) * ONE).astype(np.int16)
-    B2 = np.round(rng.normal(0, 0.05, C2) * ONE * ONE).astype(np.int32)
-    W3 = np.round(rng.normal(0, 0.20, (2, C2 * 2 * 2)) * ONE).astype(np.int16)
-    B3 = np.zeros(2, dtype=np.int32)   # set below, once the logits are known
+    # export_weights.py refuses to export a peak |param| below 0.193.
+    def w4(co, ci, sd):
+        return [[[[q(rnd.gauss(0, sd), ONE) for _ in range(3)]
+                  for _ in range(3)] for _ in range(ci)] for _ in range(co)]
 
-    # Images: RGBA with a zero pad byte, which is the layout the DMA reads.
-    # Smooth gradients plus noise rather than uniform noise -- a conv on pure
-    # noise averages to nothing and would make every logit the bias.
-    imgs = np.zeros((N_IMAGES, DIM, DIM, 4), dtype=np.uint8)
-    yy, xx = np.meshgrid(np.arange(DIM), np.arange(DIM), indexing="ij")
+    W1 = w4(C1, 3, 0.15)
+    B1 = [q(rnd.gauss(0, 0.05), ONE * ONE) for _ in range(C1)]
+    W2 = w4(C2, C1, 0.15)
+    B2 = [q(rnd.gauss(0, 0.05), ONE * ONE) for _ in range(C2)]
+    W3 = [[q(rnd.gauss(0, 0.20), ONE) for _ in range(C2 * 2 * 2)]
+          for _ in range(2)]
+
+    # Images: RGBA with a zero pad byte, the layout the DMA reads. Smooth
+    # gradients plus noise rather than uniform noise -- a convolution over
+    # pure noise averages to nothing and every logit comes out the bias.
+    imgs = []
     for k in range(N_IMAGES):
-        for c in range(3):
-            base = (yy * (3 + c + k) + xx * (5 - c + k)) % 256
-            noise = rng.integers(0, 48, (DIM, DIM))
-            imgs[k, :, :, c] = np.clip(base + noise, 0, 255).astype(np.uint8)
+        im = [[[0, 0, 0, 0] for _ in range(DIM)] for _ in range(DIM)]
+        for y in range(DIM):
+            for x in range(DIM):
+                for c in range(3):
+                    base = (y * (3 + c + k) + x * (5 - c + k)) % 256
+                    v = base + rnd.randrange(0, 48)
+                    im[y][x][c] = 255 if v > 255 else v
+        imgs.append(im)
 
-    def logits_for(k, bias):
+    def logits_for(k):
         # A pixel byte v is v/256; in Q9 that is v<<1, exactly. Channels-last
         # in memory, channels-first for the convolution.
-        x = (imgs[k, :, :, :3].astype(np.int64) << 1).transpose(2, 0, 1)
-        h1 = maxpool_q(conv2d_q(x, W1, B1))
-        h2 = maxpool_q(conv2d_q(h1, W2, B2))
-        flat = h2.reshape(-1)                       # channel-major: c*4+y*2+x
-        return [int(bias[o] + int((W3[o].astype(np.int64) * flat).sum()))
+        im = imgs[k]
+        x = [[[im[y][xx][c] << 1 for xx in range(DIM)] for y in range(DIM)]
+             for c in range(3)]
+        h1 = maxpool(conv_relu(x, W1, B1, 3, C1, DIM), C1, DIM)
+        h2 = maxpool(conv_relu(h1, W2, B2, C1, C2, DIM // 4), C2, DIM // 4)
+        # Flatten is channel-major: c*4 + y*2 + x, what nn.Flatten() does.
+        flat = [h2[c][y][xx] for c in range(C2) for y in range(2)
+                for xx in range(2)]
+        return [sum(W3[o][i] * flat[i] for i in range(len(flat)))
                 for o in range(2)]
 
     # Random weights classify everything the same way, and a fixture whose
-    # argmax is constant checks the argmax not at all. Offset the second
+    # argmax never changes checks the argmax not at all. Offset the second
     # logit by the median gap so the decision lands on both sides -- the
     # point is to exercise the comparison, not to be a plausible model.
-    raw = [logits_for(k, (0, 0)) for k in range(N_IMAGES)]
-    shift = int(np.median([r[0] - r[1] for r in raw]))
-    B3 = np.array([0, shift], dtype=np.int32)
+    raw = [logits_for(k) for k in range(N_IMAGES)]
+    gaps = sorted(r[0] - r[1] for r in raw)
+    shift = gaps[len(gaps) // 2]
+    B3 = [0, shift]
 
     expected = [[r[0], r[1] + shift] for r in raw]
     labels = [1 if e[1] > e[0] else 0 for e in expected]
@@ -103,11 +147,19 @@ def main():
         raise SystemExit("fixture: every image lands in one class -- the "
                          "argmax checks in tb_cifar would be vacuous")
 
+    def flatten(a):
+        if isinstance(a, list):
+            out = []
+            for v in a:
+                out.extend(flatten(v))
+            return out
+        return [a]
+
     def carr(f, ctype, name, a, per_line=12):
-        flat = a.reshape(-1)
-        f.write(f"static const {ctype} {name}[{flat.size}] = {{\n")
-        for i in range(0, flat.size, per_line):
-            f.write("    " + ", ".join(f"{int(v):8d}"
+        flat = flatten(a)
+        f.write(f"static const {ctype} {name}[{len(flat)}] = {{\n")
+        for i in range(0, len(flat), per_line):
+            f.write("    " + ", ".join(f"{v:8d}"
                                        for v in flat[i:i + per_line]) + ",\n")
         f.write("};\n")
 
@@ -133,16 +185,16 @@ def main():
         f.write("static const uint8_t __attribute__((aligned(4)))\n"
                 "IMAGES[N_IMAGES][IMG_BYTES] = {\n")
         for k in range(N_IMAGES):
-            flat = imgs[k].reshape(-1)
+            flat = flatten(imgs[k])
             f.write("  {\n")
-            for i in range(0, flat.size, 24):
-                f.write("    " + ",".join(f"{int(v):3d}"
+            for i in range(0, len(flat), 24):
+                f.write("    " + ",".join(f"{v:3d}"
                                           for v in flat[i:i + 24]) + ",\n")
             f.write("  },\n")
         f.write("};\n#endif /* IMAGES_H */\n")
 
     with open(os.path.join(outdir, "expected.h"), "w") as f:
-        f.write("/* Generated by gen_cifar_fixture.py: the NumPy answer. */\n")
+        f.write("/* Generated by gen_cifar_fixture.py: the reference answer. */\n")
         f.write("#ifndef EXPECTED_H\n#define EXPECTED_H\n")
         f.write(f"static const int EXPECTED[{N_IMAGES}][2] = {{\n")
         for e in expected:

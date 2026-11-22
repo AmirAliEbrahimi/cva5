@@ -8,11 +8,17 @@
  * "disagrees", and the search goes looking for a hardware fault that is not
  * there. So the reference needs a reference.
  *
- * The one here is NumPy, in run_cifar.sh, written from the PyTorch
- * semantics -- Conv2d weights [out][in][kh][kw], padding 1, MaxPool2d(4),
- * Flatten channel-major -- rather than from this C. Both see the same
- * pseudo-random weights and images; agreement on every logit means the two
- * independently-written index expressions pick the same numbers.
+ * The one here is gen_cifar_fixture.py, written from the PyTorch semantics
+ * -- Conv2d weights [out][in][kh][kw], padding 1, MaxPool2d(4), Flatten
+ * channel-major -- rather than from this C, and structured the other way
+ * round: it pads the input and convolves the whole map where cifar.c
+ * bounds-tests and fuses the pooling in. Both see the same pseudo-random
+ * weights and images; agreement on every logit means two independently
+ * written sets of index expressions pick the same numbers.
+ *
+ * Standard library only. This has to run in a clone where the accelerator
+ * toolchain has never been set up -- a test that needs a venv built first
+ * is a test that does not get run.
  *
  * What this cannot check is the accelerator, or whether the quantization
  * matches the trained model. It checks the one thing that would otherwise
@@ -52,8 +58,8 @@ static void check_eq(const char *what, int k, int got, int want) {
 int main(void) {
     int k, l0, l1;
 
-    printf("tb_cifar: cifar.c's sw_infer against a NumPy model of the same"
-           " arithmetic\n");
+    printf("tb_cifar: cifar.c's sw_infer against an independent model of"
+           " the same arithmetic\n");
 
     for (k = 0; k < N_IMAGES; k++) {
         sw_infer(IMAGES[k], &l0, &l1);

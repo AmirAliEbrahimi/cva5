@@ -338,7 +338,7 @@ objects, so accuracy depends heavily on the class pair: frog vs ship reaches
 | `tools/nn_accel/export_{weights,images}.py` | `weights.h` and `images.h`, generated into `examples/sw` |
 | `examples/sw/accel.c` | brings the data path up: the control block, the DMA, the pad counter |
 | `examples/sw/cifar.c` | the demo — accelerator against the same network in Q9 C, both timed |
-| `test_benches/sw/run_cifar.sh` | `cifar.c`'s software reference against a NumPy model of it |
+| `test_benches/sw/run_cifar.sh` | `cifar.c`'s software reference against an independent model of it — no venv needed |
 | `examples/xilinx/axi/cva5_accel_axi.sv` | the DMA, the lane select and the control registers |
 | `examples/xilinx/axi/cva5_axis_lane.sv` | 32 → 24 lane select, and the pad counter |
 | `examples/xilinx/pynq_z2_sys.tcl` | the block design — one SoC now, accelerator included when its IP exists |

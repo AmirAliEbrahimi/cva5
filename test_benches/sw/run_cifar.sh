@@ -1,13 +1,15 @@
 #!/bin/sh
-# examples/sw/cifar.c's software reference against a NumPy model of the same
-# integer arithmetic. See test_benches/sw/tb_cifar.c.
+# examples/sw/cifar.c's software reference against an independent model of
+# the same integer arithmetic. See test_benches/sw/tb_cifar.c.
 # Run from the repo root: sh test_benches/sw/run_cifar.sh
 set -e
 OUT=build/tb_cifar
 mkdir -p $OUT
 
-# The fixture and the reference answers. NumPy only -- no torch, and no
-# trained model: this checks cifar.c's indexing, not the network.
+# The fixture and the reference answers. Standard library only -- no torch,
+# no NumPy, no trained model, nothing from tools/nn_accel's venv: this
+# checks cifar.c's indexing, not the network, and must run in a fresh
+# clone. Takes about a quarter of a second.
 python3 test_benches/sw/gen_cifar_fixture.py $OUT
 
 # -iquote, not -I, for the same reason run_mbox.sh uses it: examples/sw/stdio.h
