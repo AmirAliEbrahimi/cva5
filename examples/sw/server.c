@@ -65,6 +65,23 @@ static void puthex8(unsigned v) {
     putstr(b);
 }
 
+/*
+ * pulp-platform's axi_err_slv answers an unclaimed address with this. It is
+ * not ours and it is not a plausible register value, so seeing it means the
+ * transaction never reached a slave.
+ */
+#define XBAR_DECERR_DATA 0xBADCAB1Eu
+
+static void bus_report(const char *when) {
+    putstr("  bus "); putstr(when);
+    putstr(": accel ");  puthex8(ACCEL(ACCEL_STATUS_OFF));
+    putstr("  clint ");
+    puthex8(*(volatile unsigned int *)(CLINT_BASE + CLINT_MTIME_OFF));
+    putstr("  uart ");
+    puthex8(*(volatile unsigned int *)(UART_BASE + UART_STAT_OFF));
+    puts("");
+}
+
 int main(void) {
     unsigned int served = 0;
 
@@ -74,10 +91,28 @@ int main(void) {
     putstr("  image page  "); putdec(JOB_IMG_SIZE);
     puts(" bytes, 4 per pixel, R G B 0");
 
-    /* The accelerator has to be there. A control window that decodes to
-     * nothing reads as zero, and zero has ACCEL_ST_IDLE clear -- so this
-     * also catches a bitstream built without the hls4ml IP, which otherwise
-     * presents as every job timing out. */
+    /*
+     * What the bus says before anything else happens.
+     *
+     * An address no crossbar rule claims comes back from the Lite
+     * crossbar's error slave as 0xBADCAB1E, which is not a status word but
+     * reads as one: bit 3 is ACCEL_ST_RESULT and bit 1 is ACCEL_ST_IDLE, so
+     * both the idle check below and the result poll are satisfied by a
+     * window that is not there. Checking for the constant by name is the
+     * only way to tell "the accelerator said it is idle" from "nothing
+     * answered".
+     *
+     * The CLINT is read beside it as a control. It is on the same crossbar,
+     * behind the same decode, and it is always present -- so if the CLINT
+     * reads sanely and the accelerator reads 0xBADCAB1E, the fault is that
+     * one rule, and if both are wrong the core's whole peripheral path is.
+     */
+    bus_report("at startup");
+    if (ACCEL(ACCEL_STATUS_OFF) == XBAR_DECERR_DATA) {
+        puts("  FAIL nothing answers at ACCEL_BASE -- the crossbar's decode,"
+             " not the accelerator");
+        return 1;
+    }
     if (!(ACCEL(ACCEL_STATUS_OFF) & ACCEL_ST_IDLE)) {
         puts("  FAIL the accelerator is not idle -- is the IP in this"
              " bitstream?");
@@ -130,6 +165,12 @@ int main(void) {
          * before this one started -- a different fault from a wrong
          * answer, and they look the same in a table of classes. */
         if (seq == 1u) {
+            /* Again, now that the PS has written an image and is polling
+             * main memory. If the accelerator answered at startup and
+             * answers 0xBADCAB1E here, the trigger is PS traffic, not the
+             * build -- and that is a finding about the bus rather than
+             * about this program. */
+            bus_report("in job 1");
             putstr("  first job: status "); puthex8(st_before);
             putstr(" -> "); puthex8(st_after);
             putstr("  raw "); puthex8(raw);
