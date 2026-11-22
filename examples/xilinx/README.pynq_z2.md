@@ -753,6 +753,7 @@ inside 0.6 ns of each other:
 | + RAM mux and the PS on it | core AXI address → SBA bridge state enable | 9.329 | **+0.335** |
 | + USB and the FCLKs switched off | unchanged | 9.329 | **+0.335** |
 | + the DMA, the third RAM master and the accelerator | register file → divider CLZ | 9.728 | **+0.226** |
+| + the interrupt, and the I2C pins on the codec | d_tlb → main RAM enable | 9.038 | **+0.077** |
 
 The last row is the accelerator going in — the DMA, the lane select, the
 accelerator's own AXI4-Lite control block and a second `cva5_ram_mux` level on
@@ -769,8 +770,49 @@ combination that means *re-placement*, not a path this work added. 12,000 more
 LUTs in the device re-deals the hand; the core's divider was already in the
 cluster and came up holding it.
 
-The two rows above it are the same number, and that is the point of the second
-one: switching off USB0 and the two FCLK ports removed cells from the PS, and
+The last row lost 0.149 ns and **the cause is not yet attributed**, which
+is worth leaving written down rather than tidying into a story.
+
+Three things differ from the +0.226 build and only one of them can be
+dismissed outright:
+
+- **An FPU fix merged from upstream** — `fp_div`, `fp_sqrt`, `fp_mul`,
+  `fp_sqrt_core`, `fp_wb2int_misc`. Dismissed: `CPU_CONFIG` has `FPU : 0`,
+  so all five elaborate away and change no netlist. Vivado is
+  deterministic; a merge that alters nothing synthesised alters nothing
+  here.
+- **Patch 0068's PLIC, two sources to three** — `cva5_plic_0` goes from
+  79 LUT and 38 flops to 110 and 46, the only added logic in the build,
+  and the design *shrinks* by four LUTs overall.
+- **The I2C pins moved from P16/P15 to U9/T9** for the codec experiment
+  above. No logic at all, but it drags `cva5_i2c_0`'s 229 LUTs and its
+  IOBUFs to a different part of the die, and everything near them
+  re-places.
+
+The first instinct was to blame the PLIC because it is the only thing that
+added gates. That is the wrong instinct and this file has made the point
+twice already: changes that add no logic on the reported path have moved
+this design 0.2 ns, and the pin move is exactly that kind of change. A
+build with the pins back on P16/P15 separates them, and since the codec
+pins are a fixture rather than a configuration, that build has to happen
+anyway.
+
+What is clear either way is where it landed:
+`d_tlb/mmu.virtual_address_reg[17]` into `local_mem/mem_reg_1_0_3/ENARDEN`,
+seven logic levels carrying 9.038 ns, so routing and BRAM setup rather
+than logic. That structure is not new — it sat at +0.347 to +0.397 in the
+PS build, one of the cluster — and nothing in the PLIC or the I2C is on
+it. Whichever change did it, it did it by re-placing the design and
+letting the cluster re-deal, which is the thing this section has been
+saying for eight rows.
+
+Hold came back **+0.017**, just under the 0.019–0.029 band every earlier
+build sat in. Vivado's hold fixing stops at met rather than maximising, so
+a number drifting inside that band is the tool satisficing; only a negative
+one means anything.
+
+The two rows above the accelerator's are the same number, and that is the
+point of the second one: switching off USB0 and the two FCLK ports removed cells from the PS, and
 nothing the PS contains was ever on a PL timing path. A change that cannot
 move the number is worth one build to confirm it did not.
 
@@ -903,21 +945,23 @@ as a reported failure.
 
 | block | LUT | FF | RAMB36 | RAMB18 | DSP |
 |---|---|---|---|---|---|
-| `cnn_0` — the hls4ml accelerator | 12,388 | 13,765 | 10 | 2 | 115 |
-| `cva5_top_0` — core, 128 KB memory, mux tree | 4,900 | 3,439 | 32 | 4 | 4 |
-| `axi_xbar_0` | 1,617 | 984 | — | — | — |
-| `cva5_accel_0` — DMA, lane select, control | 1,257 | 364 | — | — | — |
-| `cva5_spi_0` | 737 | 863 | — | — | — |
-| `cva5_uart_0` | 310 | 623 | — | — | — |
+| `cnn_0` — the hls4ml accelerator | 12,369 | 13,765 | 10 | 2 | 115 |
+| `cva5_top_0` — core, 128 KB memory, mux tree | 4,893 | 3,439 | 32 | 4 | 4 |
+| `axi_xbar_0` | 1,614 | 984 | — | — | — |
+| `cva5_accel_0` — DMA, lane select, control | 1,251 | 364 | — | — | — |
+| `cva5_spi_0` | 739 | 863 | — | — | — |
+| `cva5_uart_0` | 308 | 623 | — | — | — |
 | `cva5_i2c_0` | 229 | 245 | — | — | — |
 | `cva5_clint_0` | 193 | 175 | — | — | — |
-| `cva5_plic_0` | 79 | 38 | — | — | — |
-| **whole design** | **21,722** | **20,529** | **42** | **6** | **119** |
+| `cva5_plic_0` — three sources | 110 | 46 | — | — | — |
+| **whole design** | **21,718** | **20,537** | **42** | **6** | **119** |
 
 Against the device: 40.8% of the LUTs, 19.3% of the flops, 32.1% of the block
-RAM, 54.1% of the DSPs — and **61.7% of the slices**, which is the number that
-decides whether the next thing fits. LUT percentage understates occupancy by
-half again here, because a slice is claimed by whatever lands in it.
+RAM, 54.1% of the DSPs — and **61.7% of the slices**, measured at the +0.226
+build, which this one differs from by four LUTs and eight flops. Slices are
+the number that decides whether the next thing fits: LUT percentage
+understates occupancy by half again here, because a slice is claimed by
+whatever lands in it.
 
 Three things in that table matter before anything else is added:
 
@@ -935,6 +979,47 @@ Three things in that table matter before anything else is added:
 
 The child rows sum to 21,710 against a reported 21,722; the twelve are
 top-level glue and cross-hierarchy LUT combining, which the report warns about.
+
+### Proving the I2C pins, with a device that was already on the board
+
+Everything else in this tree was provable with what the SoC contains. The
+I2C scan was not: with nothing on J3 pins 9 and 10, every address misses
+its ACK — and so does a bus wired to the wrong balls, or one whose pads
+never leave the die. The passing scan and the broken scan look identical.
+It stayed the one thing unproven on hardware for most of this project.
+
+The answer was not to add anything. The PYNQ-Z2 carries an ADAU1761 audio
+codec whose control interface is I2C, on two pins of its own:
+
+| net | pin |
+|---|---|
+| `au_scl_r` | U9 |
+| `au_sda_r` | T9 |
+
+Pointing `i2c_scl_io` and `i2c_sda_io` at those two instead of P16/P15 —
+two lines of `pynq_z2_cva5.xdc`, nothing else, no new IP, no wires — puts
+the existing master on a bus with a real third-party device on it. The
+scan answers:
+
+```
+scanning 0x08..0x77...
+  device answered at 0x0000003b
+devices found: 0x00000001
+PASS the bus works end to end
+```
+
+0x3B is the ADAU1761 at `00111` + ADDR1 + ADDR0 with both straps high.
+On this board those straps are not resistors — ADR0 and ADR1 are PL pins
+(M17 and M18), so with nothing driving them they take whatever the
+unused-I/O default gives, which here is high. The codec also answered
+without a master clock on U5, which the datasheet left ambiguous: the
+control port ACKs its address with the core clock stopped, even though
+register access would not work.
+
+**The pin change is not in this tree and should not be.** It borrows the
+audio codec's bus to prove the controller and the pads, which it does
+once; the board's I2C is on the Arduino header and that is where the
+constraints point. What is recorded here is the result, not the fixture.
 
 ### UART
 
@@ -1661,7 +1746,7 @@ something.
 | PLIC | `bash test_benches/axi/run_plic.sh` | 103 checks at `NUM_SOURCES` 8 and 57 each at 2 — the configuration the board deploys — and at 1, the narrowest the PLIC builds, which takes different widths inside it: the register map, pending versus eip, claim/complete including an unserviced level source, edge latching, priority order and ties, threshold suppression. Also checks the vendored copies still match `apu/plic` |
 | interrupt wiring | `bash test_benches/axi/run_irq_concat.sh` | 62 checks: `cva5_irq_concat` driving a real two-source PLIC — which port becomes which source number, claimed by number, and a one-cycle pulse latching with the source level sensitive |
 | I2C | `bash test_benches/axi/run_i2c.sh` | 139 checks against a hand-written behavioural slave: the register map, the open-drain tie-off driving and releasing, a write reaching the right slave with the right byte, a read coming back, and an unanswered address reported as a missed ACK rather than hanging |
-| I2C on hardware | `make -C examples/sw i2c` | the register file, the bus coming up idle with both lines released, an unanswered address reported rather than hanging — then a scan of 0x08–0x77. **The scan is the only part that proves the pins**: with nothing attached every address misses its ACK, and so does a bus wired to the wrong balls, so one device answering is what says the wiring is right |
+| I2C on hardware | `make -C examples/sw i2c` | the register file, the bus coming up idle with both lines released, an unanswered address reported rather than hanging — then a scan of 0x08–0x77. **The scan is the only part that proves the pins**: with nothing attached every address misses its ACK, and so does a bus wired to the wrong balls, so one device answering is what says the wiring is right. **Proven** — see below |
 | CLINT on hardware | `make -C examples/sw timer` | measures mtime's rate against a busy loop, then mtimecmp and msip |
 | counter CSRs, in the core sim | `make -C examples/sw run-csrs` | `rdcycle`/`rdinstret`/`mcycle` readable and advancing, `rdtime` and `rdtimeh` taking an illegal-instruction trap. The only place both polarities of `INCLUDE_TIME_CSR` can be run: the sim takes upstream's `EXAMPLE_CONFIG`, so with the bit set the three trap checks are *expected* to fail |
 | SPI on hardware | `make -C examples/sw spi` | the register file and FIFO levels with nothing attached, a transfer running to completion, then — with MOSI jumpered to MISO on the ICSP header — a held 1 reading back as all ones and a held 0 as all zeros, on two chip selects |
