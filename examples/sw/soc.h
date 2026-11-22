@@ -302,6 +302,34 @@ static inline void dev_fence(void) {
  */
 #define ACCEL_RAM_OFF(p)  ((unsigned int)(unsigned long)(p) - RAM_BASE)
 
+/*
+ * Decoding ACCEL_RESULT_OFF.
+ *
+ * result_t is nnet::array<ap_fixed<14,5>, 2>: two logits, 14 bits each, in
+ * one 32-bit beat. hls4ml pads every nnet::array element up to a byte
+ * boundary, so each 14-bit value sits in the LOW bits of a 16-bit lane and
+ * the top two bits of the lane are padding -- element 0 in [13:0], element 1
+ * in [29:16], exactly the packing the input side uses.
+ *
+ * The sign bit is therefore bit 13 of the lane, not bit 15. Reading a lane
+ * as int16_t looks right and is not: a negative logit has bit 13 set and
+ * bits 15:14 clear, so it reads back as a large positive number, and the
+ * argmax of two logits comes out backwards whenever exactly one of them is
+ * negative. Nothing downstream can tell -- the result is a plausible class.
+ *
+ * 5 integer bits of ap_fixed<14,5> leaves 9 fractional, so these are Q9.
+ * examples/sw/cifar.c's software path is Q18 and divides by 512 to compare.
+ */
+#define ACCEL_LOGIT_BITS  14
+#define ACCEL_LOGIT_Q     9
+
+static inline int accel_logit(unsigned int lane) {
+    int v = (int)(lane & ((1u << ACCEL_LOGIT_BITS) - 1u));
+    if (v & (1 << (ACCEL_LOGIT_BITS - 1)))
+        v -= (1 << ACCEL_LOGIT_BITS);
+    return v;
+}
+
 #define ACCEL_PIXEL_BYTES 4u
 #define ACCEL_IMG_PIXELS  (32u * 32u)
 #define ACCEL_IMG_BYTES   (ACCEL_IMG_PIXELS * ACCEL_PIXEL_BYTES)

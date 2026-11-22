@@ -125,12 +125,14 @@ static int hw_infer(const uint8_t *img, int *l0, int *l1, unsigned *cycles) {
     }
     t1 = read_cycles();
 
-    /* One inference is one beat: two 16-bit logits, element zero in the low
-     * half, which is the order hls4ml packs nnet::array in. */
+    /* One inference is one beat: two ap_fixed<14,5> logits, element zero in
+     * the low lane. 14 bits in a 16-bit lane, so the sign bit is bit 13 --
+     * see accel_logit() in soc.h for why reading the lane as int16_t gives
+     * a plausible wrong answer rather than an obvious one. */
     r = ACCEL(ACCEL_RESULT_OFF);
     last_raw = r;
-    *l0 = (int)(short)(r & 0xFFFFu);
-    *l1 = (int)(short)(r >> 16);
+    *l0 = accel_logit(r);
+    *l1 = accel_logit(r >> 16);
     *cycles = t1 - t0;
     return 1;
 }
@@ -257,7 +259,7 @@ static void puthex8(unsigned v) {
 int main(void) {
     unsigned hw_total = 0, sw_total = 0, hw_cyc, t0, t1, pad, pad_base;
     int k, hw0, hw1, sw0, sw1, hw_class, sw_class;
-    int agree = 0, hw_right = 0, sw_right = 0, fails = 0;
+    int agree = 0, sign_ok = 0, hw_right = 0, sw_right = 0, fails = 0;
 
     puts("cifar: CIFAR-10 on the accelerator, against software on CVA5");
     putstr("  classes     ");
@@ -316,6 +318,12 @@ int main(void) {
         hw_total += hw_cyc;
         sw_total += t1 - t0;
         if (hw_class == sw_class) agree++;
+        /* Signs, separately from the argmax. The argmax only compares the
+         * two logits with each other, so a decode that mangles both the
+         * same way still argmaxes correctly half the time; the signs catch
+         * it on the first image. This is the check that was missing when
+         * the result lanes were read as int16_t. */
+        if ((hw0 < 0) == (sw0 < 0) && (hw1 < 0) == (sw1 < 0)) sign_ok++;
         if (hw_class == (int)IMAGE_LABELS[k]) hw_right++;
         if (sw_class == (int)IMAGE_LABELS[k]) sw_right++;
 
@@ -323,11 +331,18 @@ int main(void) {
         putstr_w(CLASS_NAMES[IMAGE_LABELS[k]], 9);
         putstr_w(CLASS_NAMES[hw_class], 9);
         putstr_w(CLASS_NAMES[sw_class], 9);
-        /* The numbers, not just the verdict. Two logits that are close
-         * explain a disagreement; two that are nothing like each other say
-         * the two paths are not running the same network. */
+        /* The numbers, not just the verdict, and both in Q9 so they can be
+         * read against each other: the hardware's ap_fixed<14,5> has 9
+         * fractional bits and the software accumulates in Q18. Two logits
+         * that are close explain a disagreement; two that are nothing like
+         * each other say the paths are not running the same network.
+         *
+         * They will not match exactly and are not meant to. The hardware
+         * truncates to 14 bits after every layer where the software keeps
+         * int32, which costs the hardware something like 20% of the
+         * magnitude by the output. The signs are what must agree. */
         putsigned(hw0); putstr(","); putsigned(hw1); putstr("  ");
-        putsigned(sw0); putstr(","); putsigned(sw1); putstr("  ");
+        putsigned(sw0 / 512); putstr(","); putsigned(sw1 / 512); putstr("  ");
         putdec_w(hw_cyc, 8); putstr("  ");
         putdec_w(t1 - t0, 10);
         puts(hw_class == sw_class ? "" : "   <- disagree");
@@ -336,6 +351,8 @@ int main(void) {
     puts("");
     putstr("  agreement   "); putdec((unsigned)agree);
     putstr(" / "); putdec((unsigned)N_IMAGES); puts(" hardware vs software");
+    putstr("  logit signs "); putdec((unsigned)sign_ok);
+    putstr(" / "); putdec((unsigned)N_IMAGES); puts(" both logits, both paths");
     putstr("  correct     hw "); putdec((unsigned)hw_right);
     putstr(", sw "); putdec((unsigned)sw_right);
     putstr(" of "); putdec((unsigned)N_IMAGES); puts(" against the labels");
@@ -365,6 +382,11 @@ int main(void) {
      * quantized model says it should. */
     if (agree != N_IMAGES) {
         puts("  FAIL hardware and software disagree");
+        fails++;
+    }
+    if (sign_ok != N_IMAGES) {
+        puts("  FAIL a logit came back with the wrong sign -- check the"
+             " result decode, not the network");
         fails++;
     }
 

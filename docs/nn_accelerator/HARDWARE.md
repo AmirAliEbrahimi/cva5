@@ -1,5 +1,14 @@
 # Hardware
 
+> **This describes the first version's block design and nothing else builds
+> it.** `pynq_z2_nn_sys.tcl`, `axi_fifo_mm_s`, `axis_dwidth_converter`,
+> `axi_gpio`, `xlconcat` and the 0x6000_0000 peripheral map are all gone;
+> the SoC is `examples/xilinx/pynq_z2_sys.tcl` and the accelerator's
+> attachment is `examples/xilinx/axi/cva5_accel_axi.sv`. Kept for the wire
+> format reasoning, which still holds, and because the three attempts it
+> records are worth not repeating. The current result and input formats are
+> in README.md under "Second iteration".
+
 The block design, the wire format, and what `examples/xilinx/pynq_z2_nn_sys.tcl`
 builds for you.
 

@@ -18,6 +18,15 @@
 > make -C examples/sw accel          # the path: PASS accel, pad bytes 0
 > make -C examples/sw cifar          # the demo: hardware vs software, timed
 > ```
+>
+> **Measured on hardware: 7,097 cycles end to end**, identical on all eight
+> images, against 30,498 in the first version and a compute floor of 6,947.
+> The transfer has disappeared behind the compute, which is what the second
+> version existed to do and within 2% of what "Second iteration" predicted.
+> The 77% is gone. What is not yet re-measured is a software baseline worth
+> comparing against: `cifar.c`'s Q9 reference takes 2.6M cycles, slower than
+> the first version's 1.53M, so the speedup it prints is not the 50.2x
+> figure's successor and should not be read as one.
 
 ## Second iteration: where the 77% went
 
@@ -54,6 +63,29 @@ between them is a lane select — `tdata[23:0]` — rather than a width converte
 with state. Packed 3-byte pixels put two pixels across three words, which is
 where the 3:2 gearbox and GOTCHAS #8's "chunk must divide by 3" came from.
 Both stop existing. The image also gets *smaller*: 4096 bytes against 6144.
+
+### The result comes back packed the same way, and it bit me
+
+`result_t` is `nnet::array<ap_fixed<14,5>, 2>`: two logits in one 32-bit
+beat. The same byte-padding rule that makes the input 24 bits applies on the
+way out — each 14-bit element is padded to a 16-bit lane, value in the low
+bits, element 0 in `[13:0]` and element 1 in `[29:16]`, the top two bits of
+each lane unused.
+
+**So the sign bit is bit 13, not bit 15.** The first version of `cifar.c`
+read each lane as an `int16_t`, which is the obvious thing and is wrong: a
+negative logit has bit 13 set and bits 15:14 clear, so it comes back as a
+large positive number. The argmax of two logits then inverts whenever
+exactly one of them is negative, which for a two-class network is most
+images — the board classified all eight backwards while the accelerator was
+computing them correctly. Nothing about the output says this is happening:
+the result is a plausible class, confidently wrong.
+
+`accel_logit()` in `soc.h` does the sign extension, and `cifar.c` checks the
+signs of both logits against software separately from the argmax, because
+the argmax only compares the two logits with each other and so survives a
+decode that mangles both the same way. `test_benches/sw/tb_cifar.c` pins
+eight raw lane pairs measured on hardware against their decoded values.
 
 A consequence worth stating: with `ap_ufixed<8,0>` the pixel byte **is** the
 fixed-point value, so nothing converts anything. The DMA moves the image and

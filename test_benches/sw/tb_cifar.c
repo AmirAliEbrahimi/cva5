@@ -108,6 +108,42 @@ static void check_eq(const char *what, int k, int got, int want) {
     }
 }
 
+/*
+ * accel_logit, on the lane values the board actually produced.
+ *
+ * These eight pairs are the raw result halves from a run of the demo on
+ * hardware, frog/ship, four of each. Decoded as int16_t -- which is what
+ * the driver did at first -- every one of them is positive, the argmax is
+ * wrong on all eight, and the only symptom is a classifier that gets
+ * everything backwards while looking like it works. Decoded from bit 13
+ * the signs separate the classes.
+ *
+ * Kept as measured data rather than as a unit test of the arithmetic: the
+ * arithmetic is four lines and obvious, and what is worth pinning is that
+ * these particular bit patterns mean what the hardware meant by them.
+ */
+static void check_decode(void) {
+    static const struct { unsigned lo, hi; int want0, want1, cls; } V[] = {
+        {   929, 15758,   929,  -626, 0 },
+        {  1278, 15224,  1278, -1160, 0 },
+        {   575, 16186,   575,  -198, 0 },
+        {  1237, 15077,  1237, -1307, 0 },
+        { 15053,  1786, -1331,  1786, 1 },
+        { 14846,  1966, -1538,  1966, 1 },
+        { 15923,   801,  -461,   801, 1 },
+        { 14842,  1806, -1542,  1806, 1 },
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(V) / sizeof(V[0]); i++) {
+        unsigned raw = (V[i].hi << 16) | V[i].lo;
+        int g0 = accel_logit(raw), g1 = accel_logit(raw >> 16);
+        check_eq("decode el0", (int)i, g0, V[i].want0);
+        check_eq("decode el1", (int)i, g1, V[i].want1);
+        check_eq("decode argmax", (int)i, (g1 > g0) ? 1 : 0, V[i].cls);
+    }
+}
+
 int main(void) {
     int k, l0, l1;
 
@@ -121,6 +157,8 @@ int main(void) {
         printf("FAIL tb_cifar: wrong headers, remaining checks skipped\n");
         return 1;
     }
+
+    check_decode();
 
     for (k = 0; k < N_IMAGES; k++) {
         sw_infer(IMAGES[k], &l0, &l1);
