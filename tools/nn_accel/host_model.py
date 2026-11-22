@@ -418,6 +418,26 @@ def main():
         print(f"host_model: wrote {sopath}")
         print(f"  weights resolved against {firmware} at dlopen")
 
+        # Load it the way QEMU will -- dlopen from an unrelated working
+        # directory -- and run image 0. This is the whole contract the
+        # device depends on: the constructor finds the weights without a
+        # cwd of its own, and cva5_accel_infer returns the board's word.
+        # Checking it here rather than inside QEMU saves a long evening.
+        import ctypes
+        lib = ctypes.CDLL(sopath)
+        lib.cva5_accel_infer.restype = ctypes.c_uint32
+        lib.cva5_accel_infer.argtypes = [ctypes.POINTER(ctypes.c_ubyte)]
+        buf = (ctypes.c_ubyte * (32 * 32 * 4))(*imgs[0])
+        got = lib.cva5_accel_infer(buf)
+        want = int(rows_txt[0][1], 16)
+        print(f"  dlopen check: image 0 gives 0x{got:08x}, "
+              f"wanted 0x{want:08x} -- {'ok' if got == want else 'WRONG'}")
+        if got != want:
+            die("the shared library does not reproduce the executable",
+                "most likely the dlopen-time weight load did not happen; "
+                "FIRMWARE_DIR is baked in at build time and must still "
+                "exist when QEMU runs")
+
     if not args.keep:
         for n in ("shim.cpp", "images.cpp"):
             os.remove(os.path.join(build, n))
