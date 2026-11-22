@@ -14,6 +14,15 @@ after.
 So this script answers one question: does the generated firmware build
 with a plain g++ and produce the numbers the hardware produced?
 
+One wrinkle this turned up, which matters for the QEMU device later:
+compiled without `__SYNTHESIS__`, nnet_utils ignores the weight arrays in
+`weights/*.h` and reloads them from `weights/*.txt` at run time, relative
+to the working directory. Fine here, where the binary can be run from
+inside the project. A `.so` that QEMU loads cannot rely on that, so the
+build rule for it will need either the text files installed beside it or
+the loading disabled -- a decision to make when the device is written,
+not a surprise to meet then.
+
 It is useful even if QEMU never happens. examples/sw/cifar.c's software
 reference is int32 Q9 and the hardware truncates to ap_fixed<14,5> at
 every layer, which is where the ~20% difference in logit magnitude comes
@@ -234,8 +243,25 @@ def main():
             "this is the answer the spike was for -- the QEMU plan rests on "
             "it building")
 
+    # Run from inside the firmware directory.
+    #
+    # Compiled without __SYNTHESIS__, hls4ml's nnet_utils does not use the
+    # weight arrays in weights/*.h at all -- it reloads them at run time
+    # from weights/*.txt, by a path relative to the working directory.
+    # Vitis HLS runs csim from inside the project and so never meets this.
+    # Defining __SYNTHESIS__ would also fix it and is the wrong fix: it
+    # tells nnet_utils it is being synthesised, which changes more than
+    # the weight loading.
+    wdir = os.path.join(firmware, "weights")
+    ntxt = len([n for n in os.listdir(wdir) if n.endswith(".txt")]) \
+        if os.path.isdir(wdir) else 0
+    if ntxt == 0:
+        die(f"no weights/*.txt in {wdir}",
+            "hls4ml writes them beside weights/*.h; regenerate the project "
+            "with 'make -C tools/nn_accel ip'")
+
     r = subprocess.run([os.path.join(build, "host_model")],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, cwd=firmware)
     if r.returncode != 0:
         die("it compiled but did not run:\n" + r.stderr.strip())
 
