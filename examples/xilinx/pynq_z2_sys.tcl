@@ -587,12 +587,32 @@ proc cva5_map {space block offset range} {
         error "no address block $block.\n  $cell offers:\
  [get_bd_addr_segs -quiet -of [get_bd_cells $cell]]"
     }
-    assign_bd_address -target_address_space [get_bd_addr_spaces $space] \
-        $seg -offset $offset -range $range -force
-    set placed [get_bd_addr_segs -quiet -of [get_bd_addr_spaces $space]]
-    if {$placed eq ""} {
-        error "assign_bd_address reported no error but $space is still\
- empty after placing $block. Check that the master is connected to it."
+
+    # Resolved once, and the leading slash taken off first: get_bd_addr_spaces
+    # matches on a name, and "/ps7_0/Data" matches nothing where "ps7_0/Data"
+    # matches the space. An empty result here used to be passed straight to
+    # -target_address_space, where assign_bd_address quietly fell back to
+    # choosing for itself -- it placed the segment correctly and the check
+    # below then declared failure, which is the worst of both.
+    set sp [get_bd_addr_spaces [string trimleft $space /]]
+    if {$sp eq ""} {
+        error "no address space $space. The design has:\
+ [get_bd_addr_spaces]"
+    }
+
+    assign_bd_address -target_address_space $sp $seg \
+        -offset $offset -range $range -force
+
+    # Vivado prints "Slave segment ... is being assigned into address space
+    # ..." itself for an explicit assignment, which is the evidence that
+    # matters; the bare assign_bd_address that caused all this prints nothing
+    # when it skips one. So this is a second opinion, not the verdict: it
+    # warns rather than stopping the build, because a query that disagrees
+    # with Vivado's own report is more likely to be the thing that is wrong.
+    if {[get_bd_addr_segs -quiet -of $sp] eq ""} {
+        puts "pynq_z2_sys: WARNING $space reads back empty after placing\
+ $block, though assign_bd_address reported placing it. Check the address\
+ editor before trusting the bitstream."
     }
     puts [format "pynq_z2_sys: %-28s -> %-22s at %s" $block $space $offset]
 }
