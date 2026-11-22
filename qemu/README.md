@@ -51,11 +51,62 @@ a small `extern "C"` shim, and the model regenerates whenever the model
 does. A hand-written model would be stale the first time the network was
 retrained, which is the objection that shaped this.
 
-So the device would be plumbing only -- the register block, a DMA that
-reads guest memory, the lane select and its pad counter, and the result
-packed as two `ap_fixed<14,5>` in 16-bit lanes -- about 300 lines of C,
-with the `.so` loaded at run time and the "not modelled" behaviour as the
-fallback when it is absent.
+So the device is plumbing only -- the register block, a DMA that reads
+guest memory, the lane select and its pad counter, and the result packed
+as two `ap_fixed<14,5>` in 16-bit lanes. It is `qemu/cva5_accel.c`, and
+it loads the `.so` at realize; without one it answers the registers and
+returns zero rather than hanging the guest.
+
+### Building it
+
+```bash
+make -C tools/nn_accel host-model                 # proves the model still matches
+python3 tools/nn_accel/host_model.py \
+        --so build/libcva5_accel_model.so         # and builds it
+```
+
+`__SYNTHESIS__` would have compiled the weights into the `.so` and
+removed every file access, and it does not build: `nnet_dense_latency.h`
+fails on `acc[jj] += mult[index]` because `ap_fixed` has no `+=` against
+itself under that macro. So the weights still load from `weights/*.txt`
+by a relative path, and the `.so` resolves it once at `dlopen` -- chdir
+to the firmware directory baked in at build time, one inference on a zero
+image to force the static loads, chdir back. A few milliseconds during
+device realize, and after it the model touches no file again.
+
+Then, in a QEMU tree with `0001-cva5-pynq-machine.patch` applied:
+
+```
+cp qemu/cva5_accel.c <qemu>/hw/misc/
+```
+
+add to `hw/misc/meson.build`:
+
+```meson
+system_ss.add(when: 'CONFIG_CVA5_PYNQ', if_true: files('cva5_accel.c'))
+```
+
+and in the machine, beside the other peripherals:
+
+```c
+dev = qdev_new("cva5.accel");
+qdev_prop_set_uint32(dev, "ram-base", CVA5_RAM_BASE);
+qdev_prop_set_string(dev, "model", accel_model_path);   /* -M cva5-pynq,accel-model=... */
+sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, CVA5_ACCEL_BASE);
+sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
+                   qdev_get_gpio_in(DEVICE(plic), 3));   /* PLIC source 3 */
+```
+
+with `#define CVA5_ACCEL_BASE 0x50000000`.
+
+### What it does not model
+
+Timing. A real inference is 7,093 cycles; this one returns inside the
+write that starts it, so the status register is never observed busy.
+Nothing in the software depends on that -- it polls a bit or waits on the
+interrupt -- but `cifar.c`'s cycle column is meaningless under QEMU and
+the speedup it prints is not a measurement of anything.
 
 `make -C tools/nn_accel host-model` was the gate, and **it passes**. The
 generated firmware compiles with a plain g++ and reproduces the board on
