@@ -399,7 +399,10 @@ def main():
         sopath = os.path.abspath(args.so)
         os.makedirs(os.path.dirname(sopath) or ".", exist_ok=True)
         with open(os.path.join(build, "solib.cpp"), "w") as f:
-            f.write(SHIM.split("extern const unsigned char HOST_IMAGES")[0])
+            # Substitute FIRST, then cut. Splitting the template and then
+            # writing it leaves %(PIXELS)d in the C++ verbatim.
+            body = SHIM % {"PIXELS": 32 * 32, "BYTES": 32 * 32 * 4}
+            f.write(body.split("extern const unsigned char HOST_IMAGES")[0])
             f.write(SO_TAIL % {"BYTES": 32 * 32 * 4})
         cmd = ["g++", "-O2", "-std=c++14", "-shared", "-fPIC", "-o", sopath,
                os.path.join(build, "solib.cpp"),
