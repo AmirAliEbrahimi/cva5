@@ -56,11 +56,12 @@ SPI_SRCS  := crt0.S trap.S spi.c puts.c
 I2C_SRCS  := crt0.S trap.S i2c.c puts.c
 ACCEL_SRCS:= crt0.S trap.S accel.c puts.c
 CIFAR_SRCS:= crt0.S trap.S cifar.c puts.c
+SERVER_SRCS:= crt0.S trap.S server.c puts.c
 # Headers, as prerequisites. soc.h carries the memory map and the PLIC source
 # numbers, so an image built against a stale copy of it talks to the wrong
 # address or attributes an interrupt to the wrong device -- and nothing about
 # the result says it was built before the header changed.
-HDRS      := soc.h stdio.h mip.h mbox.h
+HDRS      := soc.h stdio.h mip.h mbox.h accel.h job.h
 LDSCRIPT  := link.ld
 CFLAGS    := -march=$(ARCH) -mabi=$(ABI) -Os -g -ffreestanding -nostdlib -I. -Wl,--build-id=none
 
@@ -109,7 +110,7 @@ endif
 OPENOCD     ?= openocd
 OCD_DIR     := $(CVA5_DIR)/examples/xilinx/openocd
 
-.PHONY: all program ram app load memtest timer csrs run-csrs plic spi accel cifar sim run clean lint lint-full clean-cva5-sim ps-image
+.PHONY: all program ram app load memtest timer csrs run-csrs plic spi accel cifar server sim run clean lint lint-full clean-cva5-sim ps-image
 all: program
 program: program.hex
 
@@ -258,6 +259,22 @@ cifar: cifar.tcl
 	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
 	           -f cifar.tcl -c "init; load_program; shutdown"
 
+# The server half of the full-system demo: CVA5 waits for the PS to put an
+# image in the job page and classifies it. Needs no generated headers of its
+# own -- the images come from the other processor at run time, which is the
+# whole point. Loading it over JTAG is for bring-up; the interesting way is
+#     make ps-image PS_APP=server.elf
+# and then the Vitis app built from examples/ps/cva5_demo.c.
+server.elf: $(SERVER_SRCS) $(HDRS) $(APP_LDSCRIPT)
+	$(CC) $(CFLAGS) -T $(APP_LDSCRIPT) $(SERVER_SRCS) -lgcc -o $@
+
+server.tcl: server.elf
+	python3 $(ELF2TCL) $(CROSS) $(APP_BASE) $< $@
+
+server: server.tcl
+	$(OPENOCD) -f $(OCD_DIR)/pynq-z2-jtag.cfg -f $(OCD_DIR)/cva5-pynq-z2-p1.cfg \
+	           -f server.tcl -c "init; load_program; shutdown"
+
 # The same test in the Verilator core sim, which is the only place the core's
 # CSR behaviour can be checked without a bitstream -- and the only place both
 # polarities of INCLUDE_TIME_CSR can be run, since the sim takes upstream's
@@ -302,6 +319,7 @@ clean:
 	      plic.elf plic.tcl spi.elf spi.tcl i2c.elf i2c.tcl \
 	      accel.elf accel.tcl \
 	      cifar.elf cifar.tcl \
+	      server.elf server.tcl \
 	      main.elf.rawbinary main.elf.dissasembled \
 	      idle.elf.rawbinary idle.elf.dissasembled \
 		  trace.fst.hier \

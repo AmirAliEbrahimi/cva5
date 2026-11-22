@@ -31,10 +31,9 @@
 
 #include <stdio.h>
 #include "soc.h"
+#include "accel.h"
 #include "images.h"
 #include "weights.h"
-
-#define ACCEL(off) (*(volatile unsigned int *)(ACCEL_BASE + (off)))
 
 /*
  * images.h and soc.h each describe the image, and they are generated and
@@ -110,31 +109,14 @@ static void putstr_w(const char *s, int width) {
  */
 static unsigned last_raw;   /* the result word, kept for the diagnostic line */
 
+/*
+ * The inference itself is accel.h's, shared with server.c so the register
+ * sequence exists once. This keeps the raw result word, which the zero-image
+ * line prints and which was the evidence that identified the sign-extension
+ * bug -- accel_infer() hands back decoded logits and nothing else.
+ */
 static int hw_infer(const uint8_t *img, int *l0, int *l1, unsigned *cycles) {
-    unsigned t0, t1, spins = 0, r;
-
-    t0 = read_cycles();
-    ACCEL(ACCEL_CTRL_OFF)  = ACCEL_CTRL_START;
-    ACCEL(DMA_ADDRLO_OFF)  = ACCEL_RAM_OFF(img);
-    ACCEL(DMA_LENLO_OFF)   = ACCEL_IMG_BYTES;
-    ACCEL(DMA_CONTROL_OFF) = DMA_START;
-
-    while (!(ACCEL(ACCEL_STATUS_OFF) & ACCEL_ST_RESULT)) {
-        if (++spins > 2000000u)
-            return 0;
-    }
-    t1 = read_cycles();
-
-    /* One inference is one beat: two ap_fixed<14,5> logits, element zero in
-     * the low lane. 14 bits in a 16-bit lane, so the sign bit is bit 13 --
-     * see accel_logit() in soc.h for why reading the lane as int16_t gives
-     * a plausible wrong answer rather than an obvious one. */
-    r = ACCEL(ACCEL_RESULT_OFF);
-    last_raw = r;
-    *l0 = accel_logit(r);
-    *l1 = accel_logit(r >> 16);
-    *cycles = t1 - t0;
-    return 1;
+    return accel_infer(img, l0, l1, cycles, &last_raw);
 }
 
 /*

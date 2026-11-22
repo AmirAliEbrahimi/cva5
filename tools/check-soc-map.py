@@ -68,8 +68,8 @@ def from_ocd(path):
             for n, v in re.findall(r"^set\s+(\w+_BASE)\s+0x([0-9A-Fa-f]+)", src, re.M)}
 
 
-def check_link_script(path, mbox_base):
-    """The linker region must end exactly where the mailbox starts.
+def check_link_script(path, stack_top):
+    """The linker region must end exactly at STACK_TOP.
 
     This one is not a name in two files, it is an arithmetic relationship, so
     it gets its own check. The mailbox lives in the top 4 KB of main memory
@@ -88,10 +88,10 @@ def check_link_script(path, mbox_base):
         return 1
     origin = int(m.group(1), 16)
     end = origin + int(m.group(2)) * 1024
-    if end != mbox_base:
+    if end != stack_top:
         print(f"check-soc-map: {path}'s RAM region ends at 0x{end:08X} but "
-              f"soc.h puts MBOX_BASE at 0x{mbox_base:08X} -- the stack would "
-              f"{'overrun' if end > mbox_base else 'leave a gap below'} it",
+              f"soc.h puts STACK_TOP at 0x{stack_top:08X} -- the stack would "
+              f"{'overrun' if end > stack_top else 'leave a gap below'} it",
               file=sys.stderr)
         return 1
     return 0
@@ -117,8 +117,8 @@ def main():
             print(f"check-soc-map: {name} disagrees: {where}", file=sys.stderr)
 
     soc = dict(maps[0][1])
-    if "MBOX_BASE" in soc:
-        bad += check_link_script(LD, soc["MBOX_BASE"])
+    if "JOB_BASE" in soc:
+        bad += check_link_script(LD, soc["JOB_BASE"])
 
     if bad:
         print(f"{bad} disagreement(s)", file=sys.stderr)

@@ -38,9 +38,13 @@
 #include "soc.h"
 
 /* Clear of the program at the base of RAM, and STACK_RESERVE below
- * _stack_top -- which is MBOX_BASE, because fpga_link.ld's region ends there. */
+ * _stack_top -- which is STACK_TOP, because fpga_link.ld's region ends
+ * there. Not MBOX_BASE: the mailbox is the top page, but the job block and
+ * its image buffer now sit between it and the stack, and writing test
+ * patterns over an image the PS had just delivered would be a long
+ * debugging session for both sides. */
 #define TEST_BASE (RAM_BASE + 0x8000u)
-#define TEST_END  (MBOX_BASE - STACK_RESERVE)
+#define TEST_END  (STACK_TOP - STACK_RESERVE)
 
 static void puthex(unsigned v) {
     char b[11];

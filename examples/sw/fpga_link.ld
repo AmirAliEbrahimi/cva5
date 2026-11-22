@@ -24,7 +24,7 @@
  */
 OUTPUT_ARCH("riscv")
 ENTRY(_start)
-MEMORY { RAM (rwxai) : ORIGIN = 0x80000000, LENGTH = 124K }
+MEMORY { RAM (rwxai) : ORIGIN = 0x80000000, LENGTH = 116K }
 SECTIONS {
   /* Drop non-code sections that would otherwise be allocated ahead of the
      code: the build-id note is ALLOC, and the first bytes of this region must

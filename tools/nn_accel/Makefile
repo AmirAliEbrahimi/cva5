@@ -12,7 +12,8 @@
 #    train       train the network            -> model_$(CLASS_A)_$(CLASS_B).pt
 #    precision   report the precision sweep   (informational)
 #    ip          generate + export accelerator IP
-#    headers     weights.h + images.h         -> examples/sw/
+#    headers     weights.h + images.h -> examples/sw/,
+#                and cva5_pixels.c    -> examples/ps/ for the PS demo
 #    demo        headers + cross-compile + load examples/sw/cifar.c
 #    bitstream   package CVA5 as IP + build the SoC
 #    baseline    build the stock SoC with no accelerator (diagnostic)
@@ -38,6 +39,7 @@
 # not change drive. Relative paths sidestep all three and work in both shells.
 REPO      := ../..
 SW        := ../../examples/sw
+PS        := ../../examples/ps
 
 # --- what to build ---------------------------------------------------------
 CLASS_A   ?= 6
@@ -174,7 +176,7 @@ ip: $(IPDIR)/cnn_prj/solution1/impl/ip/component.xml
 headers: $(MODEL) export_weights.py export_images.py
 	$(PY) export_weights.py $(MODEL) --out $(SW)/weights.h
 	$(PY) export_images.py --n $(N_IMAGES) --classes $(CLASS_A) $(CLASS_B) \
-	    --model $(MODEL) --out $(SW)/images.h
+	    --model $(MODEL) --out $(SW)/images.h --ps-out $(PS)/cva5_pixels.c
 
 # --- 5. software -----------------------------------------------------------
 # The driver the old mif target built, examples/sw/bench.c, does not exist
@@ -235,7 +237,8 @@ RMFILE = $(VENVPY) -c "import os,sys,glob;[os.remove(p) for a in sys.argv[1:] fo
 
 clean:
 	-$(RMTREE) "sw_*" "p_*" __pycache__
-	-$(RMFILE) run_all.bat "$(SW)/weights.h" "$(SW)/images.h"
+	-$(RMFILE) run_all.bat "$(SW)/weights.h" "$(SW)/images.h" \
+	    "$(PS)/cva5_pixels.c"
 
 distclean: clean
 	-$(RMTREE) $(VENV) data

@@ -73,6 +73,44 @@
 #define MBOX_DATA_A   (MBOX_BASE + MBOX_DATA_OFF)
 
 /*
+ * The job block and the image page, below the mailbox.
+ *
+ * The mailbox carries CVA5's console one character at a time; this carries
+ * work. The PS writes an image into the page at JOB_IMG_BASE and increments
+ * `request`; CVA5 runs the accelerator over it and increments `response`.
+ * Each side writes only its own counter, so there is no lock, and a counter
+ * rather than a flag so that a job finishing and the next arriving are
+ * distinguishable.
+ *
+ * Both sides must write the payload before the counter that announces it.
+ * CVA5 does that with `fence w,w`; on this side the image is written before
+ * `request` and the ARM's stores to Device memory complete in order, so the
+ * ordering is already what it needs to be -- but see job_submit() in
+ * cva5_load.c, which states it rather than relying on the reader to know.
+ *
+ * examples/sw/soc.h is the other copy of this layout and the authoritative
+ * one. test_benches/sw/run_job.sh compiles both and fails if they drift.
+ */
+#define JOB_BASE         0x8001D000u
+#define JOB_SIZE         0x1000u
+#define JOB_MAGIC        0x434A4F42u   /* "CJOB" */
+#define JOB_IMG_BASE     0x8001E000u
+#define JOB_IMG_SIZE     0x1000u
+
+#define JOB_MAGIC_A      (JOB_BASE + 0x00u)
+#define JOB_REQUEST_A    (JOB_BASE + 0x04u)
+#define JOB_RESPONSE_A   (JOB_BASE + 0x08u)
+#define JOB_STATUS_A     (JOB_BASE + 0x0Cu)
+#define JOB_LOGIT0_A     (JOB_BASE + 0x10u)
+#define JOB_LOGIT1_A     (JOB_BASE + 0x14u)
+#define JOB_CLASS_A      (JOB_BASE + 0x18u)
+#define JOB_CYCLES_A     (JOB_BASE + 0x1Cu)
+#define JOB_PADSEEN_A    (JOB_BASE + 0x20u)
+
+#define JOB_OK           0u
+#define JOB_ERR_TIMEOUT  1u
+
+/*
  * cpu_halt, on EMIO GPIO bit 0.
  *
  * The PS GPIO controller has four banks. Banks 0 and 1 are the 54 MIO pins;

@@ -381,7 +381,11 @@ objects, so accuracy depends heavily on the class pair: frog vs ship reaches
 | `tools/nn_accel/ref_const.py` | host reference for the board self test |
 | `tools/nn_accel/export_{weights,images}.py` | `weights.h` and `images.h`, generated into `examples/sw` |
 | `examples/sw/accel.c` | brings the data path up: the control block, the DMA, the pad counter |
-| `examples/sw/cifar.c` | the demo — accelerator against the same network in Q9 C, both timed |
+| `examples/sw/cifar.c` | fixed images: accelerator against the same network in Q9 C, both timed |
+| `examples/sw/server.c` | the full system: classifies whatever the PS puts in the job page |
+| `examples/ps/cva5_demo.c` | the other half of it — the PS sends images and prints the answers |
+| `examples/sw/accel.h` | one inference, shared by `cifar.c` and `server.c` |
+| `test_benches/sw/run_job.sh` | the job protocol, both halves, on the host |
 | `test_benches/sw/run_cifar.sh` | `cifar.c`'s software reference against an independent model of it — no venv needed |
 | `examples/xilinx/axi/cva5_accel_axi.sv` | the DMA, the lane select and the control registers |
 | `examples/xilinx/axi/cva5_axis_lane.sv` | 32 → 24 lane select, and the pad counter |

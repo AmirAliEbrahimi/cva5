@@ -410,16 +410,20 @@ static inline int accel_logit(unsigned int lane) {
  * the PS console. The same port the loader writes the program through, read
  * back the other way while the program runs.
  *
- * The top 4 KB of RAM, which is OUTSIDE the linker's region:
+ * The top 12 KB of RAM, which is OUTSIDE the linker's region -- the mailbox
+ * is the last page of it, and the job block below takes the other two:
  *
  *   0x8000_0000  program, growing up          fpga_link.ld's RAM region
- *   0x8001_E000  stack, growing down from _stack_top = MBOX_BASE
+ *   0x8001_C000  stack, growing down from _stack_top = STACK_TOP
+ *   0x8001_D000  the job block                not linked, not loaded
+ *   0x8001_E000  the job's image              not linked, not loaded
  *   0x8001_F000  the mailbox                  not linked, not loaded
  *
- * fpga_link.ld's RAM region is 124 KB and ends exactly at MBOX_BASE, so
- * nothing is ever linked here and `objcopy -O binary` of any example stops
- * short of it -- the mailbox is not part of the image either loader writes.
- * tools/check-soc-map.py checks that the region still ends here.
+ * fpga_link.ld's RAM region is 116 KB and ends exactly at STACK_TOP, so
+ * nothing is ever linked up here and `objcopy -O binary` of any example
+ * stops short of it -- none of these three pages is part of the image
+ * either loader writes. tools/check-soc-map.py checks that the region
+ * still ends there.
  *
  * A single-producer, single-consumer ring. head and tail are byte INDICES,
  * not counters, so the wrap is a compare and there is no division on either
@@ -449,8 +453,89 @@ static inline int accel_logit(unsigned int lane) {
 #define MBOX_DATA_OFF  0x10u
 #define MBOX_DATA_SIZE (MBOX_SIZE - MBOX_DATA_OFF)
 
+/*
+ * The job block: the PS hands CVA5 an image and gets a classification back.
+ *
+ * Until this existed the accelerator only ever saw images baked into
+ * .rodata at link time, which demonstrates the data path and not the
+ * system. The pieces were all already here -- the PS can write main memory
+ * over M_AXI_GP1, CVA5 can run the accelerator on anything in main memory,
+ * and the mailbox carries text the other way -- and what was missing was
+ * somewhere for them to agree about a unit of work.
+ *
+ * Two more pages below the mailbox, both outside the linker's region for
+ * the same reason it is:
+ *
+ *   0x8001_C000  stack, growing down from _stack_top = JOB_BASE
+ *   0x8001_D000  the job block    header, owned by both sides
+ *   0x8001_E000  the image        4096 bytes, written by the PS
+ *   0x8001_F000  the mailbox      CVA5's console, read by the PS
+ *
+ * The protocol is two counters and a rule about ordering.
+ *
+ *   The PS writes an image to JOB_IMG_BASE, then increments `request`.
+ *   CVA5 runs whenever `request != response`, writes the result fields,
+ *   then increments `response` to match.
+ *
+ * Both sides only ever write their own counter, so there is no lock and no
+ * lost update; a counter rather than a flag so that a job finishing and the
+ * next one arriving cannot be confused. The result fields are written
+ * BEFORE `response`, the same publish rule the mailbox uses for head: the
+ * reader that sees the counter move must already be able to see what moved
+ * it. `magic` is written by CVA5 last at startup and is how the PS knows a
+ * server is listening rather than, say, memtest.
+ *
+ * Layout, as words:
+ *
+ *   +0x00  magic     JOB_MAGIC once CVA5 is serving
+ *   +0x04  request   jobs submitted, owned by the PS
+ *   +0x08  response  jobs completed, owned by CVA5
+ *   +0x0C  status    JOB_OK, or why not
+ *   +0x10  logit0    signed, Q9
+ *   +0x14  logit1    signed, Q9
+ *   +0x18  class     argmax of the two
+ *   +0x1C  cycles    the inference, as CVA5 measured it
+ *   +0x20  pad_seen  non-zero pad bytes in THIS image, not since reset
+ *
+ * examples/ps/cva5_ps.h repeats this, because the PS is built by an ARM
+ * toolchain that cannot include this file; test_benches/sw/run_job.sh
+ * compiles both and checks they still agree.
+ */
+#define JOB_BASE         0x8001D000u
+#define JOB_SIZE         0x1000u
+#define JOB_MAGIC        0x434A4F42u   /* "CJOB" */
+
+/* One image, exactly: ACCEL_IMG_BYTES is 32*32*4 and so is a page. The DMA
+ * reads it here, so the PS writes the same R,G,B,0 layout examples/sw's
+ * images.h holds -- see ACCEL_PIXEL_BYTES above for why four and not three. */
+#define JOB_IMG_BASE     0x8001E000u
+#define JOB_IMG_SIZE     0x1000u
+
+#define JOB_MAGIC_OFF    0x00u
+#define JOB_REQUEST_OFF  0x04u
+#define JOB_RESPONSE_OFF 0x08u
+#define JOB_STATUS_OFF   0x0Cu
+#define JOB_LOGIT0_OFF   0x10u
+#define JOB_LOGIT1_OFF   0x14u
+#define JOB_CLASS_OFF    0x18u
+#define JOB_CYCLES_OFF   0x1Cu
+#define JOB_PADSEEN_OFF  0x20u
+
+#define JOB_OK           0u
+#define JOB_ERR_TIMEOUT  1u   /* the accelerator never produced a result */
+
+/*
+ * The top of fpga_link.ld's region, and so _stack_top.
+ *
+ * This used to be MBOX_BASE and the two were the same number, which stopped
+ * being true the moment anything else was reserved up here. Everything that
+ * means "the end of what is linked" derives from this; everything that means
+ * "where the mailbox is" still derives from MBOX_BASE.
+ */
+#define STACK_TOP      JOB_BASE
+
 /* Between _stack_top and the top of what memtest may write. The stack starts
- * at MBOX_BASE and grows down; this is how much of it is left alone. */
+ * at STACK_TOP and grows down; this is how much of it is left alone. */
 #define STACK_RESERVE  0x1000u
 
 #endif /* CVA5_SOC_H */
