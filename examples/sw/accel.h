@@ -24,8 +24,10 @@
 
 /*
  * Run the accelerator over ACCEL_IMG_BYTES at `img`, which must be in main
- * memory and four-byte aligned. Returns 1 and fills the logits, or 0 if no
- * result arrived. `cycles` and `raw` may be NULL.
+ * memory and four-byte aligned. Returns 1 and fills the logits, 0 if no
+ * result arrived, or -1 if a result was already waiting and could not be
+ * cleared -- which is a stuck line, not a slow inference, and wants
+ * saying differently. `cycles` and `raw` may be NULL.
  *
  * Three things here are not obvious and all three have been wrong at some
  * point:
@@ -45,6 +47,32 @@
 static inline int accel_infer(const void *img, int *l0, int *l1,
                               unsigned int *cycles, unsigned int *raw) {
     unsigned int t0 = 0, t1 = 0, spins = 0, r;
+
+    /*
+     * Throw away a result nobody collected, before starting one of our own.
+     *
+     * result_valid resets from rstn and nothing else, and loading a program
+     * does not assert rstn -- cpu_halt resets the CPU and deliberately not
+     * the peripherals. So a result left behind by an earlier run of a
+     * different program is still waiting here, and without this the poll
+     * below returns it instantly: the right shape of answer, the wrong
+     * image, and about 31 cycles instead of 7,100. accel.c in particular
+     * ends on a deliberately mis-packed inference.
+     *
+     * Bounded rather than a while loop. If the line is stuck high -- the
+     * output stream holding tvalid, which beats result_read because the
+     * clear is the else branch of that assignment -- then draining can
+     * never finish, and a wedged accelerator should be reported by the
+     * timeout below rather than by hanging here.
+     */
+    for (spins = 0; spins < 8u; spins++) {
+        if (!(ACCEL(ACCEL_STATUS_OFF) & ACCEL_ST_RESULT))
+            break;
+        (void)ACCEL(ACCEL_RESULT_OFF);
+    }
+    if (ACCEL(ACCEL_STATUS_OFF) & ACCEL_ST_RESULT)
+        return -1;      /* stuck high: not ours to interpret */
+    spins = 0;
 
 #ifdef __riscv
     __asm__ volatile (".option push\n.option arch, +zicsr\n"

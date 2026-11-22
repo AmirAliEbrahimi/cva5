@@ -90,6 +90,9 @@ int main(void) {
     for (;;) {
         unsigned int seq, cycles = 0, pad_before, pad, cls;
         int l0 = 0, l1 = 0, ok;
+        unsigned int raw = 0, st_before, st_after;
+
+        st_before = ACCEL(ACCEL_STATUS_OFF);
 
         while (!job_pending())
             ;
@@ -104,15 +107,32 @@ int main(void) {
          * earlier test's deliberate mis-packing. */
         pad_before = ACCEL(ACCEL_PADSEEN_OFF);
 
-        ok = accel_infer((const void *)JOB_IMG_BASE, &l0, &l1, &cycles, 0);
+        ok = accel_infer((const void *)JOB_IMG_BASE, &l0, &l1, &cycles, &raw);
         pad = ACCEL(ACCEL_PADSEEN_OFF) - pad_before;
         cls = (l1 > l0) ? 1u : 0u;
 
-        if (!ok) {
+        st_after = ACCEL(ACCEL_STATUS_OFF);
+
+        if (ok != 1) {
             job_complete(seq, JOB_ERR_TIMEOUT, 0, 0, 0u, 0u, pad);
-            putstr("  job "); putdec(seq); puts(": no result from the"
-                                               " accelerator");
+            putstr("  job "); putdec(seq);
+            putstr(ok == -1 ? ": a result was already waiting and would not"
+                              " clear"
+                            : ": no result from the accelerator");
+            putstr("  status "); puthex8(st_before);
+            putstr(" -> "); puthex8(st_after); puts("");
             continue;
+        }
+
+        /* The first job prints what the registers actually said. 31 cycles
+         * means the poll never waited, which means a result was there
+         * before this one started -- a different fault from a wrong
+         * answer, and they look the same in a table of classes. */
+        if (seq == 1u) {
+            putstr("  first job: status "); puthex8(st_before);
+            putstr(" -> "); puthex8(st_after);
+            putstr("  raw "); puthex8(raw);
+            putstr("  "); putdec(cycles); puts(" cycles");
         }
 
         job_complete(seq, JOB_OK, l0, l1, cls, cycles, pad);
