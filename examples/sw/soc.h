@@ -137,10 +137,20 @@ static inline void dev_fence(void) {
  * latches it, so both are configured level sensitive. The practical difference
  * is at complete time: completing the UART's source with a byte still in the
  * FIFO hands it straight back, while the SPI's stays quiet until the next
- * transfer. */
+ * transfer.
+ *
+ * Source 3 is the accelerator's result-ready. cva5_accel_axi drives it from
+ * result_valid, so it is a level that falls when software reads
+ * ACCEL_RESULT -- collecting the answer is the acknowledgement, and there is
+ * no separate one to forget. It exists in every build whether or not the
+ * hls4ml IP was generated: numbering that depended on an unrelated IP being
+ * present would mean a program built against one bitstream attributing an
+ * interrupt to the wrong device in another. Without the accelerator it is a
+ * source that never fires. */
 #define PLIC_SRC_UART      1u
 #define PLIC_SRC_SPI       2u
-#define PLIC_NUM_SOURCES   2u
+#define PLIC_SRC_ACCEL     3u
+#define PLIC_NUM_SOURCES   3u
 #define TIMER_BASE  0x18000000u
 #define SPI_BASE    0x20000000u
 /* pulp-platform's axi_spi_master, byte offsets into its window. Word

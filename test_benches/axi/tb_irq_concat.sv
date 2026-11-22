@@ -63,15 +63,31 @@ module tb_irq_concat;
     // The design under test: the concat wired to the PLIC exactly as
     // examples/xilinx/pynq_z2_sys.tcl wires them.
     //==================================================================
-    logic uart_irq = 0;      //what cva5_uart's irq does: a level
-    logic spi_irq  = 0;      //what cva5_spi_axi's irq does: a pulse
-    logic [1:0] irq_srcs;
+    logic uart_irq  = 0;     //what cva5_uart's irq does: a level
+    logic spi_irq   = 0;     //what cva5_spi_axi's irq does: a pulse
+    logic accel_irq = 0;     //cva5_accel_axi's result_valid: a level that
+                             //falls when software reads the result
+    logic [2:0] irq_srcs;
     logic eip;
 
-    cva5_irq_concat concat_inst (
+    cva5_irq_concat #(.HAS_SRC3 (1'b1)) concat_inst (
         .src1 (uart_irq),
         .src2 (spi_irq),
+        .src3 (accel_irq),
         .irq_srcs (irq_srcs)
+    );
+
+    //The same block as a build with no accelerator gets. Not wired to the
+    //PLIC -- what matters about it is that bit 2 is held low no matter what
+    //src3 does, because pynq_z2_sys.tcl parks that pin on the UART's
+    //interrupt rather than leaving it floating, and a block that passed it
+    //through would report UART activity as the accelerator.
+    logic [2:0] irq_srcs_noaccel;
+    cva5_irq_concat #(.HAS_SRC3 (1'b0)) concat_noaccel (
+        .src1 (uart_irq),
+        .src2 (spi_irq),
+        .src3 (uart_irq),
+        .irq_srcs (irq_srcs_noaccel)
     );
 
     logic [25:0] awaddr, araddr;
@@ -80,9 +96,10 @@ module tb_irq_concat;
     logic        bvalid, bready, arvalid, arready, rvalid, rready;
     logic [1:0]  bresp, rresp;
 
-    //NUM_SOURCES 2 and EDGE_SENSITIVE 0, which is the board's configuration.
+    //NUM_SOURCES 3 and EDGE_SENSITIVE 0, which is the board's configuration:
+    //the UART, the SPI and the accelerator.
     cva5_plic_axi #(
-        .NUM_SOURCES (2),
+        .NUM_SOURCES (3),
         .PRIORITY_W (4),
         .REG_STAGE (1),
         .EDGE_SENSITIVE (32'h0),
@@ -246,6 +263,81 @@ module tb_irq_concat;
         reg_read(CLAIM, v);
         expect_eq("with the priorities swapped it is source 1", v, 32'd1);
         reg_write(CLAIM, v);
+
+        //---- source 3 is the accelerator, and it is a level like the UART's
+        $display("-- src3 is PLIC source 3");
+        uart_irq = 1'b0;
+        spi_irq  = 1'b0;
+        settle();
+        //Drain whatever the priority section left pending -- it finishes
+        //with both lines raised -- rather than assuming a count. The PLIC
+        //keeps its state across all of this because it resets from rstn
+        //alone, which is the same reason examples/sw/plic.c starts by
+        //putting it into a known state.
+        reg_read(PENDING, v);
+        while (v != 32'h0) begin
+            claim_and_complete(v);
+            reg_read(PENDING, v);
+        end
+        reg_write(PRIO(1), 32'd2);
+        reg_write(PRIO(2), 32'd2);
+        reg_write(PRIO(3), 32'd2);
+        reg_write(ENABLE, 32'hE);        //sources 1, 2 and 3
+
+        accel_irq = 1'b1;
+        settle();
+        expect_eq("src3 drives bit 2 only", 32'(irq_srcs), 32'd4);
+        reg_read(PENDING, v);
+        expect_eq("source 3 pending", v, 32'h8);
+        reg_read(CLAIM, v);
+        expect_eq("claimed by number, it is source 3", v, 32'd3);
+
+        //The accelerator's line falls when software reads ACCEL_RESULT, so
+        //by the time complete is written the source is already quiet. That
+        //is the UART's shape rather than the SPI's: completing it with the
+        //line still high hands it straight back.
+        reg_read(PENDING, v);
+        expect_eq("claiming clears the pending bit", v, 32'h0);
+        accel_irq = 1'b0;
+        settle();
+        reg_write(CLAIM, 32'd3);
+        settle();
+        reg_read(PENDING, v);
+        expect_eq("and the result read leaves it quiet", v, 32'h0);
+
+        //Completed with the line STILL high -- an inference finished and
+        //nobody read the result -- the source has to come back, or the
+        //accelerator's interrupt would be lost exactly when it mattered.
+        accel_irq = 1'b1;
+        settle();
+        reg_read(CLAIM, v);
+        expect_eq("it is source 3 again", v, 32'd3);
+        reg_write(CLAIM, 32'd3);
+        settle();
+        reg_read(PENDING, v);
+        expect_eq("completing with the result unread re-raises it", v, 32'h8);
+        accel_irq = 1'b0;
+        settle();
+        claim_and_complete(v);
+
+        //---- a build with no accelerator must not report one
+        $display("-- HAS_SRC3 0 holds bit 2 low");
+        uart_irq = 1'b1;
+        settle();
+        expect_eq("src3 tied to the UART still gives nothing on bit 2",
+                  32'(irq_srcs_noaccel), 32'd1);
+        spi_irq = 1'b1;
+        settle();
+        expect_eq("and the other two still work",
+                  32'(irq_srcs_noaccel), 32'd3);
+        uart_irq = 1'b0;
+        spi_irq  = 1'b0;
+        settle();
+        reg_read(PENDING, v);
+        while (v != 32'h0) begin
+            claim_and_complete(v);
+            reg_read(PENDING, v);
+        end
 
         //---- and only the enabled source reaches eip
         $display("-- enable picks per source");

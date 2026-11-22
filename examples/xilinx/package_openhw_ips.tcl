@@ -209,7 +209,7 @@ dict set openhw_descs cva5_plic_axi {RISC-V platform-level interrupt controller,
 dict set openhw_descs cva5_spi_axi {SPI master (pulp-platform axi_spi_master) with four chip selects and a programmable clock divider, in place of axi_quad_spi}
 dict set openhw_descs cva5_i2c_axi {I2C master (Alex Forencich verilog-i2c) with command, write and read FIFOs and a runtime prescaler, on open-drain pins}
 dict set openhw_descs cva5_accel_axi {hls4ml accelerator attachment: a DMA (ZipCPU aximm2s) reading main memory into the accelerator's stream, a lane select onto its 24-bit port, and ap_ctrl plus the result in registers, in place of axi_fifo_mm_s, axis_dwidth_converter, axi_gpio, xlconcat and xlconstant}
-dict set openhw_descs cva5_irq_concat {Two device interrupt lines into one vector for cva5_plic_axi, in place of xlconcat}
+dict set openhw_descs cva5_irq_concat {Three device interrupt lines into one vector for cva5_plic_axi, in place of xlconcat; HAS_SRC3 holds the third low when there is no accelerator}
 dict set openhw_descs cva5_axi_ram {AXI4 block-RAM slave (ZipCPU demofull); simulation only, not packaged}
 
 # Entries present for the testbenches' file lists but deliberately not

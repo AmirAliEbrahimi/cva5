@@ -33,9 +33,13 @@ nothing for them to talk to. Mapped this way, a program touching them says so
 in the QEMU log instead of reading zeros — which, on a status register, looks
 exactly like a device reporting itself idle.
 
-PLIC source 2 is the SPI's transfer-complete interrupt on the board. The source
-exists here and stays low, so software that enables it waits rather than
-receiving a fabricated interrupt.
+PLIC sources 2 and 3 are the SPI's transfer-complete interrupt and the
+accelerator's result-ready on the board. Both exist here and stay low, so
+software that enables either waits rather than receiving a fabricated
+interrupt. Source 3 in particular: the accelerator is not modelled at all --
+`0x5000_0000` is not in this machine's map -- so a program that submits an
+inference under QEMU and waits for the interrupt waits forever, the same as
+it does for the SPI.
 
 ### The UART's interrupt needs enabling here, and not on the board
 

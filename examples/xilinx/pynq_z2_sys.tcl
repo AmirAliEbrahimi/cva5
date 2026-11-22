@@ -334,8 +334,16 @@ connect_bd_net [get_bd_pins cva5_clint_0/msip]  [get_bd_pins cva5_top_0/msip]
 # Together with the CLINT's two that makes three interrupt inputs on cva5_top,
 # and three is all RISC-V gives a hart however many peripherals the bus grows.
 #
-# NUM_SOURCES is 2: the UART and the SPI. The sources themselves are wired
-# below, once the SPI cell exists.
+# NUM_SOURCES is 3: the UART, the SPI and the accelerator's result-ready.
+# The sources themselves are wired below, once those cells exist.
+#
+# Three whether or not the accelerator is in this build. The alternative --
+# two sources without it, three with -- would make the PLIC's source
+# numbering depend on whether an unrelated IP had been generated, so a
+# program built for one bitstream would attribute an interrupt to the wrong
+# device in the other. soc.h's PLIC_SRC_* are constants and this keeps them
+# constant; an absent accelerator is a source that never fires, which costs
+# a few LUTs and nothing else.
 #
 # EDGE_SENSITIVE stays 0 for both, which is also right for the SPI's pulse --
 # see the interrupt-sources section for why. Sensitivity is a parameter rather
@@ -347,7 +355,7 @@ connect_bd_net [get_bd_pins cva5_clint_0/msip]  [get_bd_pins cva5_top_0/msip]
 # the pending bits, the enables and the priorities all survive a program
 # reload, so a test has to put the PLIC into a known state before trusting it.
 create_bd_cell -type ip -vlnv xilinx.com:user:cva5_plic_axi:1.0 cva5_plic_0
-set_property -dict [list CONFIG.NUM_SOURCES {2}] [get_bd_cells cva5_plic_0]
+set_property -dict [list CONFIG.NUM_SOURCES {3}] [get_bd_cells cva5_plic_0]
 connect_bd_net $sys_clk  [get_bd_pins cva5_plic_0/clk]
 connect_bd_net $sys_rstn [get_bd_pins cva5_plic_0/rstn]
 connect_bd_net [get_bd_pins cva5_plic_0/eip] [get_bd_pins cva5_top_0/external]
@@ -421,6 +429,10 @@ make_bd_intf_pins_external -name i2c $i2c_intf
 #                           byte, so it re-raises after a complete if the FIFO
 #                           still has one.
 #   src2 -> PLIC source 2   the SPI's end of transfer: a pulse, not a level.
+#   src3 -> PLIC source 3   the accelerator's result-ready, a level that
+#                           stays up until software reads ACCEL_RESULT --
+#                           cva5_accel_axi drives irq from result_valid, so
+#                           reading the result is also the acknowledgement.
 #
 # Both are left level sensitive, the pulse included, because the PLIC's gateway
 # latches: `ip <= (ip | raise) & ~in_progress & ~claim`, so one cycle high is
@@ -428,10 +440,22 @@ make_bd_intf_pins_external -name i2c $i2c_intf
 # worse here, not better -- cva5_plic_gateway's edge path is `irq ^ irq_r`,
 # both edges, so a pulse would raise a second time as it fell.
 create_bd_cell -type ip -vlnv xilinx.com:user:cva5_irq_concat:1.0 irq_concat_0
+set_property -dict [list CONFIG.HAS_SRC3 $ACCEL] \
+    [get_bd_cells irq_concat_0]
 connect_bd_net [get_bd_pins cva5_uart_0/irq] [get_bd_pins irq_concat_0/src1]
 connect_bd_net [get_bd_pins cva5_spi_0/irq]  [get_bd_pins irq_concat_0/src2]
 connect_bd_net [get_bd_pins irq_concat_0/irq_srcs] \
                [get_bd_pins cva5_plic_0/irq_srcs]
+
+# src3 is connected further down, with the accelerator, when there is one.
+# Without one the pin is ignored inside the block -- HAS_SRC3 holds
+# irq_srcs[2] low -- but it still has to be driven, because an unconnected
+# input is a synthesis warning and this tree does not carry those. The UART's
+# interrupt is as good a net as any to park it on and says plainly that it
+# goes nowhere.
+if {!$ACCEL} {
+    connect_bd_net [get_bd_pins cva5_uart_0/irq] [get_bd_pins irq_concat_0/src3]
+}
 
 # ---- Main RAM ---------------------------------------------------------------
 # There is no memory IP here any more. Main memory is a 128 KB true dual-port
@@ -541,9 +565,18 @@ if {$ACCEL} {
     connect_bd_net [get_bd_pins cnn_0/ap_idle]  [get_bd_pins cva5_accel_0/ap_idle]
     connect_bd_net [get_bd_pins cnn_0/ap_ready] [get_bd_pins cva5_accel_0/ap_ready]
 
-    # cva5_accel_0/irq is left unconnected on purpose. Wiring it would mean a
-    # third source on cva5_irq_concat and a wider PLIC, and software polls
-    # ACCEL_STATUS today. The port is there for when that changes.
+    # The accelerator's result-ready, into PLIC source 3. cva5_accel_axi
+    # drives irq from result_valid, which the PLIC's gateway latches and
+    # which falls when software reads ACCEL_RESULT -- so the read that
+    # collects the answer is also what drops the line, and there is no
+    # separate acknowledgement to forget.
+    #
+    # Software is not obliged to use it. accel.h still polls ACCEL_STATUS,
+    # which is right for cifar.c and server.c, where the core has nothing
+    # else to do for the 7,097 cycles an inference takes. The point of
+    # wiring it is that the choice now exists and is proven, rather than
+    # being a port nobody has ever seen assert.
+    connect_bd_net [get_bd_pins cva5_accel_0/irq] [get_bd_pins irq_concat_0/src3]
 }
 
 # ---- Address map ----------------------------------------------------------

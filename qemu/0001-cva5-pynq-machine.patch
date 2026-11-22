@@ -271,10 +271,11 @@ index 0000000..c84653a
 + * implements and what soc.h documents: priorities from the base, pending at
 + * 0x1000, enables at 0x2000, and one context per hart at 0x200000.
 + *
-+ * Three sources rather than two, because source 0 does not exist in a PLIC and
-+ * the count includes it: soc.h's PLIC_NUM_SOURCES of 2 means sources 1 and 2.
++ * Four rather than three, because source 0 does not exist in a PLIC and the
++ * count includes it: soc.h's PLIC_NUM_SOURCES of 3 means sources 1, 2 and 3 --
++ * the UART, the SPI and the accelerator's result-ready.
 + */
-+#define CVA5_PLIC_NUM_SOURCES   3
++#define CVA5_PLIC_NUM_SOURCES   4
 +#define CVA5_PLIC_NUM_PRIO_BITS 3
 +#define CVA5_PLIC_PRIORITY_BASE 0x00
 +#define CVA5_PLIC_PENDING_BASE  0x1000
