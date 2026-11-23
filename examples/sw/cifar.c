@@ -386,7 +386,16 @@ int main(void) {
          * cycles. Printing "speedup 0.1x" there states a measurement
          * that was never made.
          */
-        if (hw_mean > 100000u) {
+        if (agree != N_IMAGES || sign_ok != N_IMAGES) {
+            /* The first guard, and the one that matters. A ratio against
+             * hardware that computed the wrong thing is not a speedup,
+             * whatever the cycle counts say -- under QEMU with no model
+             * loaded this printed 61x beside eight pairs of zeros. */
+            puts("  speedup     not reported: the hardware did not agree with"
+                 " software, so");
+            puts("              there is nothing to compare the time"
+                 " against.");
+        } else if (hw_mean > 100000u) {
             puts("  speedup     not measurable here: an inference is ~7,100"
                  " cycles on the");
             puts("              board and this took far longer, so the"
