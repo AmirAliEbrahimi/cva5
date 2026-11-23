@@ -59,11 +59,26 @@ returns zero rather than hanging the guest.
 
 ### Building it
 
+The machine patch carries the device now -- `hw/riscv/cva5_accel.c`, beside
+the machine it belongs to, and its own line in `hw/riscv/meson.build`. One
+`git am` in a QEMU tree gives all of it; there is nothing to copy by hand.
+
 ```bash
 make -C tools/nn_accel host-model                 # proves the model still matches
 python3 tools/nn_accel/host_model.py \
         --so build/libcva5_accel_model.so         # and builds it
 ```
+
+The library's path is not compiled into anything. Pass it per run:
+
+```bash
+qemu-system-riscv32 -M cva5-pynq -nographic -kernel examples/sw/cifar.elf \
+    -global cva5.accel.model=$PWD/build/libcva5_accel_model.so
+```
+
+Without it the registers answer and every inference returns zero, with one
+line in the log saying so -- better than a machine that will not start
+because an optional accelerator is missing.
 
 `__SYNTHESIS__` would have compiled the weights into the `.so` and
 removed every file access, and it does not build: `nnet_dense_latency.h`
@@ -73,32 +88,6 @@ by a relative path, and the `.so` resolves it once at `dlopen` -- chdir
 to the firmware directory baked in at build time, one inference on a zero
 image to force the static loads, chdir back. A few milliseconds during
 device realize, and after it the model touches no file again.
-
-Then, in a QEMU tree with `0001-cva5-pynq-machine.patch` applied:
-
-```
-cp qemu/cva5_accel.c <qemu>/hw/misc/
-```
-
-add to `hw/misc/meson.build`:
-
-```meson
-system_ss.add(when: 'CONFIG_CVA5_PYNQ', if_true: files('cva5_accel.c'))
-```
-
-and in the machine, beside the other peripherals:
-
-```c
-dev = qdev_new("cva5.accel");
-qdev_prop_set_uint32(dev, "ram-base", CVA5_RAM_BASE);
-qdev_prop_set_string(dev, "model", accel_model_path);   /* -M cva5-pynq,accel-model=... */
-sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, CVA5_ACCEL_BASE);
-sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
-                   qdev_get_gpio_in(DEVICE(plic), 3));   /* PLIC source 3 */
-```
-
-with `#define CVA5_ACCEL_BASE 0x50000000`.
 
 ### What it does not model
 
@@ -151,9 +140,10 @@ every layer, and this is the only thing in the tree that can say which of
 the two a disagreement belongs to.
 
 One more copy of the memory map lives here, and `tools/check-soc-map.py`
-does not read it -- it reconciles `soc.h`, the crossbar and the OpenOCD
-config, and this machine is a fourth. Moving a peripheral in `soc.h`
-today does not move it here, and nothing says so.
+reads it now -- `from_qemu` pulls `CVA5_*_BASE` straight out of the patch,
+because the machine lives in a QEMU tree this repository does not contain.
+Five copies, all reconciled. It went unchecked until an afternoon went
+into reading one of this machine's decode errors as a status word.
 
 PLIC sources 2 and 3 are the SPI's transfer-complete interrupt and the
 accelerator's result-ready on the board. Both exist here and stay low, so

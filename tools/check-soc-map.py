@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that the four copies of the memory map agree.
+"""Check that the five copies of the memory map agree.
 
     python3 tools/check-soc-map.py
 
@@ -17,6 +17,15 @@ and for CVA5's software it is. Three others cannot include it:
                                                 by an ARM toolchain -- soc.h
                                                 has RISC-V inline assembly in
                                                 it
+    qemu/0001-cva5-pynq-machine.patch           the QEMU machine, which is C
+                                                in a patch against a tree that
+                                                is not this one. It went
+                                                unchecked until an afternoon
+                                                went into reading one of its
+                                                decode errors as a status
+                                                word; moving a peripheral in
+                                                soc.h did not move it here and
+                                                nothing said so
 
 So there are four copies and nothing but a comment keeping them together. A
 disagreement is not a build error in any of them: the crossbar would decode a
@@ -39,6 +48,7 @@ XBAR = "examples/xilinx/axi/cva5_axi_xbar.sv"
 OCD = "examples/xilinx/openocd/cva5-pynq-z2-p1.cfg"
 PS = "examples/ps/cva5_ps.h"
 LD = "examples/sw/fpga_link.ld"
+QEMU = "qemu/0001-cva5-pynq-machine.patch"
 
 # The crossbar calls the UART's window PERIPH_BASE, for the historical reason
 # that it was the only peripheral when the port was named.
@@ -53,6 +63,22 @@ def from_soc(path):
     src = open(path).read()
     return {canon(n): int(v, 16)
             for n, v in re.findall(r"#define\s+(\w+_BASE)\s+0x([0-9A-Fa-f]+)u", src)}
+
+
+def from_qemu(path):
+    """The QEMU machine's constants, out of the patch that adds it.
+
+    Reading the patch rather than a source file is not elegant and is the
+    only option: the machine lives in a QEMU tree, which this repository
+    does not contain. Lines are prefixed with '+' because they are
+    additions, and CVA5_FOO_BASE here is FOO_BASE everywhere else.
+    """
+    src = open(path).read()
+    out = {}
+    for n, v in re.findall(r"^\+#define\s+CVA5_(\w+_BASE)\s+0x([0-9A-Fa-f]+)",
+                           src, re.M):
+        out[canon(n)] = int(v, 16)
+    return out
 
 
 def from_xbar(path):
@@ -102,7 +128,8 @@ def main():
         maps = [("soc.h", from_soc(SOC)),
                 ("cva5_axi_xbar.sv", from_xbar(XBAR)),
                 ("p1 openocd cfg", from_ocd(OCD)),
-                ("cva5_ps.h", from_soc(PS))]
+                ("cva5_ps.h", from_soc(PS)),
+                ("qemu machine", from_qemu(QEMU))]
     except FileNotFoundError as e:
         print(f"check-soc-map: {e}", file=sys.stderr)
         return 2

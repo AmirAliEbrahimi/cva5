@@ -17,7 +17,8 @@
 #    demo        headers + cross-compile + load examples/sw/cifar.c
 #    host-model  build the generated firmware for the host and check it
 #                against the board's numbers (no Vitis, no licence, no board)
-#    bitstream   package CVA5 as IP + build the SoC
+#    mif         the BRAM preload           -> examples/sw/ram.mif
+#    bitstream   package the IPs and build the SoC (needs Vivado)
 #    baseline    build the stock SoC with no accelerator (diagnostic)
 #
 #  Knobs:
@@ -200,12 +201,11 @@ demo: headers
 host-model:
 	python3 host_model.py --dir $(IPDIR)
 
+# The BRAM preload. Not the demo any more -- that loads over JTAG -- but
+# pynq_z2_sys.tcl bakes ram.mif into the packaged core, so the bitstream
+# needs one and 'make bitstream' depends on this.
 mif:
-	@echo "[nn] 'mif' built examples/sw/bench.c into the BRAM preload, and"
-	@echo "     neither exists on this branch: the demo is examples/sw/cifar.c"
-	@echo "     and it loads over JTAG rather than being baked into the"
-	@echo "     bitstream. Run 'make demo' -- headers, cross-compile, load."
-	@exit 1
+	$(MAKE) -C $(SW) ram
 
 # --- 6. hardware -----------------------------------------------------------
 # package_as_ip_pynq_z2.tcl packages CVA5 itself; pynq_z2_nn_sys.tcl builds the
@@ -216,14 +216,19 @@ mif:
 # axi_uartlite, an AXI Interconnect from apply_bd_automation, axi_gpio,
 # xlconcat, xlconstant -- around a peripheral map at 0x6000_0000 that no
 # longer exists. It is rewritten against pynq_z2_sys.tcl, not merged into it.
-bitstream:
-	@echo "[nn] 'bitstream' built a second SoC, pynq_z2_nn_sys.tcl, around"
-	@echo "     the accelerator. There is one SoC now:"
-	@echo "         examples/xilinx/pynq_z2_sys.tcl"
-	@echo "     which picks the accelerator up on its own when 'make ip' has"
-	@echo "     produced the IP, so there is nothing for this target to do."
-	@echo "     Build it the way every other change to the SoC is built."
-	@exit 1
+# The SoC, which is the ordinary one: pynq_z2_sys.tcl picks the accelerator
+# up by itself when 'make ip' has produced the IP, and builds without it
+# when it has not. There is no second block design any more.
+#
+# The three scripts run in one Vivado invocation and in this order, which
+# is the order README.pynq_z2.md gives: the core becomes an IP, the OpenHW
+# blocks become IPs, then the block design is built around them. From the
+# repository root, because every path inside them is relative to it.
+bitstream: mif
+	cd $(REPO) && $(VIVADO) -mode batch -notrace \
+	    -source examples/xilinx/package_as_ip_pynq_z2.tcl \
+	    -source examples/xilinx/package_openhw_ips.tcl \
+	    -source examples/xilinx/pynq_z2_sys.tcl
 
 # --- diagnostic ------------------------------------------------------------
 # Builds the stock CVA5 SoC with no accelerator, using whatever IP and mem.mif
