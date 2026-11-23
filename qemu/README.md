@@ -102,11 +102,34 @@ with `#define CVA5_ACCEL_BASE 0x50000000`.
 
 ### What it does not model
 
-Timing. A real inference is 7,093 cycles; this one returns inside the
+**Timing.** A real inference is 7,093 cycles; this one returns inside the
 write that starts it, so the status register is never observed busy.
 Nothing in the software depends on that -- it polls a bit or waits on the
 interrupt -- but `cifar.c`'s cycle column is meaningless under QEMU and
 the speedup it prints is not a measurement of anything.
+
+**A level source coming back after completion.** `make -C examples/sw
+accel` reports one failure here and it is expected:
+
+```
+  -- interrupt, PLIC source 3
+  FAIL completing with the result unread lost the interrupt
+```
+
+On the board the accelerator's `irq` IS `result_valid`, so completing the
+PLIC source while the result is still uncollected leaves the line high
+and `cva5_plic_gateway` raises it again -- which is the behaviour that
+stops an inference nobody read from being lost, and which
+`test_benches/axi/tb_irq_concat.sv` checks. QEMU's `sifive_plic` clears
+pending on the claim and sets it again only on a fresh `qemu_set_irq`
+transition, so a source that never stopped asserting stays quiet. The
+device cannot paper over it: a completion goes to the PLIC and is
+invisible here.
+
+So that one check is a real check on hardware and a false failure here,
+in the same way `csrs.c`'s `rdtime` traps are expected to fail in the
+Verilator sim. Everything above it in `accel.c` passes, including the
+pad counter reporting 1024 on a deliberately mis-packed image.
 
 `make -C tools/nn_accel host-model` was the gate, and **it passes**. The
 generated firmware compiles with a plain g++ and reproduces the board on
