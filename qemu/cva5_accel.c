@@ -48,14 +48,33 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+/* This tree's QEMU has the reorganised headers -- hw/core/sysbus.h rather
+ * than hw/sysbus.h, system/address-spaces.h rather than exec/. The ones
+ * confirmed by hw/riscv/cva5_pynq.c are included directly; the rest are
+ * probed, so this file builds against either layout. */
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
-#include "hw/sysbus.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties.h"
-#include "exec/address-spaces.h"
+#include "hw/core/sysbus.h"
+#include "system/address-spaces.h"
+
+#if defined(__has_include)
+#  if __has_include("hw/core/irq.h")
+#    include "hw/core/irq.h"
+#  else
+#    include "hw/irq.h"
+#  endif
+#  if __has_include("hw/core/qdev-properties.h")
+#    include "hw/core/qdev-properties.h"
+#  else
+#    include "hw/qdev-properties.h"
+#  endif
+#else
+#  include "hw/irq.h"
+#  include "hw/qdev-properties.h"
+#endif
+
 #include "migration/vmstate.h"
 
 #include <dlfcn.h>
