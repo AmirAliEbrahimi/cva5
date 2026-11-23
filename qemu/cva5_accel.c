@@ -349,10 +349,12 @@ static void cva5_accel_init(Object *obj)
     sysbus_init_irq(sbd, &s->irq);
 }
 
-static Property cva5_accel_props[] = {
+/* No DEFINE_PROP_END_OF_LIST: it was removed when device_class_set_props
+ * started taking the count from ARRAY_SIZE, which also made the array
+ * const. */
+static const Property cva5_accel_props[] = {
     DEFINE_PROP_UINT32("ram-base", Cva5AccelState, ram_base, 0x80000000),
     DEFINE_PROP_STRING("model", Cva5AccelState, model_path),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static const VMStateDescription vmstate_cva5_accel = {
@@ -371,12 +373,14 @@ static const VMStateDescription vmstate_cva5_accel = {
     }
 };
 
-static void cva5_accel_class_init(ObjectClass *klass, void *data)
+static void cva5_accel_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = cva5_accel_realize;
-    dc->reset = cva5_accel_reset;
+    /* dc->reset went away with the Resettable conversion; this is the
+     * shim for devices that have not been converted. */
+    device_class_set_legacy_reset(dc, cva5_accel_reset);
     dc->vmsd = &vmstate_cva5_accel;
     device_class_set_props(dc, cva5_accel_props);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
