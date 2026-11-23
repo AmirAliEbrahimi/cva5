@@ -373,14 +373,34 @@ int main(void) {
     putstr(" of "); putdec((unsigned)N_IMAGES); puts(" against the labels");
 
     if (hw_total && N_IMAGES) {
-        putstr("  mean cycles hw "); putdec(hw_total / (unsigned)N_IMAGES);
+        unsigned hw_mean = hw_total / (unsigned)N_IMAGES;
+
+        putstr("  mean cycles hw "); putdec(hw_mean);
         putstr(", sw "); putdec(sw_total / (unsigned)N_IMAGES); puts("");
-        /* One decimal, without floating point. */
-        putstr("  speedup     ");
-        putdec((sw_total / hw_total));
-        putstr(".");
-        putdec(((sw_total * 10u) / hw_total) % 10u);
-        puts("x");
+
+        /*
+         * An inference is about 7,100 cycles on the board. Anything far
+         * above that is not this accelerator being slow, it is a model
+         * that does not keep time -- QEMU's device returns inside the
+         * write that starts it, so the count is host work rather than
+         * cycles. Printing "speedup 0.1x" there states a measurement
+         * that was never made.
+         */
+        if (hw_mean > 100000u) {
+            puts("  speedup     not measurable here: an inference is ~7,100"
+                 " cycles on the");
+            puts("              board and this took far longer, so the"
+                 " accelerator is");
+            puts("              modelled rather than timed. The logits are"
+                 " still real.");
+        } else {
+            /* One decimal, without floating point. */
+            putstr("  speedup     ");
+            putdec((sw_total / hw_total));
+            putstr(".");
+            putdec(((sw_total * 10u) / hw_total) % 10u);
+            puts("x");
+        }
     }
 
     /* Every image here is 4 bytes a pixel, so this must still be zero. A

@@ -105,8 +105,15 @@ with `#define CVA5_ACCEL_BASE 0x50000000`.
 **Timing.** A real inference is 7,093 cycles; this one returns inside the
 write that starts it, so the status register is never observed busy.
 Nothing in the software depends on that -- it polls a bit or waits on the
-interrupt -- but `cifar.c`'s cycle column is meaningless under QEMU and
-the speedup it prints is not a measurement of anything.
+interrupt -- but `cifar.c`'s cycle column is host work rather than
+cycles, and reads around ten million. It notices: above 100,000 it says
+the figure is not measurable instead of printing a speedup, because
+"speedup 0.1x" states a measurement that was never made.
+
+What is real under QEMU is everything else. `cifar.c` passes with 8 of 8
+agreement, 8 of 8 against the labels, and hardware logits identical to
+the board's -- 929,-626 through -1542,1806 -- because the `.so` it runs
+is the same generated C++ that reproduced them.
 
 **A level source coming back after completion.** `make -C examples/sw
 accel` reports one failure here and it is expected:
