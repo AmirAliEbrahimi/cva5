@@ -504,7 +504,7 @@ new file mode 100644
 index 0000000..e55d73a
 --- /dev/null
 +++ b/hw/riscv/cva5_accel.c
-@@ -0,0 +1,403 @@
+@@ -0,0 +1,411 @@
 +/*
 + * cva5_accel -- the hls4ml accelerator's control block and DMA, for QEMU.
 + *
@@ -563,6 +563,7 @@ index 0000000..e55d73a
 +#include "qemu/osdep.h"
 +#include "qemu/log.h"
 +#include "qemu/module.h"
++#include "qemu/error-report.h"
 +#include "qapi/error.h"
 +#include "hw/core/sysbus.h"
 +#include "system/address-spaces.h"
@@ -822,11 +823,18 @@ index 0000000..e55d73a
 +    Cva5AccelState *s = CVA5_ACCEL(dev);
 +
 +    if (!s->model_path || !*s->model_path) {
-+        /* Not an error. The machine is useful without the accelerator, and
-+         * saying so once beats a guest that hangs on a status bit. */
-+        qemu_log_mask(LOG_UNIMP,
-+                      "cva5.accel: no model= given; the registers answer but "
-+                      "every inference returns zero\n");
++        /*
++         * Not an error -- the machine is useful without the accelerator,
++         * and refusing to start would be worse. But warn_report rather
++         * than qemu_log_mask: LOG_UNIMP is off unless asked for, and the
++         * first time this happened the guest classified four of eight
++         * images correctly by chance and said PASS on the agreement it
++         * had with itself. A model that is not there has to say so where
++         * someone will see it.
++         */
++        warn_report("cva5.accel: no model given, every inference returns "
++                    "zero. Pass "
++                    "-global driver=cva5.accel,property=model,value=<.so>");
 +        return;
 +    }
 +

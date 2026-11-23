@@ -73,8 +73,12 @@ The library's path is not compiled into anything. Pass it per run:
 
 ```bash
 qemu-system-riscv32 -M cva5-pynq -nographic -kernel examples/sw/cifar.elf \
-    -global cva5.accel.model=$PWD/build/libcva5_accel_model.so
+    -global driver=cva5.accel,property=model,value=$PWD/build/libcva5_accel_model.so
 ```
+
+The long form, not `-global cva5.accel.model=...`: the shorthand splits
+the driver from the property at a dot, and this type's name already has
+one, so it reports an invalid class name and silently applies nothing.
 
 Without it the registers answer and every inference returns zero, with one
 line in the log saying so -- better than a machine that will not start
