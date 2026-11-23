@@ -20,7 +20,33 @@ examples/sw/*.fst.hier
 __pycache__/
 *.pyc
 
+examples/sw/*.elf.bin
+
 # Generated from the trained model by tools/nn_accel/export_{weights,images}.py.
 # 32 KB of .rodata derived from a .pt that is not in this tree either.
 examples/sw/images.h
 examples/sw/weights.h
+examples/ps/cva5_pixels.c
+examples/ps/cva5_image.c
+
+# The accelerator toolchain's working directories. The trained model, the
+# CIFAR download, the precision sweep's projects and the HLS project whose
+# generated firmware host_model.py compiles -- all derived, all large, and
+# tools/nn_accel/Makefile rebuilds every one of them.
+tools/nn_accel/data/
+tools/nn_accel/*.pt
+tools/nn_accel/p_*/
+tools/nn_accel/sw_*/
+tools/nn_accel/run_all.bat
+tools/nn_accel/.venv/
+
+# Vivado's droppings. It writes these into whatever directory it was
+# launched from, which for this project is the repository root.
+.Xil/
+NA/
+*.jou
+*.log
+*.str
+*.xsa
+timing.rpt
+util.rpt
