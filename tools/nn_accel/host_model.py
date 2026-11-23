@@ -210,6 +210,9 @@ def main():
                     help="default: examples/sw/images.h")
     ap.add_argument("--keep", action="store_true",
                     help="leave the generated sources in place")
+    ap.add_argument("--try-synthesis", action="store_true",
+                    help="re-test whether -D__SYNTHESIS__ builds; it does "
+                         "not, and the .so does not need it")
     ap.add_argument("--so", metavar="PATH", default=None,
                     help="also build the shared library the QEMU device "
                          "loads, at PATH")
@@ -373,8 +376,16 @@ def main():
     # equivalent rather than assumed, which is what this does: same
     # images, same comparison, and then the two builds against each other.
     print()
-    syn, err, _ = build_and_run("synthesis", ["-D__SYNTHESIS__"], build)
-    if syn is None:
+    if not args.try_synthesis:
+        print("host_model: __SYNTHESIS__ is known not to build here "
+              "(nnet_dense_latency.h,")
+        print("  ap_fixed has no += against itself under it). The .so loads "
+              "its weights")
+        print("  at dlopen instead. --try-synthesis to re-test that.")
+        syn, err = None, None
+    else:
+        syn, err, _ = build_and_run("synthesis", ["-D__SYNTHESIS__"], build)
+    if syn is None and err is not None:
         print("host_model: the __SYNTHESIS__ build did not work:")
         print("  " + (err or "").replace("\n", "\n  "))
         print("  Not fatal. It means the .so the QEMU device loads will need")
